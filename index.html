@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unix-Sync</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    .hidden { display: none !important; }
+
+    body { font-family: 'Inter', sans-serif; }
+
+    /* Screen Reader Only Utilities to clear DevTools field-label warnings */
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    /* ── HEADER ── */
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(2, 6, 23, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      padding: 12px 16px;
+      max-width: 448px;
+      margin: 0 auto;
+    }
+
+    .header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .logo {
+      font-size: 17px;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      text-transform: uppercase;
+      color: #fff;
+    }
+
+    .logo span { color: #fbbf24; }
+
+    /* ── SEARCH ── */
+    .search-wrap {
+      position: relative;
+    }
+
+    .search-wrap i {
+      position: absolute;
+      left: 11px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 11px;
+      color: #64748b;
+      pointer-events: none;
+    }
+
+    .search-wrap input {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: #f1f5f9;
+      border-radius: 12px;
+      padding: 9px 14px 9px 32px;
+      font-size: 12px;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .search-wrap input::placeholder { color: #475569; }
+
+    .search-wrap input:focus {
+      border-color: #fbbf24;
+      box-shadow: 0 0 0 3px rgba(251,191,36,0.1);
+    }
+
+    /* ── TABS ── */
+    .feed-tab-btn {
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    /* ── CARDS ── */
+    #posts-feed .post-card,
+    #search-results .post-card {
+      background: #0f172a;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 20px;
+      overflow: hidden;
+      transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+      cursor: pointer;
+    }
+
+    #posts-feed .post-card:hover,
+    #search-results .post-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+      border-color: rgba(251,191,36,0.15);
+    }
+
+    /* ── BOTTOM NAV ── */
+    .bottom-nav-container {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: rgba(2, 6, 23, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(255,255,255,0.07);
+      padding: 8px 24px 20px;
+      z-index: 50;
+    }
+
+    .bottom-nav {
+      max-width: 448px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .bottom-nav button {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      transition: color 0.15s;
+      padding: 4px 8px;
+      border-radius: 10px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #64748b;
+    }
+
+    /* Icons and labels — always visible slate */
+    .bottom-nav button i {
+      font-size: 18px;
+      color: #64748b;
+      transition: color 0.15s;
+    }
+    .bottom-nav button span {
+      color: #64748b;
+      transition: color 0.15s;
+    }
+
+    /* Hover state */
+    .bottom-nav button:hover i,
+    .bottom-nav button:hover span { color: #94a3b8; }
+
+    /* Active state — gold icon, white label */
+    .bottom-nav button.nav-active i   { color: #fbbf24; }
+    .bottom-nav button.nav-active span { color: #ffffff; }
+
+    .nav-fab-btn {
+      width: 46px !important;
+      height: 46px !important;
+      background: linear-gradient(135deg, #fbbf24, #f59e0b) !important;
+      border-radius: 50% !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      box-shadow: 0 4px 20px rgba(251,191,36,0.4) !important;
+      transform: translateY(-6px) !important;
+      transition: box-shadow 0.15s, transform 0.15s !important;
+      padding: 0 !important;
+      gap: 0 !important;
+    }
+
+    .nav-fab-btn:hover {
+      box-shadow: 0 6px 28px rgba(251,191,36,0.6) !important;
+      transform: translateY(-8px) scale(1.05) !important;
+    }
+
+    .nav-fab-btn i {
+      font-size: 16px !important;
+      color: #000 !important;
+    }
+
+    /* ── MODALS ── */
+    #post-modal .modal-inner,
+    #detail-modal .modal-inner,
+    #avatar-modal .modal-inner {
+      background: #0f172a;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 24px;
+    }
+
+    /* ── PROFILE ── */
+    #profile-container select,
+    #post-modal select,
+    #post-modal input[type="text"],
+    #post-modal input[type="number"],
+    #post-modal textarea {
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    #profile-container select:focus,
+    #post-modal select:focus,
+    #post-modal input:focus,
+    #post-modal textarea:focus {
+      box-shadow: 0 0 0 3px rgba(251,191,36,0.12);
+    }
+
+    /* ── SCROLLBAR ── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+
+    /* ── MAIN PADDING ── */
+    main { padding-bottom: 100px; }
+  </style>
+</head>
+
+<body class="bg-[#020617] text-slate-100 min-h-screen antialiased">
+
+  <div class="site-header">
+    <div class="header-top">
+      <h1 class="logo">Campus<span>Market</span></h1>
+    </div>
+    <div class="search-wrap">
+      <i class="fas fa-search"></i>
+      <label for="campus-global-search" class="sr-only">Search campus gigs or items</label>
+      <input
+        type="text"
+        id="campus-global-search"
+        name="campus-global-search"
+        placeholder="Search campus gigs or items..."
+        oninput="window.runSearch(this.value)"
+      >
+    </div>
+  </div>
+
+  <main class="px-4 pt-4 max-w-md mx-auto">
+
+    <div id="feed-container" class="pb-24">
+      <div id="feed-tabs" class="flex border-b border-slate-900 text-xs font-bold tracking-wider uppercase mb-4">
+        <button onclick="window.filterFeed('all', this)" class="feed-tab-btn flex-1 pb-3 text-center text-amber-400 border-b-2 border-amber-400">All</button>
+        <button onclick="window.filterFeed('following', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Following</button>
+        <button onclick="window.filterFeed('product', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Products</button>
+        <button onclick="window.filterFeed('skill', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Services</button>
+      </div>
+      <div id="posts-feed" class="space-y-4"></div>
+    </div>
+
+    <div id="explore-container" class="hidden pb-24 space-y-4">
+      <div class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl">
+        <h2 class="text-white font-black text-sm uppercase tracking-wider mb-2">Discover Hub</h2>
+        <p class="text-slate-400 text-xs">Search results and specialized category parameters sync directly inside this viewport wrapper.</p>
+      </div>
+      <div id="search-results" class="space-y-4"></div>
+    </div>
+
+    <div id="dms-container" class="hidden pb-24 space-y-4">
+      <div class="text-center py-16 space-y-3 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
+        <p class="text-3xl">💬</p>
+        <p class="font-black text-white uppercase tracking-tight text-sm">Inbox & Chat Channels</p>
+        <p class="text-slate-500 text-xs max-w-xs mx-auto">Connect directly with student freelancers or product vendors on your campus.</p>
+      </div>
+    </div>
+
+    <div id="profile-container" class="hidden pb-24 space-y-6">
+
+      <div class="flex items-center gap-4 bg-slate-900 border border-slate-800/60 p-5 rounded-3xl">
+        <div class="relative group cursor-pointer w-16 h-16 flex-shrink-0" onclick="document.getElementById('avatarFileInput').click()">
+          <img id="profile-ui-avatar" src="https://ui-avatars.com/api/?name=User" class="w-16 h-16 rounded-full border-2 border-amber-400 object-cover bg-slate-800 transition group-hover:opacity-75" alt="Avatar">
+          <div class="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition duration-150">
+            <i class="fas fa-camera text-white text-xs"></i>
+          </div>
+          <label for="avatarFileInput" class="sr-only">Upload profile avatar</label>
+          <input type="file" id="avatarFileInput" name="avatarFileInput" accept="image/*" class="hidden" onchange="window.handleAvatarUpload && window.handleAvatarUpload(this)">
+        </div>
+        <div class="flex-1 min-w-0">
+          <h2 id="profile-ui-name" class="text-white font-black text-xl uppercase tracking-tight truncate">Campus Student</h2>
+          <p id="profile-ui-location" class="text-slate-400 text-xs truncate">Global Network</p>
+          <span class="inline-block mt-1.5 bg-amber-400/10 text-amber-400 border border-amber-400/20 text-[9px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded">Student Account</span>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-3 gap-3 bg-slate-900/50 border border-slate-800/60 p-4 rounded-2xl text-center">
+        <div>
+          <span id="profile-posts-count" class="block text-lg font-black text-white">0</span>
+          <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Posts</span>
+        </div>
+        <div>
+          <span id="profile-followers-count" class="block text-lg font-black text-white">0</span>
+          <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Followers</span>
+        </div>
+        <div>
+          <span id="profile-following-count" class="block text-lg font-black text-white">0</span>
+          <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Following</span>
+        </div>
+      </div>
+
+      <div class="flex border-b border-slate-900 text-sm">
+        <button onclick="window.switchProfileTab('posts', this)" class="profile-subtab-btn flex-1 py-3 text-center text-amber-400 font-bold border-b-2 border-amber-400 uppercase tracking-wider text-xs focus:outline-none">My Gigs & Posts</button>
+        <button onclick="window.switchProfileTab('settings', this)" class="profile-subtab-btn flex-1 py-3 text-center text-slate-500 font-bold border-b-2 border-transparent uppercase tracking-wider text-xs focus:outline-none hover:text-slate-300">Campus Settings</button>
+      </div>
+
+      <div class="profile-tab-contents">
+        <div id="profile-subview-posts" class="profile-subview">
+          <div id="profile-grid" class="grid grid-cols-3 gap-2"></div>
+        </div>
+
+        <div id="profile-subview-settings" class="profile-subview hidden space-y-4 bg-slate-900 p-5 rounded-3xl border border-slate-800/60">
+          <div class="border-b border-slate-800 pb-2">
+            <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
+              <i class="fas fa-map-marker-alt text-amber-400"></i> Local Campus Selection
+            </h3>
+          </div>
+          <div class="space-y-3">
+            <div>
+              <label for="profileRegion" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Region</label>
+              <select id="profileRegion" name="profileRegion" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
+            </div>
+            <div>
+              <label for="profileInstitution" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Institution</label>
+              <select id="profileInstitution" name="profileInstitution" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
+            </div>
+            <button id="saveLocationBtn" class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 mt-2 shadow-lg shadow-amber-400/10">
+              Save Selection Changes
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <div class="bottom-nav-container">
+    <nav class="bottom-nav">
+
+      <button id="nav-btn-feed" onclick="window.navigateTo('feed', this)">
+        <i class="fas fa-home"></i>
+        <span>Home</span>
+      </button>
+
+      <button id="nav-btn-explore" onclick="window.navigateTo('explore', this)">
+        <i class="fas fa-search"></i>
+        <span>Explore</span>
+      </button>
+
+      <button onclick="window.togglePostModal()" class="nav-fab-btn">
+        <i class="fas fa-plus"></i>
+      </button>
+
+      <button id="nav-btn-dms" onclick="window.navigateTo('dms', this)">
+        <i class="fas fa-envelope"></i>
+        <span>DMs</span>
+      </button>
+
+      <button id="auth-profile-nav" onclick="window.navigateTo('profile', this)">
+        <i class="fas fa-sign-in-alt"></i>
+        <span>Sign In</span>
+      </button>
+
+    </nav>
+  </div>
+
+  <div id="post-modal" class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl">
+      <div class="flex justify-between items-center">
+        <h2 class="text-white font-black text-base uppercase tracking-tight">Create Listing</h2>
+        <button onclick="window.togglePostModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <label for="postTitle" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Listing Title</label>
+          <input type="text" id="postTitle" name="postTitle" placeholder="e.g., Mini Fridge or Graphic Design" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs font-medium">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label for="postType" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Type</label>
+            <select id="postType" name="postType" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs">
+              <option value="product">Product</option>
+              <option value="skill">Service / Gig</option>
+            </select>
+          </div>
+          <div>
+            <label for="postPrice" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Price (GH₵)</label>
+            <input type="number" id="postPrice" name="postPrice" placeholder="0.00" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs">
+          </div>
+        </div>
+        <div>
+          <label for="postDescription" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Description</label>
+          <textarea id="postDescription" name="postDescription" rows="2" placeholder="Describe your item or skill..." class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs resize-none"></textarea>
+        </div>
+        <div>
+          <label for="mediaInput" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Media</label>
+          <input type="file" id="mediaInput" name="mediaInput" accept="image/*,video/*" class="w-full text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-700 file:text-white hover:file:bg-slate-600 cursor-pointer">
+        </div>
+        <button onclick="window.handlePostSubmission()" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-2 transition active:scale-95 shadow-lg shadow-amber-400/20">
+          Publish Instantly
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="detail-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 overflow-y-auto">
+    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden relative my-auto shadow-2xl">
+      <button onclick="window.closeDetailModal()" class="absolute top-4 right-4 z-50 bg-black/60 text-white w-8 h-8 rounded-full flex items-center justify-center hover:bg-black/80 transition focus:outline-none">
+        <i class="fas fa-times text-xs"></i>
+      </button>
+      <div id="detail-content"></div>
+    </div>
+  </div>
+
+  <div id="avatar-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl modal-inner">
+      <div class="flex justify-between items-center">
+        <h2 class="text-white font-black text-base uppercase tracking-tight">Update Profile Avatar</h2>
+        <button onclick="document.getElementById('avatar-modal').classList.add('hidden')" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="flex flex-col items-center justify-center py-4 space-y-4">
+        <div class="relative w-28 h-28">
+          <img id="avatar-modal-preview" src="https://ui-avatars.com/api/?name=User" class="w-28 h-28 rounded-full border-4 border-amber-400 object-cover bg-slate-800" alt="Preview">
+        </div>
+        <p class="text-slate-400 text-xs text-center px-4">Does this look good? Click below to save your new photo directly onto your student profile.</p>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <button onclick="document.getElementById('avatar-modal').classList.add('hidden')" class="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
+          Cancel
+        </button>
+        <button id="confirmAvatarBtn" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 shadow-lg shadow-amber-400/20">
+          Save Photo
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="login-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
+      <div class="flex justify-between items-center">
+        <h2 class="text-white font-black text-base uppercase tracking-tight">Access CampusMarket</h2>
+        <button onclick="window.closeLoginModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="text-center py-4 space-y-2">
+        <div class="text-3xl">🔐</div>
+        <p class="text-slate-300 text-xs">Sign in with your student account to create listings, message vendors, and personalize your feed.</p>
+      </div>
+      <button onclick="window.login()" class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md">
+        <i class="fab fa-google text-base text-red-500"></i>
+        Continue with Google
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const _NAV_VIEWS = ['feed-container', 'explore-container', 'dms-container', 'profile-container'];
+
+    function _setActiveNav(activeBtn) {
+      document.querySelectorAll('.bottom-nav button').forEach(btn => {
+        btn.classList.remove('nav-active');
+      });
+      if (activeBtn) activeBtn.classList.add('nav-active');
+    }
+
+    window.navigateTo = function(section, btn) {
+      _NAV_VIEWS.forEach(id => document.getElementById(id)?.classList.add('hidden'));
+      const targetId = section === 'feed' ? 'feed-container' : section + '-container';
+      document.getElementById(targetId)?.classList.remove('hidden');
+      _setActiveNav(btn);
+    };
+
+    document.addEventListener('DOMContentLoaded', function() {
+      _setActiveNav(document.getElementById('nav-btn-feed'));
+    });
+  </script>
+
+  <script type="module" src="./app.js"></script>
+
+  <script type="module">
+    const _appNav = window.navigateTo;
+
+    window.navigateTo = function(section, btn) {
+      _NAV_VIEWS.forEach(id => document.getElementById(id)?.classList.add('hidden'));
+      const targetId = section === 'feed' ? 'feed-container' : section + '-container';
+      document.getElementById(targetId)?.classList.remove('hidden');
+
+      _setActiveNav(btn);
+
+      if (typeof _appNav === 'function') _appNav(section, btn);
+    };
+
+    _setActiveNav(document.getElementById('nav-btn-feed'));
+  </script>
+
+</body>
+</html>

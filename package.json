@@ -1,0 +1,17 @@
+{
+  "name": "compus-gig",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "dev": "npx tailwindcss -1 main.css -o dist.css --watch",
+    "build": "npx tailwindcss -i main.css -o dist.css"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.0",
+    "tailwindcss": "^4.3.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.108.2"
+  }
+}
