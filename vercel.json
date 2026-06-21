@@ -1,4 +1,6 @@
 {
     "cleanUrls": true,
-    "buildCommand": "npm run build"
+    "routes": [
+        { "src": "/(.*)", "dest": "/$1" }
+    ]
 }
