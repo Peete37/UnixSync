@@ -285,6 +285,40 @@ window.signOutUser = async function () {
     await window.logout();
 };
 
+/**
+ * Email/password sign-in — called from index.html loginWithEmail()
+ * Wire this up once Supabase email auth is enabled in your project.
+ */
+window.signInWithEmailPassword = async function (email, password) {
+    try {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        document.getElementById('login-modal')?.classList.add('hidden');
+    } catch (err) {
+        console.error("Email sign-in error:", err);
+        alert(err.message || 'Sign-in failed. Please check your credentials.');
+    }
+};
+
+/**
+ * Email/password registration — called from index.html signUpWithEmail()
+ */
+window.registerWithEmail = async function (name, email, password) {
+    try {
+        const { error } = await supabase.auth.signUp({
+            email,
+            password,
+            options: { data: { full_name: name } }
+        });
+        if (error) throw error;
+        document.getElementById('signup-modal')?.classList.add('hidden');
+        alert('Account created! Check your email to confirm your address.');
+    } catch (err) {
+        console.error("Email sign-up error:", err);
+        alert(err.message || 'Sign-up failed. Please try again.');
+    }
+};
+
 // ─── 7. FEED SUBSCRIPTION HELPERS ────────────────────────────────────────────
 
 function unsubscribeFeed() {
@@ -294,12 +328,6 @@ function unsubscribeFeed() {
     }
 }
 
-/**
- * MERGED SAFETY:
- * Instead of reusing a consumed Supabase builder object, use a factory function.
- * - subscribeFeed()                     -> default all posts
- * - subscribeFeed(() => queryBuilder)   -> filtered feed
- */
 function defaultFeedQuery() {
     return supabase
         .from("posts")
@@ -627,17 +655,23 @@ window.toggleComments = function (postId) {
     if (box) box.classList.toggle('hidden');
 };
 
+/**
+ * ── FEED CARD — TikTok layout ──
+ * • Full-height snap card
+ * • Like / Comment / Share / Download → left-aligned row
+ * • "Contact Seller Directly" always visible below the action row
+ */
 function renderFeedCard(id, d) {
     const viewer     = currentUserData;
     const showFollow = viewer && d.user_id !== viewer.id;
 
     const mediaBlock = d.media_type === 'video'
-        ? `<video class="w-full h-52 object-cover" autoplay muted loop playsinline src="${esc(d.media_url)}"></video>`
-        : `<img class="w-full h-52 object-cover" src="${esc(d.media_url)}" alt="${esc(d.title)}">`;
+        ? `<video class="w-full h-full object-cover" autoplay muted loop playsinline src="${esc(d.media_url)}"></video>`
+        : `<img class="w-full h-full object-cover" src="${esc(d.media_url)}" alt="${esc(d.title)}">`;
 
     const followBlock = showFollow ? `
         <button
-            class="follow-btn px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700"
+            class="follow-btn px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700 shrink-0"
             data-follow-uid="${esc(d.user_id)}"
             data-active="false"
             onclick="toggleFollow('${escAttr(d.user_id)}','${escAttr(d.user_name)}','${escAttr(d.user_avatar)}')">
@@ -645,84 +679,92 @@ function renderFeedCard(id, d) {
         </button>` : '';
 
     return `
-    <div class="bg-slate-900 rounded-3xl overflow-hidden border border-slate-800">
-        <div onclick="openDetail('${escAttr(id)}')" class="cursor-pointer">
+    <div class="tiktok-card" onclick="">
+
+        <!-- MEDIA — fills available height -->
+        <div class="card-media" onclick="openDetail('${escAttr(id)}')">
             ${mediaBlock}
+            <!-- overlay info -->
+            <div style="position:absolute;bottom:0;left:0;right:0;padding:10px 12px 8px;background:linear-gradient(to top,rgba(2,6,23,0.95) 0%,transparent 100%);">
+                <div class="flex justify-between items-end gap-2">
+                    <div class="min-w-0 flex-1">
+                        <p class="font-black text-white text-sm uppercase tracking-tight truncate leading-tight">${esc(d.title)}</p>
+                        <p class="text-slate-400 text-[10px] uppercase font-bold truncate mt-0.5">${esc(d.institution) || ''} · ${esc(d.type) || 'product'}</p>
+                    </div>
+                    <span class="text-amber-400 font-black text-base shrink-0">GH₵${esc(d.price ?? '0')}</span>
+                </div>
+            </div>
         </div>
 
-        <div class="p-4 space-y-3">
-            <div class="flex justify-between items-start gap-3">
-                <div class="flex-1 pr-2 min-w-0">
-                    <p class="font-black text-white text-sm uppercase tracking-tight truncate">${esc(d.title)}</p>
-                    <p class="text-slate-500 text-[10px] uppercase font-bold mt-0.5 truncate">${esc(d.institution) || ''} · ${esc(d.type) || 'product'}</p>
-                </div>
-                <span class="text-amber-400 font-black text-base shrink-0">GH₵${esc(d.price ?? '0')}</span>
+        <!-- PROFILE ROW -->
+        <div class="card-info feed-profile-trigger flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2 min-w-0">
+                <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-7 h-7 rounded-full border border-slate-700 object-cover shrink-0" alt="">
+                <span class="text-xs text-slate-300 font-semibold truncate">${esc(d.user_name) || 'Student'}</span>
             </div>
+            ${followBlock}
+        </div>
 
-            <div class="feed-profile-trigger flex items-center justify-between gap-3 cursor-pointer hover:opacity-80 transition-opacity">
-                <div class="flex items-center gap-2 min-w-0">
-                    <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-7 h-7 rounded-full border border-slate-700 object-cover" alt="">
-                    <span class="text-xs text-slate-400 font-medium truncate">${esc(d.user_name) || 'Student'}</span>
-                </div>
-                ${followBlock}
-            </div>
-
-            <div class="border-t border-slate-800 pt-3 flex items-center justify-between gap-1">
-                <button
-                    data-liked="false"
-                    onclick="likePost('${escAttr(id)}', this)"
-                    class="flex items-center gap-1.5 text-slate-400 hover:text-rose-500 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
-                    <i class="far fa-heart text-sm"></i>
-                    <span class="like-count text-[11px] font-bold">0</span>
-                </button>
-
-                <button
-                    onclick="toggleComments('${escAttr(id)}')"
-                    class="flex items-center gap-1.5 text-slate-400 hover:text-blue-400 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
-                    <i class="far fa-comment text-sm"></i>
-                    <span class="text-[11px] font-bold">Comment</span>
-                </button>
-
-                <button
-                    onclick="sharePost('${escAttr(id)}', '${escAttr(d.title)}')"
-                    class="flex items-center gap-1.5 text-slate-400 hover:text-green-400 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
-                    <i class="fas fa-share-nodes text-sm"></i>
-                    <span class="text-[11px] font-bold">Share</span>
-                </button>
-
-                <button
-                    onclick="downloadMedia('${escAttr(d.media_url)}', '${escAttr(d.title)}')"
-                    class="flex items-center gap-1.5 text-slate-400 hover:text-purple-400 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
-                    <i class="fas fa-download text-sm"></i>
-                </button>
-            </div>
+        <!-- ACTIONS — left-aligned -->
+        <div class="card-actions border-t border-slate-800">
+            <button
+                data-liked="false"
+                onclick="event.stopPropagation(); likePost('${escAttr(id)}', this)"
+                class="action-btn hover:text-rose-500 transition">
+                <i class="far fa-heart"></i>
+                <span class="like-count">0</span>
+            </button>
 
             <button
-                onclick="contactSeller('${escAttr(d.user_name)}', '${escAttr(d.title)}')"
+                onclick="event.stopPropagation(); toggleComments('${escAttr(id)}')"
+                class="action-btn hover:text-blue-400 transition">
+                <i class="far fa-comment"></i>
+                <span>Comment</span>
+            </button>
+
+            <button
+                onclick="event.stopPropagation(); sharePost('${escAttr(id)}', '${escAttr(d.title)}')"
+                class="action-btn hover:text-green-400 transition">
+                <i class="fas fa-share-nodes"></i>
+                <span>Share</span>
+            </button>
+
+            <button
+                onclick="event.stopPropagation(); downloadMedia('${escAttr(d.media_url)}', '${escAttr(d.title)}')"
+                class="action-btn hover:text-purple-400 transition">
+                <i class="fas fa-download"></i>
+            </button>
+        </div>
+
+        <!-- CONTACT SELLER — always visible -->
+        <div class="card-cta">
+            <button
+                onclick="event.stopPropagation(); contactSeller('${escAttr(d.user_name)}', '${escAttr(d.title)}')"
                 class="w-full flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-300 text-black font-black py-2.5 rounded-2xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md shadow-amber-400/20">
                 <i class="fas fa-bolt text-xs"></i>
                 Contact Seller Directly
             </button>
+        </div>
 
-            <div id="comments-${escAttr(id)}" class="hidden space-y-2 pt-1">
-                <div class="flex gap-2">
-                    <img src="${esc(viewer?.user_metadata?.avatar_url) || 'https://ui-avatars.com/api/?name=U'}" class="w-7 h-7 rounded-full border border-slate-700 object-cover shrink-0" alt="">
-                    <div class="flex-1 flex gap-2">
-                        <input
-                            type="text"
-                            placeholder="Write a comment…"
-                            class="flex-1 bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-amber-400 transition"
-                            onkeydown="if(event.key==='Enter') postComment('${escAttr(id)}', this)"
-                        >
-                        <button
-                            onclick="postComment('${escAttr(id)}', this.previousElementSibling)"
-                            class="bg-amber-400 text-black font-black text-xs px-3 py-2 rounded-xl active:scale-95 transition">
-                            Post
-                        </button>
-                    </div>
+        <!-- COMMENTS (toggle) -->
+        <div id="comments-${escAttr(id)}" class="hidden px-3 pb-3 space-y-2">
+            <div class="flex gap-2">
+                <img src="${esc(viewer?.user_metadata?.avatar_url) || 'https://ui-avatars.com/api/?name=U'}" class="w-7 h-7 rounded-full border border-slate-700 object-cover shrink-0" alt="">
+                <div class="flex-1 flex gap-2">
+                    <input
+                        type="text"
+                        placeholder="Write a comment…"
+                        class="flex-1 bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-amber-400 transition"
+                        onkeydown="if(event.key==='Enter') postComment('${escAttr(id)}', this)"
+                    >
+                    <button
+                        onclick="postComment('${escAttr(id)}', this.previousElementSibling)"
+                        class="bg-amber-400 text-black font-black text-xs px-3 py-2 rounded-xl active:scale-95 transition">
+                        Post
+                    </button>
                 </div>
-                <div id="comment-list-${escAttr(id)}" class="space-y-1.5"></div>
             </div>
+            <div id="comment-list-${escAttr(id)}" class="space-y-1.5"></div>
         </div>
     </div>`;
 }
@@ -827,8 +869,8 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
 
 function updateFollowButtons(targetUserId, isFollowing) {
     const cardClass = isFollowing
-        ? 'follow-btn px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600'
-        : 'follow-btn px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700';
+        ? 'follow-btn px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600 shrink-0'
+        : 'follow-btn px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700 shrink-0';
 
     const detailClass = isFollowing
         ? 'follow-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600'
@@ -1241,6 +1283,7 @@ if (activeAuthChange) {
             const metadata = user.user_metadata || {};
 
             document.getElementById('login-modal')?.classList.add('hidden');
+            document.getElementById('signup-modal')?.classList.add('hidden');
             document.getElementById('onboarding-modal')?.remove();
 
             if (authProfileNav) {
@@ -1254,11 +1297,6 @@ if (activeAuthChange) {
             const nameEl   = document.getElementById('profile-ui-name');
 
             try {
-                /**
-                 * MERGED:
-                 * Fetch avatar + institution + region together.
-                 * DB avatar takes precedence over Google avatar so custom uploads remain visible.
-                 */
                 const { data: savedUserRow } = await supabase
                     .from("users")
                     .select("avatar, institution, region")
@@ -1329,7 +1367,6 @@ if (activeAuthChange) {
 
         isAuthInitialized = true;
 
-        // Set Home nav active on first load if nothing is highlighted yet
         if (!document.querySelector('.bottom-nav button.nav-active, nav button.nav-active, nav a.nav-active')) {
             document.getElementById('nav-btn-feed')?.classList.add('nav-active');
         }
@@ -1365,9 +1402,7 @@ window.addEventListener('scroll', () => {
 document.getElementById('posts-feed')?.addEventListener('click', (event) => {
     const profileClickTarget = event.target.closest('.feed-profile-trigger');
     
-    // Ensure it triggers navigation to the profile view if selected row exists
     if (profileClickTarget) {
-        // Stop dynamic event cascading to avoid unintentionally opening detail modals
         event.stopPropagation();
         
         if (typeof window.navigateTo === 'function') {

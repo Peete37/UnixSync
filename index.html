@@ -97,8 +97,91 @@
       transition: color 0.15s, border-color 0.15s;
     }
 
-    /* ── CARDS ── */
-    #posts-feed .post-card,
+    /* ── TIKTOK SCROLL FEED ── */
+    #posts-feed {
+      height: calc(100vh - 140px);
+      overflow-y: scroll;
+      scroll-snap-type: y mandatory;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    #posts-feed::-webkit-scrollbar { display: none; }
+
+    .tiktok-card {
+      scroll-snap-align: start;
+      scroll-snap-stop: always;
+      height: calc(100vh - 140px);
+      display: flex;
+      flex-direction: column;
+      background: #0f172a;
+      border: 1px solid rgba(255,255,255,0.07);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .tiktok-card .card-media {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .tiktok-card .card-media img,
+    .tiktok-card .card-media video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    /* Gradient overlay at bottom of media */
+    .tiktok-card .card-media::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 80px;
+      background: linear-gradient(to top, #0f172a, transparent);
+      pointer-events: none;
+    }
+
+    .tiktok-card .card-info {
+      padding: 10px 12px 6px;
+      flex-shrink: 0;
+    }
+
+    /* ── INTERACTION ROW — left-aligned ── */
+    .tiktok-card .card-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      justify-content: flex-start;
+      padding: 4px 12px 6px;
+      flex-shrink: 0;
+    }
+
+    .action-btn {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      color: #94a3b8;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 6px 8px;
+      border-radius: 10px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      transition: color 0.15s, background 0.15s;
+    }
+    .action-btn:hover { background: rgba(255,255,255,0.06); }
+    .action-btn i { font-size: 13px; }
+
+    /* Contact Seller — always below actions */
+    .tiktok-card .card-cta {
+      padding: 6px 12px 10px;
+      flex-shrink: 0;
+    }
+
+    /* ── CARDS in search results (non-tiktok) ── */
     #search-results .post-card {
       background: #0f172a;
       border: 1px solid rgba(255,255,255,0.07);
@@ -108,7 +191,6 @@
       cursor: pointer;
     }
 
-    #posts-feed .post-card:hover,
     #search-results .post-card:hover {
       transform: translateY(-2px);
       box-shadow: 0 12px 40px rgba(0,0,0,0.5);
@@ -153,7 +235,6 @@
       color: #64748b;
     }
 
-    /* Icons and labels — always visible slate */
     .bottom-nav button i {
       font-size: 18px;
       color: #64748b;
@@ -164,11 +245,9 @@
       transition: color 0.15s;
     }
 
-    /* Hover state */
     .bottom-nav button:hover i,
     .bottom-nav button:hover span { color: #94a3b8; }
 
-    /* Active state — gold icon, white label */
     .bottom-nav button.nav-active i   { color: #fbbf24; }
     .bottom-nav button.nav-active span { color: #ffffff; }
 
@@ -222,6 +301,25 @@
       box-shadow: 0 0 0 3px rgba(251,191,36,0.12);
     }
 
+    /* ── LOGIN MODAL DIVIDER ── */
+    .login-divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #475569;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .login-divider::before,
+    .login-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: rgba(255,255,255,0.08);
+    }
+
     /* ── SCROLLBAR ── */
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -229,6 +327,12 @@
 
     /* ── MAIN PADDING ── */
     main { padding-bottom: 100px; }
+
+    /* hide nav on TikTok scroll for immersion */
+    .bottom-nav-hidden {
+      transform: translateY(100%);
+      transition: transform 0.3s ease;
+    }
   </style>
 </head>
 
@@ -260,7 +364,8 @@
         <button onclick="window.filterFeed('product', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Products</button>
         <button onclick="window.filterFeed('skill', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Services</button>
       </div>
-      <div id="posts-feed" class="space-y-4"></div>
+      <!-- TikTok-style snap scroll feed -->
+      <div id="posts-feed"></div>
     </div>
 
     <div id="explore-container" class="hidden pb-24 space-y-4">
@@ -377,6 +482,7 @@
     </nav>
   </div>
 
+  <!-- POST MODAL -->
   <div id="post-modal" class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-4">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl">
       <div class="flex justify-between items-center">
@@ -418,6 +524,7 @@
     </div>
   </div>
 
+  <!-- DETAIL MODAL -->
   <div id="detail-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 overflow-y-auto">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden relative my-auto shadow-2xl">
       <button onclick="window.closeDetailModal()" class="absolute top-4 right-4 z-50 bg-black/60 text-white w-8 h-8 rounded-full flex items-center justify-center hover:bg-black/80 transition focus:outline-none">
@@ -427,6 +534,7 @@
     </div>
   </div>
 
+  <!-- AVATAR MODAL -->
   <div id="avatar-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl modal-inner">
       <div class="flex justify-between items-center">
@@ -452,6 +560,7 @@
     </div>
   </div>
 
+  <!-- ── LOGIN MODAL — Google + Email/Password ── -->
   <div id="login-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
       <div class="flex justify-between items-center">
@@ -460,14 +569,123 @@
           <i class="fas fa-times"></i>
         </button>
       </div>
-      <div class="text-center py-4 space-y-2">
+
+      <div class="text-center py-2 space-y-1">
         <div class="text-3xl">🔐</div>
-        <p class="text-slate-300 text-xs">Sign in with your student account to create listings, message vendors, and personalize your feed.</p>
+        <p class="text-slate-300 text-xs">Sign in to create listings, message vendors, and personalise your feed.</p>
       </div>
+
+      <!-- Google Sign-In -->
       <button onclick="window.login()" class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md">
         <i class="fab fa-google text-base text-red-500"></i>
         Continue with Google
       </button>
+
+      <!-- Divider -->
+      <div class="login-divider">or sign in with email</div>
+
+      <!-- Email + Password fields -->
+      <div class="space-y-3">
+        <div>
+          <label for="login-email" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Email Address</label>
+          <div class="relative">
+            <i class="fas fa-envelope absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
+            <input
+              type="email"
+              id="login-email"
+              name="login-email"
+              placeholder="student@university.edu.gh"
+              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+            >
+          </div>
+        </div>
+        <div>
+          <label for="login-password" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Password</label>
+          <div class="relative">
+            <i class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
+            <input
+              type="password"
+              id="login-password"
+              name="login-password"
+              placeholder="••••••••"
+              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-10 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+            >
+            <button
+              type="button"
+              onclick="window.togglePasswordVisibility()"
+              class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs"
+              aria-label="Toggle password visibility">
+              <i id="pw-eye-icon" class="fas fa-eye"></i>
+            </button>
+          </div>
+        </div>
+
+        <button
+          onclick="window.loginWithEmail()"
+          class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20">
+          Sign In
+        </button>
+      </div>
+
+      <p class="text-center text-[10px] text-slate-500">
+        No account?
+        <button onclick="window.showSignupView()" class="text-amber-400 font-bold hover:underline">Create one free</button>
+      </p>
+    </div>
+  </div>
+
+  <!-- ── SIGNUP VIEW (inside login modal swap) ── -->
+  <div id="signup-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
+      <div class="flex justify-between items-center">
+        <h2 class="text-white font-black text-base uppercase tracking-tight">Create Account</h2>
+        <button onclick="window.closeSignupModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <button onclick="window.login()" class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md">
+        <i class="fab fa-google text-base text-red-500"></i>
+        Sign up with Google
+      </button>
+
+      <div class="login-divider">or create with email</div>
+
+      <div class="space-y-3">
+        <div>
+          <label for="signup-name" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Full Name</label>
+          <div class="relative">
+            <i class="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
+            <input type="text" id="signup-name" name="signup-name" placeholder="Your full name"
+              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium">
+          </div>
+        </div>
+        <div>
+          <label for="signup-email" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Email Address</label>
+          <div class="relative">
+            <i class="fas fa-envelope absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
+            <input type="email" id="signup-email" name="signup-email" placeholder="student@university.edu.gh"
+              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium">
+          </div>
+        </div>
+        <div>
+          <label for="signup-password" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Password</label>
+          <div class="relative">
+            <i class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
+            <input type="password" id="signup-password" name="signup-password" placeholder="Min 8 characters"
+              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium">
+          </div>
+        </div>
+        <button onclick="window.signUpWithEmail()"
+          class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20">
+          Create Account
+        </button>
+      </div>
+
+      <p class="text-center text-[10px] text-slate-500">
+        Already have an account?
+        <button onclick="window.showLoginView()" class="text-amber-400 font-bold hover:underline">Sign in</button>
+      </p>
     </div>
   </div>
 
@@ -488,26 +706,152 @@
       _setActiveNav(btn);
     };
 
+    // ── Password toggle ──
+    window.togglePasswordVisibility = function() {
+      const pwInput = document.getElementById('login-password');
+      const icon = document.getElementById('pw-eye-icon');
+      if (!pwInput) return;
+      if (pwInput.type === 'password') {
+        pwInput.type = 'text';
+        icon.className = 'fas fa-eye-slash';
+      } else {
+        pwInput.type = 'password';
+        icon.className = 'fas fa-eye';
+      }
+    };
+
+    // ── Email sign-in (wires to Supabase auth in app.js) ──
+    window.loginWithEmail = async function() {
+      const email    = document.getElementById('login-email')?.value?.trim();
+      const password = document.getElementById('login-password')?.value;
+      if (!email || !password) { alert('Please enter your email and password.'); return; }
+
+      // Forward to app.js supabase handler if available
+      if (typeof window.signInWithEmailPassword === 'function') {
+        await window.signInWithEmailPassword(email, password);
+      } else {
+        // Fallback hint — wire up in auth.service.js
+        alert('Email sign-in not yet wired. Add signInWithEmailPassword() to auth.service.js.');
+      }
+    };
+
+    // ── Email sign-up ──
+    window.signUpWithEmail = async function() {
+      const name     = document.getElementById('signup-name')?.value?.trim();
+      const email    = document.getElementById('signup-email')?.value?.trim();
+      const password = document.getElementById('signup-password')?.value;
+      if (!name || !email || !password) { alert('Please fill in all fields.'); return; }
+      if (password.length < 8) { alert('Password must be at least 8 characters.'); return; }
+
+      if (typeof window.registerWithEmail === 'function') {
+        await window.registerWithEmail(name, email, password);
+      } else {
+        alert('Email sign-up not yet wired. Add registerWithEmail() to auth.service.js.');
+      }
+    };
+
+    // ── Modal swap helpers ──
+    window.showSignupView = function() {
+      document.getElementById('login-modal')?.classList.add('hidden');
+      document.getElementById('signup-modal')?.classList.remove('hidden');
+    };
+    window.showLoginView = function() {
+      document.getElementById('signup-modal')?.classList.add('hidden');
+      document.getElementById('login-modal')?.classList.remove('hidden');
+    };
+    window.closeSignupModal = function() {
+      document.getElementById('signup-modal')?.classList.add('hidden');
+    };
+
     document.addEventListener('DOMContentLoaded', function() {
       _setActiveNav(document.getElementById('nav-btn-feed'));
     });
+
+    /**
+     * ── PROXY STUBS ──────────────────────────────────────────────────────────
+     * app.js is a type="module" and loads asynchronously.
+     * Inline onclick attributes fire before the module finishes, so we define
+     * safe stubs here (plain script, runs synchronously) that forward to the
+     * real implementations once they exist.
+     * Any call that arrives before the module is ready is queued and replayed.
+     */
+    (function() {
+      const _queue = {};
+
+      function makeStub(name) {
+        _queue[name] = [];
+        window[name] = function() {
+          // If the real function has already been set by the module, call it now
+          if (window['_real_' + name]) {
+            return window['_real_' + name].apply(this, arguments);
+          }
+          // Otherwise queue the call for later
+          _queue[name].push(arguments);
+        };
+      }
+
+      // All functions referenced by inline onclick in the HTML
+      [
+        'filterFeed',
+        'switchProfileTab',
+        'togglePostModal',
+        'navigateTo',
+        'openDetail',
+        'closeDetailModal',
+        'openLoginModal',
+        'closeLoginModal',
+        'likePost',
+        'sharePost',
+        'downloadMedia',
+        'contactSeller',
+        'toggleComments',
+        'postComment',
+        'toggleFollow',
+        'handlePostSubmission',
+        'handleAvatarUpload',
+        'login',
+        'logout',
+        'runSearch',
+        'saveOnboarding',
+        'onboardRegionChange',
+        'initProfileSelects',
+        'signOutUser',
+      ].forEach(makeStub);
+
+      // After module loads, swap stubs for real functions and drain queues
+      window._registerModuleFunction = function(name, fn) {
+        window['_real_' + name] = fn;
+        window[name] = fn; // replace stub with real function
+        // replay any queued calls
+        if (_queue[name] && _queue[name].length) {
+          _queue[name].forEach(args => fn.apply(window, args));
+          _queue[name] = [];
+        }
+      };
+    })();
   </script>
 
   <script type="module" src="./app.js"></script>
 
   <script type="module">
-    const _appNav = window.navigateTo;
+    // Once app.js module has run, register all window.* functions it set
+    // so the proxy stubs forward correctly and queued calls are drained.
+    const _moduleExports = [
+      'filterFeed','switchProfileTab','togglePostModal','navigateTo',
+      'openDetail','closeDetailModal','openLoginModal','closeLoginModal',
+      'likePost','sharePost','downloadMedia','contactSeller','toggleComments',
+      'postComment','toggleFollow','handlePostSubmission','handleAvatarUpload',
+      'login','logout','runSearch','saveOnboarding','onboardRegionChange',
+      'initProfileSelects','signOutUser',
+    ];
 
-    window.navigateTo = function(section, btn) {
-      _NAV_VIEWS.forEach(id => document.getElementById(id)?.classList.add('hidden'));
-      const targetId = section === 'feed' ? 'feed-container' : section + '-container';
-      document.getElementById(targetId)?.classList.remove('hidden');
+    _moduleExports.forEach(name => {
+      if (typeof window[name] === 'function' && typeof window._registerModuleFunction === 'function') {
+        window._registerModuleFunction(name, window[name]);
+      }
+    });
 
-      _setActiveNav(btn);
-
-      if (typeof _appNav === 'function') _appNav(section, btn);
-    };
-
+    // Ensure correct nav highlight after module boots
     _setActiveNav(document.getElementById('nav-btn-feed'));
   </script>
 
