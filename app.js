@@ -216,7 +216,7 @@ window.saveOnboarding = async function () {
             .upsert({
                 id: currentUserData.id,
                 name: metadata.full_name || 'Student',
-                avatar: metadata.avatar_url || '',
+                avatar_url: metadata.avatar_url || '',
                 email: currentUserData.email || '',
                 institution,
                 region,
@@ -594,7 +594,7 @@ window.handleAvatarUpload = async function (inputEl) {
 
         const { error: dbErr } = await supabase
             .from('profiles')
-            .update({ avatar: publicUrl })
+            .update({ avatar_url: publicUrl })
             .eq('id', currentUserData.id);
 
         if (dbErr) throw dbErr;
