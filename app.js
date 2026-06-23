@@ -212,7 +212,7 @@ window.saveOnboarding = async function () {
         const metadata = currentUserData.user_metadata || {};
 
         const { error } = await supabase
-            .from("users")
+            .from("profiles")
             .upsert({
                 id: currentUserData.id,
                 name: metadata.full_name || 'Student',
@@ -593,7 +593,7 @@ window.handleAvatarUpload = async function (inputEl) {
         const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(storagePath);
 
         const { error: dbErr } = await supabase
-            .from('users')
+            .from('profiles')
             .update({ avatar: publicUrl })
             .eq('id', currentUserData.id);
 
@@ -1248,7 +1248,7 @@ document.getElementById('saveLocationBtn')?.addEventListener('click', async () =
 
     try {
         const { error } = await supabase
-            .from("users")
+            .from("profiles")
             .update({ institution, region })
             .eq("id", currentUserData.id);
 
@@ -1307,7 +1307,7 @@ if (activeAuthChange) {
 
             try {
                 const { data: savedUserRow } = await supabase
-                    .from("users")
+                    .from("profiles")
                     .select("avatar, institution, region")
                     .eq("id", user.id)
                     .maybeSingle();
