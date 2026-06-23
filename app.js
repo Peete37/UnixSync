@@ -8,7 +8,6 @@ const FEED_LIMIT         = 30;
 const SEARCH_LIMIT       = 100;
 const SEARCH_RESULTS_CAP = 20;
 
-/** All Ghana tertiary institutions grouped by region */
 const GHANA_DATA = {
     'Greater Accra': [
         'University of Ghana (UG)',
@@ -122,14 +121,12 @@ function setEl(id, val) {
     if (el) el.textContent = val;
 }
 
-/** Build an <option> list for a <select> from an array, with optional selected value */
 function buildOptions(arr, selectedVal = '') {
     return arr.map(v =>
         `<option value="${esc(v)}" ${v === selectedVal ? 'selected' : ''}>${esc(v)}</option>`
     ).join('');
 }
 
-/** Build institution options filtered by region */
 function buildInstitutionOptions(region, selectedVal = '') {
     const list = region && GHANA_DATA[region] ? GHANA_DATA[region] : ALL_INSTITUTIONS;
     return buildOptions(list, selectedVal);
@@ -166,7 +163,6 @@ function injectOnboardingModal() {
                 <h2 class="text-white font-black text-lg uppercase tracking-tight">Welcome to CampusMarket</h2>
                 <p class="text-slate-400 text-xs">Tell us where you study so we can personalise your feed</p>
             </div>
-
             <div class="space-y-3">
                 <div>
                     <label class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Region</label>
@@ -177,7 +173,6 @@ function injectOnboardingModal() {
                         ${buildOptions(ALL_REGIONS)}
                     </select>
                 </div>
-
                 <div>
                     <label class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Institution</label>
                     <select id="onboard-institution"
@@ -187,7 +182,6 @@ function injectOnboardingModal() {
                     </select>
                 </div>
             </div>
-
             <button
                 onclick="window.saveOnboarding()"
                 class="w-full bg-amber-400 text-black font-black py-3 rounded-2xl uppercase tracking-wider text-sm active:scale-95 transition-transform">
@@ -264,10 +258,12 @@ function applyLocationToUI(institution, region) {
 
 window.login = async function () {
     try {
+        document.getElementById('login-modal')?.classList.add('hidden');
+        document.getElementById('signup-modal')?.classList.add('hidden');
         await signInWithGoogle();
     } catch (err) {
         console.error("Login failure:", err);
-        throw err;
+        showToast('Sign-in failed. Please try again.');
     }
 };
 
@@ -283,40 +279,6 @@ window.logout = async function () {
 
 window.signOutUser = async function () {
     await window.logout();
-};
-
-/**
- * Email/password sign-in — called from index.html loginWithEmail()
- * Wire this up once Supabase email auth is enabled in your project.
- */
-window.signInWithEmailPassword = async function (email, password) {
-    try {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-        document.getElementById('login-modal')?.classList.add('hidden');
-    } catch (err) {
-        console.error("Email sign-in error:", err);
-        alert(err.message || 'Sign-in failed. Please check your credentials.');
-    }
-};
-
-/**
- * Email/password registration — called from index.html signUpWithEmail()
- */
-window.registerWithEmail = async function (name, email, password) {
-    try {
-        const { error } = await supabase.auth.signUp({
-            email,
-            password,
-            options: { data: { full_name: name } }
-        });
-        if (error) throw error;
-        document.getElementById('signup-modal')?.classList.add('hidden');
-        alert('Account created! Check your email to confirm your address.');
-    } catch (err) {
-        console.error("Email sign-up error:", err);
-        alert(err.message || 'Sign-up failed. Please try again.');
-    }
 };
 
 // ─── 7. FEED SUBSCRIPTION HELPERS ────────────────────────────────────────────
@@ -343,7 +305,6 @@ async function fetchFeedSnapshot(queryFactory = null) {
     return data || [];
 }
 
-/** Fetches initial snapshot and establishes live post listeners */
 async function subscribeFeed(queryFactory = null) {
     unsubscribeFeed();
 
@@ -419,10 +380,33 @@ window.navigateTo = function (viewId, btn = null) {
     clearNavHighlights();
     setNavHighlight(btn, viewId);
 
-    if (viewId === 'profile' && currentUserData) loadProfileStats();
+    // ── Auth gates ──
+    if (viewId === 'profile') {
+        const gate    = document.getElementById('profile-auth-gate');
+        const content = document.getElementById('profile-content');
+        if (!currentUserData) {
+            gate?.classList.remove('hidden');
+            content?.classList.add('hidden');
+        } else {
+            gate?.classList.add('hidden');
+            content?.classList.remove('hidden');
+            loadProfileStats();
+        }
+    }
+
+    if (viewId === 'dms') {
+        const gate    = document.getElementById('dms-auth-gate');
+        const content = document.getElementById('dms-content');
+        if (!currentUserData) {
+            gate?.classList.remove('hidden');
+            content?.classList.add('hidden');
+        } else {
+            gate?.classList.add('hidden');
+            content?.classList.remove('hidden');
+        }
+    }
 };
 
-/** Handles switching between profile subviews (Gigs vs Settings) */
 window.switchProfileTab = function (tabType, selectedBtn) {
     document.querySelectorAll('.profile-subview').forEach(view => view.classList.add('hidden'));
 
@@ -437,6 +421,10 @@ window.switchProfileTab = function (tabType, selectedBtn) {
 };
 
 window.togglePostModal = function () {
+    if (!currentUserData) {
+        window.openLoginModal();
+        return;
+    }
     document.getElementById('post-modal')?.classList.toggle('hidden');
 };
 
@@ -485,13 +473,11 @@ window.openDetail = async function (postId) {
                     <h1 class="text-2xl font-bold text-white uppercase tracking-tighter">${esc(d.title) || 'Campus Item'}</h1>
                     <span class="text-amber-400 font-black text-xl shrink-0">GH₵${esc(d.price ?? '0')}</span>
                 </div>
-
                 <div class="flex flex-wrap gap-2 text-[10px] uppercase font-bold tracking-wider">
                     <span class="bg-slate-800 text-amber-400 px-2 py-1 rounded border border-slate-700">${esc(d.institution) || 'All Campuses'}</span>
                     <span class="bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700">${esc(d.region) || 'All Regions'}</span>
                     <span class="bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700 capitalize">${esc(d.type) || 'product'}</span>
                 </div>
-
                 <div class="flex items-center justify-between gap-3 p-3 bg-slate-900 rounded-xl border border-slate-800">
                     <div class="flex items-center gap-3 min-w-0">
                         <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-10 h-10 rounded-full border border-amber-400 object-cover" alt="Avatar">
@@ -502,9 +488,7 @@ window.openDetail = async function (postId) {
                     </div>
                     ${followBlock}
                 </div>
-
                 <p class="text-slate-400 leading-relaxed font-light">${esc(d.description) || 'No description provided.'}</p>
-
                 <button class="w-full bg-amber-400 text-black font-black py-4 rounded-2xl active:scale-95 transition-transform mt-6 uppercase tracking-wider text-sm">
                     ${esc(ctaLabel)}
                 </button>
@@ -522,11 +506,51 @@ window.closeDetailModal = function () {
 // ─── 10. LOGIN MODAL ──────────────────────────────────────────────────────────
 
 window.openLoginModal = function () {
+    document.getElementById('signup-modal')?.classList.add('hidden');
     document.getElementById('login-modal')?.classList.remove('hidden');
 };
 
 window.closeLoginModal = function () {
     document.getElementById('login-modal')?.classList.add('hidden');
+    document.getElementById('signup-modal')?.classList.add('hidden');
+};
+
+// ─── 10b. EMAIL AUTH ──────────────────────────────────────────────────────────
+
+window.signInWithEmailPassword = async function (email, password) {
+    const btn = document.querySelector('#login-modal button[onclick="window.loginWithEmail()"]');
+    try {
+        if (btn) { btn.textContent = 'Signing in…'; btn.disabled = true; }
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        document.getElementById('login-modal')?.classList.add('hidden');
+        showToast('Welcome back! ✓');
+    } catch (err) {
+        console.error("Email sign-in error:", err);
+        showToast(err.message || 'Sign-in failed. Check your credentials.');
+    } finally {
+        if (btn) { btn.textContent = 'Sign In'; btn.disabled = false; }
+    }
+};
+
+window.registerWithEmail = async function (name, email, password) {
+    const btn = document.querySelector('#signup-modal button[onclick="window.signUpWithEmail()"]');
+    try {
+        if (btn) { btn.textContent = 'Creating account…'; btn.disabled = true; }
+        const { error } = await supabase.auth.signUp({
+            email,
+            password,
+            options: { data: { full_name: name } }
+        });
+        if (error) throw error;
+        document.getElementById('signup-modal')?.classList.add('hidden');
+        showToast('Account created! Check your email to confirm. ✓');
+    } catch (err) {
+        console.error("Email sign-up error:", err);
+        showToast(err.message || 'Sign-up failed. Please try again.');
+    } finally {
+        if (btn) { btn.textContent = 'Create Account'; btn.disabled = false; }
+    }
 };
 
 // ─── 11. AVATAR UPLOAD ────────────────────────────────────────────────────────
@@ -598,7 +622,6 @@ window.handleAvatarUpload = async function (inputEl) {
 
 // ─── 12. CARD RENDERERS ───────────────────────────────────────────────────────
 
-// ── INTERACTION ACTIONS ──
 window.likePost = function (postId, btn) {
     const liked = btn.dataset.liked === 'true';
     const countEl = btn.querySelector('.like-count');
@@ -655,23 +678,17 @@ window.toggleComments = function (postId) {
     if (box) box.classList.toggle('hidden');
 };
 
-/**
- * ── FEED CARD — TikTok layout ──
- * • Full-height snap card
- * • Like / Comment / Share / Download → left-aligned row
- * • "Contact Seller Directly" always visible below the action row
- */
 function renderFeedCard(id, d) {
     const viewer     = currentUserData;
     const showFollow = viewer && d.user_id !== viewer.id;
 
     const mediaBlock = d.media_type === 'video'
-        ? `<video class="w-full h-full object-cover" autoplay muted loop playsinline src="${esc(d.media_url)}"></video>`
-        : `<img class="w-full h-full object-cover" src="${esc(d.media_url)}" alt="${esc(d.title)}">`;
+        ? `<video class="w-full h-52 object-cover" autoplay muted loop playsinline src="${esc(d.media_url)}"></video>`
+        : `<img class="w-full h-52 object-cover" src="${esc(d.media_url)}" alt="${esc(d.title)}">`;
 
     const followBlock = showFollow ? `
         <button
-            class="follow-btn px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700 shrink-0"
+            class="follow-btn px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700"
             data-follow-uid="${esc(d.user_id)}"
             data-active="false"
             onclick="toggleFollow('${escAttr(d.user_id)}','${escAttr(d.user_name)}','${escAttr(d.user_avatar)}')">
@@ -679,97 +696,84 @@ function renderFeedCard(id, d) {
         </button>` : '';
 
     return `
-    <div class="tiktok-card" onclick="">
-
-        <!-- MEDIA — fills available height -->
-        <div class="card-media" onclick="openDetail('${escAttr(id)}')">
+    <div class="bg-slate-900 rounded-3xl overflow-hidden border border-slate-800">
+        <div onclick="openDetail('${escAttr(id)}')" class="cursor-pointer">
             ${mediaBlock}
-            <!-- overlay info -->
-            <div style="position:absolute;bottom:0;left:0;right:0;padding:10px 12px 8px;background:linear-gradient(to top,rgba(2,6,23,0.95) 0%,transparent 100%);">
-                <div class="flex justify-between items-end gap-2">
-                    <div class="min-w-0 flex-1">
-                        <p class="font-black text-white text-sm uppercase tracking-tight truncate leading-tight">${esc(d.title)}</p>
-                        <p class="text-slate-400 text-[10px] uppercase font-bold truncate mt-0.5">${esc(d.institution) || ''} · ${esc(d.type) || 'product'}</p>
-                    </div>
-                    <span class="text-amber-400 font-black text-base shrink-0">GH₵${esc(d.price ?? '0')}</span>
+        </div>
+        <div class="p-4 space-y-3">
+            <div class="flex justify-between items-start gap-3">
+                <div class="flex-1 pr-2 min-w-0">
+                    <p class="font-black text-white text-sm uppercase tracking-tight truncate">${esc(d.title)}</p>
+                    <p class="text-slate-500 text-[10px] uppercase font-bold mt-0.5 truncate">${esc(d.institution) || ''} · ${esc(d.type) || 'product'}</p>
                 </div>
+                <span class="text-amber-400 font-black text-base shrink-0">GH₵${esc(d.price ?? '0')}</span>
             </div>
-        </div>
 
-        <!-- PROFILE ROW -->
-        <div class="card-info feed-profile-trigger flex items-center justify-between gap-2">
-            <div class="flex items-center gap-2 min-w-0">
-                <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-7 h-7 rounded-full border border-slate-700 object-cover shrink-0" alt="">
-                <span class="text-xs text-slate-300 font-semibold truncate">${esc(d.user_name) || 'Student'}</span>
+            <div class="feed-profile-trigger flex items-center justify-between gap-3 cursor-pointer hover:opacity-80 transition-opacity">
+                <div class="flex items-center gap-2 min-w-0">
+                    <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-7 h-7 rounded-full border border-slate-700 object-cover" alt="">
+                    <span class="text-xs text-slate-400 font-medium truncate">${esc(d.user_name) || 'Student'}</span>
+                </div>
+                ${followBlock}
             </div>
-            ${followBlock}
-        </div>
 
-        <!-- ACTIONS — left-aligned -->
-        <div class="card-actions border-t border-slate-800">
-            <button
-                data-liked="false"
-                onclick="event.stopPropagation(); likePost('${escAttr(id)}', this)"
-                class="action-btn hover:text-rose-500 transition">
-                <i class="far fa-heart"></i>
-                <span class="like-count">0</span>
-            </button>
+            <div class="border-t border-slate-800 pt-3 flex items-center justify-between gap-1">
+                <button
+                    data-liked="false"
+                    onclick="likePost('${escAttr(id)}', this)"
+                    class="flex items-center gap-1.5 text-slate-400 hover:text-rose-500 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
+                    <i class="far fa-heart text-sm"></i>
+                    <span class="like-count text-[11px] font-bold">0</span>
+                </button>
+                <button
+                    onclick="toggleComments('${escAttr(id)}')"
+                    class="flex items-center gap-1.5 text-slate-400 hover:text-blue-400 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
+                    <i class="far fa-comment text-sm"></i>
+                    <span class="text-[11px] font-bold">Comment</span>
+                </button>
+                <button
+                    onclick="sharePost('${escAttr(id)}', '${escAttr(d.title)}')"
+                    class="flex items-center gap-1.5 text-slate-400 hover:text-green-400 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
+                    <i class="fas fa-share-nodes text-sm"></i>
+                    <span class="text-[11px] font-bold">Share</span>
+                </button>
+                <button
+                    onclick="downloadMedia('${escAttr(d.media_url)}', '${escAttr(d.title)}')"
+                    class="flex items-center gap-1.5 text-slate-400 hover:text-purple-400 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
+                    <i class="fas fa-download text-sm"></i>
+                </button>
+            </div>
 
             <button
-                onclick="event.stopPropagation(); toggleComments('${escAttr(id)}')"
-                class="action-btn hover:text-blue-400 transition">
-                <i class="far fa-comment"></i>
-                <span>Comment</span>
-            </button>
-
-            <button
-                onclick="event.stopPropagation(); sharePost('${escAttr(id)}', '${escAttr(d.title)}')"
-                class="action-btn hover:text-green-400 transition">
-                <i class="fas fa-share-nodes"></i>
-                <span>Share</span>
-            </button>
-
-            <button
-                onclick="event.stopPropagation(); downloadMedia('${escAttr(d.media_url)}', '${escAttr(d.title)}')"
-                class="action-btn hover:text-purple-400 transition">
-                <i class="fas fa-download"></i>
-            </button>
-        </div>
-
-        <!-- CONTACT SELLER — always visible -->
-        <div class="card-cta">
-            <button
-                onclick="event.stopPropagation(); contactSeller('${escAttr(d.user_name)}', '${escAttr(d.title)}')"
+                onclick="contactSeller('${escAttr(d.user_name)}', '${escAttr(d.title)}')"
                 class="w-full flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-300 text-black font-black py-2.5 rounded-2xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md shadow-amber-400/20">
                 <i class="fas fa-bolt text-xs"></i>
                 Contact Seller Directly
             </button>
-        </div>
 
-        <!-- COMMENTS (toggle) -->
-        <div id="comments-${escAttr(id)}" class="hidden px-3 pb-3 space-y-2">
-            <div class="flex gap-2">
-                <img src="${esc(viewer?.user_metadata?.avatar_url) || 'https://ui-avatars.com/api/?name=U'}" class="w-7 h-7 rounded-full border border-slate-700 object-cover shrink-0" alt="">
-                <div class="flex-1 flex gap-2">
-                    <input
-                        type="text"
-                        placeholder="Write a comment…"
-                        class="flex-1 bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-amber-400 transition"
-                        onkeydown="if(event.key==='Enter') postComment('${escAttr(id)}', this)"
-                    >
-                    <button
-                        onclick="postComment('${escAttr(id)}', this.previousElementSibling)"
-                        class="bg-amber-400 text-black font-black text-xs px-3 py-2 rounded-xl active:scale-95 transition">
-                        Post
-                    </button>
+            <div id="comments-${escAttr(id)}" class="hidden space-y-2 pt-1">
+                <div class="flex gap-2">
+                    <img src="${esc(viewer?.user_metadata?.avatar_url) || 'https://ui-avatars.com/api/?name=U'}" class="w-7 h-7 rounded-full border border-slate-700 object-cover shrink-0" alt="">
+                    <div class="flex-1 flex gap-2">
+                        <input
+                            type="text"
+                            placeholder="Write a comment…"
+                            class="flex-1 bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-amber-400 transition"
+                            onkeydown="if(event.key==='Enter') postComment('${escAttr(id)}', this)"
+                        >
+                        <button
+                            onclick="postComment('${escAttr(id)}', this.previousElementSibling)"
+                            class="bg-amber-400 text-black font-black text-xs px-3 py-2 rounded-xl active:scale-95 transition">
+                            Post
+                        </button>
+                    </div>
                 </div>
+                <div id="comment-list-${escAttr(id)}" class="space-y-1.5"></div>
             </div>
-            <div id="comment-list-${escAttr(id)}" class="space-y-1.5"></div>
         </div>
     </div>`;
 }
 
-// ── COMMENT POSTING (local only — wire to Supabase when ready) ──
 window.postComment = function (postId, inputEl) {
     const text = inputEl?.value?.trim();
     if (!text) return;
@@ -869,8 +873,8 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
 
 function updateFollowButtons(targetUserId, isFollowing) {
     const cardClass = isFollowing
-        ? 'follow-btn px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600 shrink-0'
-        : 'follow-btn px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700 shrink-0';
+        ? 'follow-btn px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600'
+        : 'follow-btn px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700';
 
     const detailClass = isFollowing
         ? 'follow-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600'
@@ -1090,7 +1094,7 @@ window.runSearch = async function (term) {
 
 window.handlePostSubmission = async function () {
     if (!currentUserData) {
-        alert('Please sign in to post.');
+        window.openLoginModal();
         return;
     }
 
@@ -1102,12 +1106,12 @@ window.handlePostSubmission = async function () {
     const submitBtn   = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
 
     if (!title) {
-        alert('Please enter a title.');
+        showToast('Please enter a title.');
         return;
     }
 
     if (!mediaFile) {
-        alert('Please attach an image or video.');
+        showToast('Please attach an image or video.');
         return;
     }
 
@@ -1156,10 +1160,10 @@ window.handlePostSubmission = async function () {
         document.getElementById('mediaInput').value = '';
 
         window.togglePostModal();
-        alert('Post published! 🎉');
+        showToast('Post published! 🎉');
     } catch (err) {
         console.error("Post submission error:", err);
-        alert('Failed to publish. Please try again.');
+        showToast('Failed to publish. Please try again.');
     } finally {
         if (submitBtn) {
             submitBtn.textContent = 'Publish Instantly';
@@ -1238,7 +1242,7 @@ document.getElementById('saveLocationBtn')?.addEventListener('click', async () =
     const region      = document.getElementById('profileRegion')?.value;
 
     if (!institution || !region) {
-        alert('Please select both a region and institution.');
+        showToast('Please select both a region and institution.');
         return;
     }
 
@@ -1256,9 +1260,10 @@ document.getElementById('saveLocationBtn')?.addEventListener('click', async () =
         const locationEl = document.getElementById('profile-ui-location');
         if (locationEl) locationEl.textContent = `${institution} · ${region}`;
 
-        alert('Settings updated ✓');
+        showToast('Settings updated ✓');
     } catch (err) {
         console.error("Save settings error:", err);
+        showToast('Failed to save. Please try again.');
     }
 });
 
@@ -1291,6 +1296,10 @@ if (activeAuthChange) {
                     <i class="fas fa-user text-lg"></i>
                     <span class="text-[10px] uppercase font-bold tracking-wider">Profile</span>
                 `;
+                authProfileNav.onclick = function (e) {
+                    e.stopPropagation();
+                    window.navigateTo('profile', authProfileNav);
+                };
             }
 
             const avatarEl = document.getElementById('profile-ui-avatar');
@@ -1336,6 +1345,12 @@ if (activeAuthChange) {
                 window.initProfileSelects();
             }
 
+            // Refresh gate visibility on sign-in
+            document.getElementById('profile-auth-gate')?.classList.add('hidden');
+            document.getElementById('profile-content')?.classList.remove('hidden');
+            document.getElementById('dms-auth-gate')?.classList.add('hidden');
+            document.getElementById('dms-content')?.classList.remove('hidden');
+
             subscribeFeed();
             try { loadProfileStats(); } catch (_) {}
 
@@ -1347,6 +1362,10 @@ if (activeAuthChange) {
                     <i class="fas fa-sign-in-alt text-lg"></i>
                     <span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>
                 `;
+                authProfileNav.onclick = function (e) {
+                    e.stopPropagation();
+                    window.openLoginModal();
+                };
             }
 
             setEl('profile-ui-name', 'Campus Student');
@@ -1358,9 +1377,16 @@ if (activeAuthChange) {
             const grid = document.getElementById('profile-grid');
             if (grid) grid.innerHTML = '';
 
+            // Refresh gate visibility on sign-out
+            document.getElementById('profile-auth-gate')?.classList.remove('hidden');
+            document.getElementById('profile-content')?.classList.add('hidden');
+            document.getElementById('dms-auth-gate')?.classList.remove('hidden');
+            document.getElementById('dms-content')?.classList.add('hidden');
+
             subscribeFeed();
 
-            if (isAuthInitialized && typeof window.openLoginModal === 'function') {
+            // Show login modal on first load and on sign-out
+            if (typeof window.openLoginModal === 'function') {
                 window.openLoginModal();
             }
         }
@@ -1373,7 +1399,7 @@ if (activeAuthChange) {
     });
 }
 
-// ─── 22. DYNAMIC SCROLL DIRECTION DETECTOR FOR NAVBAR ────────────────────────
+// ─── 22. SCROLL DIRECTION DETECTOR FOR NAVBAR ────────────────────────────────
 
 let lastScrollY = window.scrollY;
 
@@ -1397,14 +1423,14 @@ window.addEventListener('scroll', () => {
     lastScrollY = currentScrollY;
 }, { passive: true });
 
-// ─── 23. ADDED: GLOBAL DELEGATED CLICK TARGET FOR FEED PROFILE LINKS ─────────
+// ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ──────────────────────────────
 
 document.getElementById('posts-feed')?.addEventListener('click', (event) => {
     const profileClickTarget = event.target.closest('.feed-profile-trigger');
-    
+
     if (profileClickTarget) {
         event.stopPropagation();
-        
+
         if (typeof window.navigateTo === 'function') {
             window.navigateTo('profile');
         }
