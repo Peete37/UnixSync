@@ -13,7 +13,6 @@
 
     body { font-family: 'Inter', sans-serif; }
 
-    /* Screen Reader Only Utilities to clear DevTools field-label warnings */
     .sr-only {
       position: absolute;
       width: 1px;
@@ -58,9 +57,7 @@
     .logo span { color: #fbbf24; }
 
     /* ── SEARCH ── */
-    .search-wrap {
-      position: relative;
-    }
+    .search-wrap { position: relative; }
 
     .search-wrap i {
       position: absolute;
@@ -93,9 +90,7 @@
     }
 
     /* ── TABS ── */
-    .feed-tab-btn {
-      transition: color 0.15s, border-color 0.15s;
-    }
+    .feed-tab-btn { transition: color 0.15s, border-color 0.15s; }
 
     /* ── TIKTOK SCROLL FEED ── */
     #posts-feed {
@@ -133,7 +128,6 @@
       object-fit: cover;
     }
 
-    /* Gradient overlay at bottom of media */
     .tiktok-card .card-media::after {
       content: '';
       position: absolute;
@@ -148,7 +142,6 @@
       flex-shrink: 0;
     }
 
-    /* ── INTERACTION ROW — left-aligned ── */
     .tiktok-card .card-actions {
       display: flex;
       align-items: center;
@@ -175,13 +168,12 @@
     .action-btn:hover { background: rgba(255,255,255,0.06); }
     .action-btn i { font-size: 13px; }
 
-    /* Contact Seller — always below actions */
     .tiktok-card .card-cta {
       padding: 6px 12px 10px;
       flex-shrink: 0;
     }
 
-    /* ── CARDS in search results (non-tiktok) ── */
+    /* ── SEARCH RESULT CARDS ── */
     #search-results .post-card {
       background: #0f172a;
       border: 1px solid rgba(255,255,255,0.07);
@@ -207,6 +199,7 @@
       border-top: 1px solid rgba(255,255,255,0.07);
       padding: 8px 24px 20px;
       z-index: 50;
+      transition: transform 0.3s ease;
     }
 
     .bottom-nav {
@@ -285,7 +278,6 @@
       border-radius: 24px;
     }
 
-    /* ── PROFILE ── */
     #profile-container select,
     #post-modal select,
     #post-modal input[type="text"],
@@ -301,7 +293,7 @@
       box-shadow: 0 0 0 3px rgba(251,191,36,0.12);
     }
 
-    /* ── LOGIN MODAL DIVIDER ── */
+    /* ── LOGIN DIVIDER ── */
     .login-divider {
       display: flex;
       align-items: center;
@@ -325,14 +317,9 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
 
-    /* ── MAIN PADDING ── */
     main { padding-bottom: 100px; }
 
-    /* hide nav on TikTok scroll for immersion */
-    .bottom-nav-hidden {
-      transform: translateY(100%);
-      transition: transform 0.3s ease;
-    }
+    .bottom-nav-hidden { transform: translateY(100%); }
   </style>
 </head>
 
@@ -364,7 +351,6 @@
         <button onclick="window.filterFeed('product', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Products</button>
         <button onclick="window.filterFeed('skill', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Services</button>
       </div>
-      <!-- TikTok-style snap scroll feed -->
       <div id="posts-feed"></div>
     </div>
 
@@ -377,112 +363,133 @@
     </div>
 
     <div id="dms-container" class="hidden pb-24 space-y-4">
-      <div class="text-center py-16 space-y-3 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
-        <p class="text-3xl">💬</p>
-        <p class="font-black text-white uppercase tracking-tight text-sm">Inbox & Chat Channels</p>
-        <p class="text-slate-500 text-xs max-w-xs mx-auto">Connect directly with student freelancers or product vendors on your campus.</p>
+
+      <div id="dms-auth-gate" class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
+        <p class="text-3xl">🔐</p>
+        <p class="font-black text-white uppercase tracking-tight text-sm">Sign in to access DMs</p>
+        <p class="text-slate-500 text-xs max-w-xs mx-auto">Create an account or sign in to message vendors and student sellers directly.</p>
+        <button onclick="window.openLoginModal()" class="mt-2 bg-amber-400 text-black font-black px-6 py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
+          Sign In
+        </button>
       </div>
+
+      <div id="dms-content" class="hidden space-y-4">
+        <div class="text-center py-16 space-y-3 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
+          <p class="text-3xl">💬</p>
+          <p class="font-black text-white uppercase tracking-tight text-sm">Inbox & Chat Channels</p>
+          <p class="text-slate-500 text-xs max-w-xs mx-auto">Connect directly with student freelancers or product vendors on your campus.</p>
+        </div>
+      </div>
+
     </div>
 
     <div id="profile-container" class="hidden pb-24 space-y-6">
 
-      <div class="flex items-center gap-4 bg-slate-900 border border-slate-800/60 p-5 rounded-3xl">
-        <div class="relative group cursor-pointer w-16 h-16 flex-shrink-0" onclick="document.getElementById('avatarFileInput').click()">
-          <img id="profile-ui-avatar" src="https://ui-avatars.com/api/?name=User" class="w-16 h-16 rounded-full border-2 border-amber-400 object-cover bg-slate-800 transition group-hover:opacity-75" alt="Avatar">
-          <div class="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition duration-150">
-            <i class="fas fa-camera text-white text-xs"></i>
-          </div>
-          <label for="avatarFileInput" class="sr-only">Upload profile avatar</label>
-          <input type="file" id="avatarFileInput" name="avatarFileInput" accept="image/*" class="hidden" onchange="window.handleAvatarUpload && window.handleAvatarUpload(this)">
-        </div>
-        <div class="flex-1 min-w-0">
-          <h2 id="profile-ui-name" class="text-white font-black text-xl uppercase tracking-tight truncate">Campus Student</h2>
-          <p id="profile-ui-location" class="text-slate-400 text-xs truncate">Global Network</p>
-          <span class="inline-block mt-1.5 bg-amber-400/10 text-amber-400 border border-amber-400/20 text-[9px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded">Student Account</span>
-        </div>
+      <div id="profile-auth-gate" class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
+        <p class="text-3xl">👤</p>
+        <p class="font-black text-white uppercase tracking-tight text-sm">Sign in to view your profile</p>
+        <p class="text-slate-500 text-xs max-w-xs mx-auto">Create an account to post listings, track followers, and manage your campus presence.</p>
+        <button onclick="window.openLoginModal()" class="mt-2 bg-amber-400 text-black font-black px-6 py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
+          Sign In
+        </button>
       </div>
 
-      <div class="grid grid-cols-3 gap-3 bg-slate-900/50 border border-slate-800/60 p-4 rounded-2xl text-center">
-        <div>
-          <span id="profile-posts-count" class="block text-lg font-black text-white">0</span>
-          <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Posts</span>
-        </div>
-        <div>
-          <span id="profile-followers-count" class="block text-lg font-black text-white">0</span>
-          <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Followers</span>
-        </div>
-        <div>
-          <span id="profile-following-count" class="block text-lg font-black text-white">0</span>
-          <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Following</span>
-        </div>
-      </div>
+      <div id="profile-content" class="hidden space-y-6">
 
-      <div class="flex border-b border-slate-900 text-sm">
-        <button onclick="window.switchProfileTab('posts', this)" class="profile-subtab-btn flex-1 py-3 text-center text-amber-400 font-bold border-b-2 border-amber-400 uppercase tracking-wider text-xs focus:outline-none">My Gigs & Posts</button>
-        <button onclick="window.switchProfileTab('settings', this)" class="profile-subtab-btn flex-1 py-3 text-center text-slate-500 font-bold border-b-2 border-transparent uppercase tracking-wider text-xs focus:outline-none hover:text-slate-300">Campus Settings</button>
-      </div>
-
-      <div class="profile-tab-contents">
-        <div id="profile-subview-posts" class="profile-subview">
-          <div id="profile-grid" class="grid grid-cols-3 gap-2"></div>
-        </div>
-
-        <div id="profile-subview-settings" class="profile-subview hidden space-y-4 bg-slate-900 p-5 rounded-3xl border border-slate-800/60">
-          <div class="border-b border-slate-800 pb-2">
-            <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
-              <i class="fas fa-map-marker-alt text-amber-400"></i> Local Campus Selection
-            </h3>
-          </div>
-          <div class="space-y-3">
-            <div>
-              <label for="profileRegion" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Region</label>
-              <select id="profileRegion" name="profileRegion" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
+        <div class="flex items-center gap-4 bg-slate-900 border border-slate-800/60 p-5 rounded-3xl">
+          <div class="relative group cursor-pointer w-16 h-16 flex-shrink-0" onclick="document.getElementById('avatarFileInput').click()">
+            <img id="profile-ui-avatar" src="https://ui-avatars.com/api/?name=User" class="w-16 h-16 rounded-full border-2 border-amber-400 object-cover bg-slate-800 transition group-hover:opacity-75" alt="Avatar">
+            <div class="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition duration-150">
+              <i class="fas fa-camera text-white text-xs"></i>
             </div>
-            <div>
-              <label for="profileInstitution" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Institution</label>
-              <select id="profileInstitution" name="profileInstitution" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
-            </div>
-            <button id="saveLocationBtn" class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 mt-2 shadow-lg shadow-amber-400/10">
-              Save Selection Changes
-            </button>
+            <label for="avatarFileInput" class="sr-only">Upload profile avatar</label>
+            <input type="file" id="avatarFileInput" name="avatarFileInput" accept="image/*" class="hidden" onchange="window.handleAvatarUpload && window.handleAvatarUpload(this)">
+          </div>
+          <div class="flex-1 min-w-0">
+            <h2 id="profile-ui-name" class="text-white font-black text-xl uppercase tracking-tight truncate">Campus Student</h2>
+            <p id="profile-ui-location" class="text-slate-400 text-xs truncate">Global Network</p>
+            <span class="inline-block mt-1.5 bg-amber-400/10 text-amber-400 border border-amber-400/20 text-[9px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded">Student Account</span>
           </div>
         </div>
-      </div>
 
-    </div>
-  </main>
+        <div class="grid grid-cols-3 gap-3 bg-slate-900/50 border border-slate-800/60 p-4 rounded-2xl text-center">
+          <div>
+            <span id="profile-posts-count" class="block text-lg font-black text-white">0</span>
+            <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Posts</span>
+          </div>
+          <div>
+            <span id="profile-followers-count" class="block text-lg font-black text-white">0</span>
+            <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Followers</span>
+          </div>
+          <div>
+            <span id="profile-following-count" class="block text-lg font-black text-white">0</span>
+            <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Following</span>
+          </div>
+        </div>
+
+        <div class="flex border-b border-slate-900 text-sm">
+          <button onclick="window.switchProfileTab('posts', this)" class="profile-subtab-btn flex-1 py-3 text-center text-amber-400 font-bold border-b-2 border-amber-400 uppercase tracking-wider text-xs focus:outline-none">My Gigs & Posts</button>
+          <button onclick="window.switchProfileTab('settings', this)" class="profile-subtab-btn flex-1 py-3 text-center text-slate-500 font-bold border-b-2 border-transparent uppercase tracking-wider text-xs focus:outline-none hover:text-slate-300">Campus Settings</button>
+        </div>
+
+        <div class="profile-tab-contents">
+          <div id="profile-subview-posts" class="profile-subview">
+            <div id="profile-grid" class="grid grid-cols-3 gap-2"></div>
+          </div>
+
+          <div id="profile-subview-settings" class="profile-subview hidden space-y-4 bg-slate-900 p-5 rounded-3xl border border-slate-800/60">
+            <div class="border-b border-slate-800 pb-2">
+              <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
+                <i class="fas fa-map-marker-alt text-amber-400"></i> Local Campus Selection
+              </h3>
+            </div>
+            <div class="space-y-3">
+              <div>
+                <label for="profileRegion" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Region</label>
+                <select id="profileRegion" name="profileRegion" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
+              </div>
+              <div>
+                <label for="profileInstitution" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Institution</label>
+                <select id="profileInstitution" name="profileInstitution" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
+              </div>
+              <button id="saveLocationBtn" class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 mt-2 shadow-lg shadow-amber-400/10">
+                Save Selection Changes
+              </button>
+            </div>
+            <div class="pt-2 border-t border-slate-800">
+              <button onclick="window.signOutUser()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
+                <i class="fas fa-sign-out-alt mr-2"></i>Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div></div></main>
 
   <div class="bottom-nav-container">
     <nav class="bottom-nav">
-
       <button id="nav-btn-feed" onclick="window.navigateTo('feed', this)">
         <i class="fas fa-home"></i>
         <span>Home</span>
       </button>
-
       <button id="nav-btn-explore" onclick="window.navigateTo('explore', this)">
         <i class="fas fa-search"></i>
         <span>Explore</span>
       </button>
-
       <button onclick="window.togglePostModal()" class="nav-fab-btn">
         <i class="fas fa-plus"></i>
       </button>
-
       <button id="nav-btn-dms" onclick="window.navigateTo('dms', this)">
         <i class="fas fa-envelope"></i>
         <span>DMs</span>
       </button>
-
       <button id="auth-profile-nav" onclick="window.navigateTo('profile', this)">
         <i class="fas fa-sign-in-alt"></i>
         <span>Sign In</span>
       </button>
-
     </nav>
   </div>
 
-  <!-- POST MODAL -->
   <div id="post-modal" class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-4">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl">
       <div class="flex justify-between items-center">
@@ -524,7 +531,6 @@
     </div>
   </div>
 
-  <!-- DETAIL MODAL -->
   <div id="detail-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 overflow-y-auto">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden relative my-auto shadow-2xl">
       <button onclick="window.closeDetailModal()" class="absolute top-4 right-4 z-50 bg-black/60 text-white w-8 h-8 rounded-full flex items-center justify-center hover:bg-black/80 transition focus:outline-none">
@@ -534,7 +540,6 @@
     </div>
   </div>
 
-  <!-- AVATAR MODAL -->
   <div id="avatar-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl modal-inner">
       <div class="flex justify-between items-center">
@@ -560,7 +565,6 @@
     </div>
   </div>
 
-  <!-- ── LOGIN MODAL — Google + Email/Password ── -->
   <div id="login-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
       <div class="flex justify-between items-center">
@@ -569,72 +573,47 @@
           <i class="fas fa-times"></i>
         </button>
       </div>
-
       <div class="text-center py-2 space-y-1">
         <div class="text-3xl">🔐</div>
         <p class="text-slate-300 text-xs">Sign in to create listings, message vendors, and personalise your feed.</p>
       </div>
-
-      <!-- Google Sign-In -->
       <button onclick="window.login()" class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md">
         <i class="fab fa-google text-base text-red-500"></i>
         Continue with Google
       </button>
-
-      <!-- Divider -->
       <div class="login-divider">or sign in with email</div>
-
-      <!-- Email + Password fields -->
-      <div class="space-y-3">
+      
+      <form onsubmit="event.preventDefault(); window.loginWithEmail();" class="space-y-3">
         <div>
           <label for="login-email" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Email Address</label>
           <div class="relative">
             <i class="fas fa-envelope absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
-            <input
-              type="email"
-              id="login-email"
-              name="login-email"
-              placeholder="student@university.edu.gh"
-              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
-            >
+            <input type="email" id="login-email" name="login-email" placeholder="student@university.edu.gh"
+              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium">
           </div>
         </div>
         <div>
           <label for="login-password" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Password</label>
           <div class="relative">
             <i class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
-            <input
-              type="password"
-              id="login-password"
-              name="login-password"
-              placeholder="••••••••"
-              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-10 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
-            >
-            <button
-              type="button"
-              onclick="window.togglePasswordVisibility()"
-              class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs"
-              aria-label="Toggle password visibility">
+            <input type="password" id="login-password" name="login-password" placeholder="••••••••"
+              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-10 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium">
+            <button type="button" onclick="window.togglePasswordVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs" aria-label="Toggle password visibility">
               <i id="pw-eye-icon" class="fas fa-eye"></i>
             </button>
           </div>
         </div>
-
-        <button
-          onclick="window.loginWithEmail()"
-          class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20">
+        <button type="submit" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20">
           Sign In
         </button>
-      </div>
+      </form>
 
       <p class="text-center text-[10px] text-slate-500">
-        No account?
-        <button onclick="window.showSignupView()" class="text-amber-400 font-bold hover:underline">Create one free</button>
+        No account? <button onclick="window.showSignupView()" class="text-amber-400 font-bold hover:underline">Create one free</button>
       </p>
     </div>
   </div>
 
-  <!-- ── SIGNUP VIEW (inside login modal swap) ── -->
   <div id="signup-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
       <div class="flex justify-between items-center">
@@ -643,15 +622,13 @@
           <i class="fas fa-times"></i>
         </button>
       </div>
-
       <button onclick="window.login()" class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md">
         <i class="fab fa-google text-base text-red-500"></i>
         Sign up with Google
       </button>
-
       <div class="login-divider">or create with email</div>
-
-      <div class="space-y-3">
+      
+      <form onsubmit="event.preventDefault(); window.signUpWithEmail();" class="space-y-3">
         <div>
           <label for="signup-name" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Full Name</label>
           <div class="relative">
@@ -676,40 +653,28 @@
               class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium">
           </div>
         </div>
-        <button onclick="window.signUpWithEmail()"
-          class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20">
+        <button type="submit" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20">
           Create Account
         </button>
-      </div>
+      </form>
 
       <p class="text-center text-[10px] text-slate-500">
-        Already have an account?
-        <button onclick="window.showLoginView()" class="text-amber-400 font-bold hover:underline">Sign in</button>
+        Already have an account? <button onclick="window.showLoginView()" class="text-amber-400 font-bold hover:underline">Sign in</button>
       </p>
     </div>
   </div>
 
   <script>
-    const _NAV_VIEWS = ['feed-container', 'explore-container', 'dms-container', 'profile-container'];
+    const _NAV_VIEWS = ['feed-container','explore-container','dms-container','profile-container'];
 
     function _setActiveNav(activeBtn) {
-      document.querySelectorAll('.bottom-nav button').forEach(btn => {
-        btn.classList.remove('nav-active');
-      });
+      document.querySelectorAll('.bottom-nav button').forEach(btn => btn.classList.remove('nav-active'));
       if (activeBtn) activeBtn.classList.add('nav-active');
     }
 
-    window.navigateTo = function(section, btn) {
-      _NAV_VIEWS.forEach(id => document.getElementById(id)?.classList.add('hidden'));
-      const targetId = section === 'feed' ? 'feed-container' : section + '-container';
-      document.getElementById(targetId)?.classList.remove('hidden');
-      _setActiveNav(btn);
-    };
-
-    // ── Password toggle ──
     window.togglePasswordVisibility = function() {
       const pwInput = document.getElementById('login-password');
-      const icon = document.getElementById('pw-eye-icon');
+      const icon    = document.getElementById('pw-eye-icon');
       if (!pwInput) return;
       if (pwInput.type === 'password') {
         pwInput.type = 'text';
@@ -720,37 +685,30 @@
       }
     };
 
-    // ── Email sign-in (wires to Supabase auth in app.js) ──
     window.loginWithEmail = async function() {
       const email    = document.getElementById('login-email')?.value?.trim();
       const password = document.getElementById('login-password')?.value;
       if (!email || !password) { alert('Please enter your email and password.'); return; }
-
-      // Forward to app.js supabase handler if available
       if (typeof window.signInWithEmailPassword === 'function') {
         await window.signInWithEmailPassword(email, password);
       } else {
-        // Fallback hint — wire up in auth.service.js
-        alert('Email sign-in not yet wired. Add signInWithEmailPassword() to auth.service.js.');
+        alert('Email sign-in not yet wired.');
       }
     };
 
-    // ── Email sign-up ──
     window.signUpWithEmail = async function() {
       const name     = document.getElementById('signup-name')?.value?.trim();
       const email    = document.getElementById('signup-email')?.value?.trim();
       const password = document.getElementById('signup-password')?.value;
       if (!name || !email || !password) { alert('Please fill in all fields.'); return; }
       if (password.length < 8) { alert('Password must be at least 8 characters.'); return; }
-
       if (typeof window.registerWithEmail === 'function') {
         await window.registerWithEmail(name, email, password);
       } else {
-        alert('Email sign-up not yet wired. Add registerWithEmail() to auth.service.js.');
+        alert('Email sign-up not yet wired.');
       }
     };
 
-    // ── Modal swap helpers ──
     window.showSignupView = function() {
       document.getElementById('login-modal')?.classList.add('hidden');
       document.getElementById('signup-modal')?.classList.remove('hidden');
@@ -767,62 +725,30 @@
       _setActiveNav(document.getElementById('nav-btn-feed'));
     });
 
-    /**
-     * ── PROXY STUBS ──────────────────────────────────────────────────────────
-     * app.js is a type="module" and loads asynchronously.
-     * Inline onclick attributes fire before the module finishes, so we define
-     * safe stubs here (plain script, runs synchronously) that forward to the
-     * real implementations once they exist.
-     * Any call that arrives before the module is ready is queued and replayed.
-     */
+    /* ── PROXY STUBS ── */
     (function() {
       const _queue = {};
 
       function makeStub(name) {
         _queue[name] = [];
         window[name] = function() {
-          // If the real function has already been set by the module, call it now
-          if (window['_real_' + name]) {
-            return window['_real_' + name].apply(this, arguments);
-          }
-          // Otherwise queue the call for later
+          if (window['_real_' + name]) return window['_real_' + name].apply(this, arguments);
           _queue[name].push(arguments);
         };
       }
 
-      // All functions referenced by inline onclick in the HTML
       [
-        'filterFeed',
-        'switchProfileTab',
-        'togglePostModal',
-        'navigateTo',
-        'openDetail',
-        'closeDetailModal',
-        'openLoginModal',
-        'closeLoginModal',
-        'likePost',
-        'sharePost',
-        'downloadMedia',
-        'contactSeller',
-        'toggleComments',
-        'postComment',
-        'toggleFollow',
-        'handlePostSubmission',
-        'handleAvatarUpload',
-        'login',
-        'logout',
-        'runSearch',
-        'saveOnboarding',
-        'onboardRegionChange',
-        'initProfileSelects',
-        'signOutUser',
+        'filterFeed','switchProfileTab','togglePostModal','navigateTo',
+        'openDetail','closeDetailModal','openLoginModal','closeLoginModal',
+        'likePost','sharePost','downloadMedia','contactSeller','toggleComments',
+        'postComment','toggleFollow','handlePostSubmission','handleAvatarUpload',
+        'login','logout','runSearch','saveOnboarding','onboardRegionChange',
+        'initProfileSelects','signOutUser',
       ].forEach(makeStub);
 
-      // After module loads, swap stubs for real functions and drain queues
       window._registerModuleFunction = function(name, fn) {
         window['_real_' + name] = fn;
-        window[name] = fn; // replace stub with real function
-        // replay any queued calls
+        window[name] = fn;
         if (_queue[name] && _queue[name].length) {
           _queue[name].forEach(args => fn.apply(window, args));
           _queue[name] = [];
@@ -834,8 +760,6 @@
   <script type="module" src="./app.js"></script>
 
   <script type="module">
-    // Once app.js module has run, register all window.* functions it set
-    // so the proxy stubs forward correctly and queued calls are drained.
     const _moduleExports = [
       'filterFeed','switchProfileTab','togglePostModal','navigateTo',
       'openDetail','closeDetailModal','openLoginModal','closeLoginModal',
@@ -851,8 +775,9 @@
       }
     });
 
-    // Ensure correct nav highlight after module boots
-    _setActiveNav(document.getElementById('nav-btn-feed'));
+    if (typeof _setActiveNav === 'function') {
+      _setActiveNav(document.getElementById('nav-btn-feed'));
+    }
   </script>
 
 </body>

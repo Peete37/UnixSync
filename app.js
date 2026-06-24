@@ -216,7 +216,8 @@ window.saveOnboarding = async function () {
             .upsert({
                 id: currentUserData.id,
                 name: metadata.full_name || 'Student',
-                avatar_url: metadata.avatar_url || '',
+                avatar: metadata.avatar_url || '',
+                email: currentUserData.email || '',
                 institution,
                 region,
                 created_at: new Date().toISOString()
@@ -315,8 +316,9 @@ async function subscribeFeed(queryFactory = null) {
         console.error("Feed poll error:", err);
     }
 
+    // FIX: .subscribe() is strictly called at the very end of the chain configuration block
     currentFeedChan = supabase
-        .channel("posts-live-feed")
+        .channel(`posts-live-feed-${Date.now()}`)
         .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, async () => {
             try {
                 const data = await fetchFeedSnapshot(queryFactory);
@@ -593,7 +595,7 @@ window.handleAvatarUpload = async function (inputEl) {
 
         const { error: dbErr } = await supabase
             .from('profiles')
-            .update({ avatar_url: publicUrl })
+            .update({ avatar: publicUrl })
             .eq('id', currentUserData.id);
 
         if (dbErr) throw dbErr;
@@ -1003,15 +1005,14 @@ window.filterFeed = function (type, clickedBtn = null) {
     const queryFactory = () => {
         let q = supabase
             .from("posts")
-            .select("*")
-            .order("created_at", { ascending: false })
-            .limit(FEED_LIMIT);
+            .select("*");
 
         if (type !== 'all') {
             q = q.eq("type", type);
         }
 
-        return q;
+        // FIX: Applied .order() and .limit() safely directly to the mutated block chain
+        return q.order("created_at", { ascending: false }).limit(FEED_LIMIT);
     };
 
     subscribeFeed(queryFactory);
@@ -1177,27 +1178,30 @@ async function loadProfileStats() {
     if (!currentUserData) return;
 
     try {
+        // Use "" or "*" alongside count configurations to keep PostgREST happy
         const [followersRes, followingRes, postsRes] = await Promise.all([
             supabase
                 .from("follows")
-                .select("id", { count: "exact", head: true })
+                .select("", { count: "exact", head: true })
                 .eq("following_id", currentUserData.id),
 
             supabase
                 .from("follows")
-                .select("id", { count: "exact", head: true })
+                .select("", { count: "exact", head: true })
                 .eq("follower_id", currentUserData.id),
 
             supabase
                 .from("posts")
-                .select("id, title, media_url, media_type", { count: "exact" })
+                .select("id, title, media_url, media_type")
                 .eq("user_id", currentUserData.id)
                 .order("created_at", { ascending: false })
         ]);
 
+        const postsCount = postsRes.data ? postsRes.data.length : 0;
+
         setEl('profile-followers-count', followersRes.count || 0);
         setEl('profile-following-count', followingRes.count || 0);
-        setEl('profile-posts-count', postsRes.count ?? postsRes.data?.length ?? 0);
+        setEl('profile-posts-count', postsCount);
 
         const grid = document.getElementById('profile-grid');
         if (grid) {
@@ -1305,16 +1309,14 @@ if (activeAuthChange) {
             const nameEl   = document.getElementById('profile-ui-name');
 
             try {
-                // FIX: select avatar_url not avatar
                 const { data: savedUserRow } = await supabase
                     .from("profiles")
-                    .select("avatar_url, institution, region")
+                    .select("avatar, institution, region")
                     .eq("id", user.id)
                     .maybeSingle();
 
-                // FIX: read savedUserRow.avatar_url not savedUserRow.avatar
                 const savedAvatar =
-                    savedUserRow?.avatar_url ||
+                    savedUserRow?.avatar ||
                     metadata.avatar_url ||
                     `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
 
@@ -1386,7 +1388,6 @@ if (activeAuthChange) {
 
             subscribeFeed();
 
-            // Show login modal on first load and on sign-out
             if (typeof window.openLoginModal === 'function') {
                 window.openLoginModal();
             }
