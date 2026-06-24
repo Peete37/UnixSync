@@ -217,7 +217,6 @@ window.saveOnboarding = async function () {
                 id: currentUserData.id,
                 name: metadata.full_name || 'Student',
                 avatar_url: metadata.avatar_url || '',
-                email: currentUserData.email || '',
                 institution,
                 region,
                 created_at: new Date().toISOString()
@@ -1306,14 +1305,16 @@ if (activeAuthChange) {
             const nameEl   = document.getElementById('profile-ui-name');
 
             try {
+                // FIX: select avatar_url not avatar
                 const { data: savedUserRow } = await supabase
                     .from("profiles")
-                    .select("avatar, institution, region")
+                    .select("avatar_url, institution, region")
                     .eq("id", user.id)
                     .maybeSingle();
 
+                // FIX: read savedUserRow.avatar_url not savedUserRow.avatar
                 const savedAvatar =
-                    savedUserRow?.avatar ||
+                    savedUserRow?.avatar_url ||
                     metadata.avatar_url ||
                     `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
 

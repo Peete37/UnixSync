@@ -91,7 +91,7 @@ export const signOutUser = async () => {
 export async function getUserProfile(uid) {
   try {
     const { data, error } = await supabase
-      .from('users')
+      .from('profiles')
       .select('*')
       .eq('id', uid)
       .single(); // Gets a clean single object back instead of an array
