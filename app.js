@@ -583,7 +583,7 @@ window.handleAvatarUpload = async function (inputEl) {
 
     try {
         const ext = file.name.split('.').pop();
-        const storagePath = `avatars/${currentUserData.id}.${ext}`;
+        const storagePath = `${currentUserData.id}/avatar.${ext}`;
 
         const { error: uploadErr } = await supabase.storage
             .from('avatars')
@@ -593,14 +593,16 @@ window.handleAvatarUpload = async function (inputEl) {
 
         const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(storagePath);
 
+        const dynamicUrl = `${publicUrl}?t=${Date.now()}`;
+
         const { error: dbErr } = await supabase
             .from('profiles')
-            .update({ avatar: publicUrl })
+            .update({ avatar: dynamicUrl })
             .eq('id', currentUserData.id);
 
         if (dbErr) throw dbErr;
 
-        await supabase.auth.updateUser({ data: { avatar_url: publicUrl } });
+        await supabase.auth.updateUser({ data: { avatar_url: dynamicUrl } });
 
         if (!currentUserData.user_metadata) currentUserData.user_metadata = {};
         currentUserData.user_metadata.avatar_url = publicUrl;
