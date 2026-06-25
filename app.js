@@ -316,7 +316,6 @@ async function subscribeFeed(queryFactory = null) {
         console.error("Feed poll error:", err);
     }
 
-    // FIX: .subscribe() is strictly called at the very end of the chain configuration block
     currentFeedChan = supabase
         .channel(`posts-live-feed-${Date.now()}`)
         .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, async () => {
@@ -622,6 +621,102 @@ window.handleAvatarUpload = async function (inputEl) {
         inputEl.value = '';
     }
 };
+
+// ─── 11b. AVATAR LONG-PRESS MODAL ────────────────────────────────────────────
+
+let _avatarPressTimer = null;
+
+function _initAvatarLongPress() {
+    const profileAvatar  = document.getElementById('profile-ui-avatar');
+    const avatarModal    = document.getElementById('avatarModal');
+    const modalAvatarImg = document.getElementById('modalAvatarImg');
+    const closeAvatarBtn = document.getElementById('closeAvatarBtn');
+    const copyImageBtn   = document.getElementById('copyImageBtn');
+    const downloadImageBtn = document.getElementById('downloadImageBtn');
+
+    if (!profileAvatar || !avatarModal || !modalAvatarImg) {
+        // DOM not ready yet — called again after auth populates the avatar
+        return;
+    }
+
+    function openAvatarModal(src) {
+        modalAvatarImg.src = src;
+        avatarModal.classList.remove('hidden');
+    }
+
+    function startPress() {
+        clearTimeout(_avatarPressTimer);
+        _avatarPressTimer = setTimeout(() => {
+            openAvatarModal(profileAvatar.src);
+        }, 600);
+    }
+
+    function cancelPress() {
+        clearTimeout(_avatarPressTimer);
+    }
+
+    // Touch (mobile)
+    profileAvatar.addEventListener('touchstart',  startPress,  { passive: true });
+    profileAvatar.addEventListener('touchend',    cancelPress);
+    profileAvatar.addEventListener('touchmove',   cancelPress);
+
+    // Mouse (desktop)
+    profileAvatar.addEventListener('mousedown',   startPress);
+    profileAvatar.addEventListener('mouseup',     cancelPress);
+    profileAvatar.addEventListener('mouseleave',  cancelPress);
+
+    // Close button
+    closeAvatarBtn?.addEventListener('click', () => {
+        avatarModal.classList.add('hidden');
+    });
+
+    // Close on backdrop tap
+    avatarModal.addEventListener('click', (e) => {
+        if (e.target === avatarModal) avatarModal.classList.add('hidden');
+    });
+
+    // Copy image to clipboard
+    copyImageBtn?.addEventListener('click', async () => {
+        try {
+            const response = await fetch(modalAvatarImg.src);
+            const blob = await response.blob();
+            await navigator.clipboard.write([
+                new ClipboardItem({ [blob.type]: blob })
+            ]);
+            showToast('✓ Image copied to clipboard!');
+        } catch (err) {
+            console.error('Copy failed:', err);
+            showToast('Failed to copy image.');
+        }
+    });
+
+    // Download image
+    downloadImageBtn?.addEventListener('click', async () => {
+        try {
+            const response = await fetch(modalAvatarImg.src);
+            const blob = await response.blob();
+            const blobUrl = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = blobUrl;
+            link.download = `avatar-${Date.now()}.jpg`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(blobUrl);
+            showToast('✓ Download started!');
+        } catch (err) {
+            console.error('Download failed:', err);
+            showToast('Failed to download image.');
+        }
+    });
+}
+
+// Run once DOM is ready (handles cases where script loads before full parse)
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _initAvatarLongPress);
+} else {
+    _initAvatarLongPress();
+}
 
 // ─── 12. CARD RENDERERS ───────────────────────────────────────────────────────
 
@@ -1013,7 +1108,6 @@ window.filterFeed = function (type, clickedBtn = null) {
             q = q.eq("type", type);
         }
 
-        // FIX: Applied .order() and .limit() safely directly to the mutated block chain
         return q.order("created_at", { ascending: false }).limit(FEED_LIMIT);
     };
 
@@ -1180,7 +1274,6 @@ async function loadProfileStats() {
     if (!currentUserData) return;
 
     try {
-        // Use "" or "*" alongside count configurations to keep PostgREST happy
         const [followersRes, followingRes, postsRes] = await Promise.all([
             supabase
                 .from("follows")
@@ -1282,6 +1375,12 @@ window.openDM = function (targetUserId, targetName) {
 
 if (activeAuthChange) {
     activeAuthChange(async (user) => {
+        // BUG FIX: If offline, freeze the auth UI state. Do not trigger logout routines.
+        if (!navigator.onLine) {
+            console.warn("[Auth Observer] Network is offline. Ignoring auth state evaluation.");
+            return;
+        }
+
         currentUserData = user;
         const authProfileNav = document.getElementById('auth-profile-nav');
 
@@ -1359,6 +1458,9 @@ if (activeAuthChange) {
             subscribeFeed();
             try { loadProfileStats(); } catch (_) {}
 
+            // Re-init long-press now that avatar src is set
+            _initAvatarLongPress();
+
         } else {
             unsubscribeFeed();
 
@@ -1390,7 +1492,8 @@ if (activeAuthChange) {
 
             subscribeFeed();
 
-            if (typeof window.openLoginModal === 'function') {
+            // BUG FIX: Only throw login window automatically if we are confirmed online
+            if (typeof window.openLoginModal === 'function' && navigator.onLine) {
                 window.openLoginModal();
             }
         }
@@ -1438,5 +1541,35 @@ document.getElementById('posts-feed')?.addEventListener('click', (event) => {
         if (typeof window.navigateTo === 'function') {
             window.navigateTo('profile');
         }
+    }
+});
+
+// ─── 24. NATIVE INTERNET CONNECTIVITY DETECTOR ────────────────────────────────
+
+window.addEventListener('offline', () => {
+    showToast("⚠️ Connection lost. No Internet.");
+    
+    // Optional: Gray out submit actions to prevent database runtime errors while offline
+    const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
+    if (submitBtn) {
+        submitBtn.dataset.originalText = submitBtn.textContent;
+        submitBtn.textContent = 'Offline (Waiting for Connection)';
+        submitBtn.disabled = true;
+    }
+});
+
+window.addEventListener('online', () => {
+    showToast("⚡ Back online! Syncing data...");
+    
+    // Restore post creation buttons if they were blocked
+    const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
+    if (submitBtn && submitBtn.dataset.originalText) {
+        submitBtn.textContent = submitBtn.dataset.originalText;
+        submitBtn.disabled = false;
+    }
+    
+    // Silently sync feed details now that network connection is established
+    if (typeof subscribeFeed === 'function') {
+        subscribeFeed();
     }
 });

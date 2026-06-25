@@ -780,5 +780,29 @@
     }
   </script>
 
+<div id="avatarModal" class="hidden fixed inset-0 z-[300] flex items-end justify-center bg-black/70 backdrop-blur-sm p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-3xl w-full max-w-sm overflow-hidden mb-4 shadow-2xl">
+        
+        <img id="modalAvatarImg" src="" alt="Profile Avatar"
+             class="w-full aspect-square object-cover no-browser-menu select-none"
+             style="-webkit-touch-callout: none; user-select: none;">
+             
+        <div class="flex gap-3 p-4">
+            <button id="copyImageBtn"
+                class="flex-1 flex items-center justify-center gap-2 bg-slate-800 border border-slate-700 text-white font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
+                <i class="far fa-copy"></i> Copy
+            </button>
+            <button id="downloadImageBtn"
+                class="flex-1 flex items-center justify-center gap-2 bg-amber-400 text-black font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
+                <i class="fas fa-download"></i> Save
+            </button>
+            <button id="closeAvatarBtn"
+                class="px-4 bg-slate-800 border border-slate-700 text-slate-400 font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
+                ✕
+            </button>
+        </div>
+    </div>
+</div>
+
 </body>
 </html>

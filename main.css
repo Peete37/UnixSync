@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* ─── BASE CORE RESET ────────────────────────────────────────────────────────── */
+/* ─── BASE CORE RESET ────────────────────────────────────────────────────────────────── */
 html,
 body {
   margin: 0;
@@ -19,7 +19,7 @@ body {
   min-height: 100dvh;
 }
 
-/* ─── CUSTOM TAILWIND UTILITIES (TikTok Sleek Scrollbar) ────────────────────── */
+/* ─── CUSTOM TAILWIND UTILITIES (TikTok Sleek Scrollbar) ────────────────────────────── */
 @utility tiktok-scrollbar {
   /* Firefox configuration */
   scrollbar-width: thin;
@@ -46,7 +46,7 @@ body {
   }
 }
 
-/* ─── GLASSMORPHISM INTERFACE BLOCKS ─────────────────────────────────────────── */
+/* ─── GLASSMORPHISM INTERFACE BLOCKS ────────────────────────────────────────────────── */
 
 /* Sticky Top Category Selector Tab-Bar Overlay */
 .tab-bar {
@@ -92,10 +92,19 @@ body {
   padding-bottom: 80px; 
 }
 
-/* ─── FEEDBACK TRANSLATIONS ──────────────────────────────────────────────────── */
+/* ─── FEEDBACK TRANSLATIONS ────────────────────────────────────────────────────────── */
 
 /* Soft scaling animations for action clicks */
 .active-press:active {
   transform: scale(0.96);
   transition: transform 0.1s ease;
+}
+
+/* ─── BROWSER CONTEXT MENU SUPPRESSION ──────────────────────────────────────────────── */
+
+/* Prevents the default browser popup magnifier/sheet when long-pressing images */
+.no-browser-menu {
+  -webkit-touch-callout: none !important; /* Disables native callouts on iOS Safari/Chrome */
+  -webkit-user-select: none !important;   /* Disables copy/highlight selections */
+  user-select: none !important;
 }
