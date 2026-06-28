@@ -691,6 +691,10 @@ if (document.readyState === 'loading') {
 
 // ─── 12. CARD RENDERERS ───────────────────────────────────────────────────────
 window.likePost = async function (postId, btn) {
+    if (!currentUserData) {
+        showToast("Please sign in to like posts.");
+        return;
+    }
     if (!postId || postId === 'undefined') {
         showToast("Error: Missing Post Identifier");
         return;
@@ -701,6 +705,7 @@ window.likePost = async function (postId, btn) {
     const icon    = btn.querySelector('i');
     let currentCount = parseInt(countEl?.textContent || 0);
 
+    // 1. Pessimistic or Optimistic UI updates
     if (liked) {
         likedPostIds.delete(postId);
         icon.className = 'far fa-heart text-slate-300';
@@ -716,12 +721,27 @@ window.likePost = async function (postId, btn) {
     if (countEl) countEl.textContent = currentCount;
     localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
     
+    // 2. Execute Backend sync targeting the junction table
     try {
-        await supabase
-            .from("posts")
-            .update({ likes_count: currentCount })
-            .eq("id", postId);
-    } catch(e) { console.warn("Like sync delayed:", e); }
+        if (liked) {
+            // Remove row from likes table using your DELETE policy
+            await supabase
+                .from("likes")
+                .delete()
+                .eq("post_id", postId)
+                .eq("user_id", currentUserData.id);
+        } else {
+            // Add row to likes table using your INSERT policy
+            await supabase
+                .from("likes")
+                .insert({
+                    post_id: postId,
+                    user_id: currentUserData.id
+                });
+        }
+    } catch(e) { 
+        console.warn("Like sync delayed or rejected by RLS policies:", e); 
+    }
 };
 
 window.sharePost = function (postId, title) {

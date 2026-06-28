@@ -325,7 +325,6 @@
 
 <body class="bg-[#020617] text-slate-100 min-h-screen antialiased">
 
-  <!-- Root Media Input Layer for Multi-File Selection -->
   <input type="file" id="mediaInput" class="hidden" accept="image/*,video/*" multiple />
 
   <div class="site-header">
@@ -348,11 +347,12 @@
   <main class="px-4 pt-4 max-w-md mx-auto">
 
     <div id="feed-container" class="pb-24">
-      <div id="feed-tabs" class="flex border-b border-slate-900 text-xs font-bold tracking-wider uppercase mb-4">
+      <div id="feed-tabs" class="flex border-b border-slate-900 text-xs font-bold tracking-wider uppercase mb-4 overflow-x-auto">
         <button onclick="window.filterFeed('all', this)" class="feed-tab-btn flex-1 pb-3 text-center text-amber-400 border-b-2 border-amber-400">All</button>
         <button onclick="window.filterFeed('following', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Following</button>
         <button onclick="window.filterFeed('product', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Products</button>
         <button onclick="window.filterFeed('skill', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Services</button>
+        <button onclick="window.filterFeed('saves', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Saves</button>
       </div>
       <div id="posts-feed"></div>
     </div>
