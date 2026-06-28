@@ -252,6 +252,35 @@ async function subscribeFeed(queryFactory = null) {
     try {
         const data = await fetchFeedSnapshot(queryFactory);
         allCachedPosts = data.map(item => ({ id: item.id, data: item }));
+        
+        // Sync local bookmark view mapping if authenticated
+        if (currentUserData) {
+            const { data: remoteSaves } = await supabase
+                .from("saves")
+                .select("post_id")
+                .eq("user_id", currentUserData.id);
+            
+            if (remoteSaves) {
+                const savedIds = remoteSaves.map(s => s.post_id);
+                userCartList = userCartList.filter(item => savedIds.includes(item.id));
+                allCachedPosts.forEach(({ id, data: d }) => {
+                    if (savedIds.includes(id) && !userCartList.some(c => c.id === id)) {
+                        userCartList.push({
+                            id,
+                            title: d.title,
+                            price: d.price,
+                            media_url: d.media_url || '',
+                            media_type: d.media_type || 'image',
+                            institution: d.institution || '',
+                            type: d.type || 'product',
+                            user_name: d.user_name || 'Anonymous'
+                        });
+                    }
+                });
+                localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
+            }
+        }
+
         renderFeedFromCache();
     } catch (err) {
         console.error("Feed poll error:", err);
@@ -705,7 +734,7 @@ window.likePost = async function (postId, btn) {
     const icon    = btn.querySelector('i');
     let currentCount = parseInt(countEl?.textContent || 0);
 
-    // 1. Pessimistic or Optimistic UI updates
+    // 1. Optimistic UI update
     if (liked) {
         likedPostIds.delete(postId);
         icon.className = 'far fa-heart text-slate-300';
@@ -721,17 +750,15 @@ window.likePost = async function (postId, btn) {
     if (countEl) countEl.textContent = currentCount;
     localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
     
-    // 2. Execute Backend sync targeting the junction table
+    // 2. Execute Backend sync
     try {
         if (liked) {
-            // Remove row from likes table using your DELETE policy
             await supabase
                 .from("likes")
                 .delete()
                 .eq("post_id", postId)
                 .eq("user_id", currentUserData.id);
         } else {
-            // Add row to likes table using your INSERT policy
             await supabase
                 .from("likes")
                 .insert({
@@ -740,7 +767,7 @@ window.likePost = async function (postId, btn) {
                 });
         }
     } catch(e) { 
-        console.warn("Like sync delayed or rejected by RLS policies:", e); 
+        console.warn("Like sync delayed or rejected:", e); 
     }
 };
 
@@ -1001,14 +1028,16 @@ function renderFeedCard(id, d) {
     </div>`;
 }
 
-// ─── 12b. CHART / CART LIST LOGIC ────────────────────────────────────────────
-window.toggleCartItem = function (postId) {
+// ─── 12b. CHART / CART LIST LOGIC (NOW BACKEND POWERED!) ──────────────────────
+window.toggleCartItem = async function (postId) {
+    if (!currentUserData) {
+        showToast("Please sign in to save items.");
+        return;
+    }
+
     let postRecord = null;
     const found = allCachedPosts.find(p => p.id === postId || p.data?.id === postId);
-    
-    if (found) {
-        postRecord = found.data ? found.data : found;
-    }
+    if (found) postRecord = found.data ? found.data : found;
 
     if (!postRecord) {
         const cardEl = document.getElementById(`feed-card-${postId}`);
@@ -1028,9 +1057,10 @@ window.toggleCartItem = function (postId) {
     }
 
     const index = userCartList.findIndex(item => item.id === postId);
-    let isAdded = false;
+    const isRemoving = index > -1;
 
-    if (index > -1) {
+    // 1. Optimistic UI: Handle local mutations instantly
+    if (isRemoving) {
         userCartList.splice(index, 1);
         showToast("Removed from Chart List");
     } else {
@@ -1045,27 +1075,44 @@ window.toggleCartItem = function (postId) {
             user_name:   postRecord.user_name || 'Anonymous'
         });
         showToast("Added to Chart List! ✓");
-        isAdded = true;
     }
 
     localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
 
+    // Instantly update icons/buttons on current cards
     const feedIcon = document.getElementById(`feed-cart-icon-${postId}`)?.querySelector('i');
     if (feedIcon) {
-        feedIcon.className = isAdded ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
+        feedIcon.className = !isRemoving ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
     }
 
     const detailBtn = document.getElementById(`detail-cart-btn-${postId}`);
     if (detailBtn) {
         const labelText = detailBtn.querySelector('.cart-btn-label');
-        if (labelText) labelText.textContent = isAdded ? "✓ Added to Chart" : "Add to Chart List";
-        detailBtn.className = isAdded
+        if (labelText) labelText.textContent = !isRemoving ? "✓ Added to Chart" : "Add to Chart List";
+        detailBtn.className = !isRemoving
             ? "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-800 border border-slate-700 text-slate-400"
             : "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
     }
 
     if (!document.getElementById('cart-container')?.classList.contains('hidden')) {
         renderCartListView();
+    }
+
+    // 2. Background Sync with Supabase saves table
+    try {
+        if (isRemoving) {
+            await supabase
+                .from("saves")
+                .delete()
+                .eq("user_id", currentUserData.id)
+                .eq("post_id", postId);
+        } else {
+            await supabase
+                .from("saves")
+                .insert({ user_id: currentUserData.id, post_id: postId });
+        }
+    } catch(err) {
+        console.warn("Saves table background sync failed/delayed:", err);
     }
 };
 
@@ -1454,7 +1501,6 @@ window.handlePostSubmission = async function () {
 
             if (i === 0 && file.type.startsWith('video')) {
                 primaryMediaType = 'video';
-             primaryMediaType = 'video';
             }
         }
 

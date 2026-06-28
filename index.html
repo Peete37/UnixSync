@@ -272,7 +272,7 @@
     /* ── MODALS ── */
     #post-modal .modal-inner,
     #detail-modal .modal-inner,
-    #avatar-modal .modal-inner {
+    #avatarModal .modal-inner {
       background: #0f172a;
       border: 1px solid rgba(255,255,255,0.08);
       border-radius: 24px;
@@ -320,6 +320,8 @@
     main { padding-bottom: 100px; }
 
     .bottom-nav-hidden { transform: translateY(100%); }
+    
+    .no-browser-menu { -webkit-touch-callout: none; user-select: none; }
   </style>
 </head>
 
@@ -347,12 +349,11 @@
   <main class="px-4 pt-4 max-w-md mx-auto">
 
     <div id="feed-container" class="pb-24">
-      <div id="feed-tabs" class="flex border-b border-slate-900 text-xs font-bold tracking-wider uppercase mb-4 overflow-x-auto">
+      <div id="feed-tabs" class="flex border-b border-slate-900 text-xs font-bold tracking-wider uppercase mb-4">
         <button onclick="window.filterFeed('all', this)" class="feed-tab-btn flex-1 pb-3 text-center text-amber-400 border-b-2 border-amber-400">All</button>
         <button onclick="window.filterFeed('following', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Following</button>
         <button onclick="window.filterFeed('product', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Products</button>
         <button onclick="window.filterFeed('skill', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Services</button>
-        <button onclick="window.filterFeed('saves', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Saves</button>
       </div>
       <div id="posts-feed"></div>
     </div>
@@ -366,7 +367,6 @@
     </div>
 
     <div id="dms-container" class="hidden pb-24 space-y-4">
-
       <div id="dms-auth-gate" class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
         <p class="text-3xl">🔐</p>
         <p class="font-black text-white uppercase tracking-tight text-sm">Sign in to access DMs</p>
@@ -383,11 +383,9 @@
           <p class="text-slate-500 text-xs max-w-xs mx-auto">Connect directly with student freelancers or product vendors on your campus.</p>
         </div>
       </div>
-
     </div>
 
     <div id="profile-container" class="hidden pb-24 space-y-6">
-
       <div id="profile-auth-gate" class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
         <p class="text-3xl">👤</p>
         <p class="font-black text-white uppercase tracking-tight text-sm">Sign in to view your profile</p>
@@ -398,7 +396,6 @@
       </div>
 
       <div id="profile-content" class="hidden space-y-6">
-
         <div class="flex items-center gap-4 bg-slate-900 border border-slate-800/60 p-5 rounded-3xl">
           <div class="relative group cursor-pointer w-16 h-16 flex-shrink-0" onclick="document.getElementById('avatarFileInput').click()">
             <img id="profile-ui-avatar" src="https://ui-avatars.com/api/?name=User" class="w-16 h-16 rounded-full border-2 border-amber-400 object-cover bg-slate-800 transition group-hover:opacity-75" alt="Avatar">
@@ -466,8 +463,9 @@
             </div>
           </div>
         </div>
-
-      </div></div></main>
+      </div>
+    </div>
+  </main>
 
   <div class="bottom-nav-container">
     <nav class="bottom-nav">
@@ -479,7 +477,7 @@
         <i class="fas fa-search"></i>
         <span>Explore</span>
       </button>
-      <button onclick="window.togglePostModal()" class="nav-fab-btn">
+      <button onclick="window.togglePostModal()" class="nav-fab-btn" aria-label="Create post">
         <i class="fas fa-plus"></i>
       </button>
       <button id="nav-btn-dms" onclick="window.navigateTo('dms', this)">
@@ -494,10 +492,10 @@
   </div>
 
   <div id="post-modal" class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl">
+    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl modal-inner">
       <div class="flex justify-between items-center">
         <h2 class="text-white font-black text-base uppercase tracking-tight">Create Listing</h2>
-        <button onclick="window.togglePostModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm">
+        <button onclick="window.togglePostModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm" aria-label="Close modal">
           <i class="fas fa-times"></i>
         </button>
       </div>
@@ -537,34 +535,34 @@
   </div>
 
   <div id="detail-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 overflow-y-auto">
-    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden relative my-auto shadow-2xl">
-      <button onclick="window.closeDetailModal()" class="absolute top-4 right-4 z-50 bg-black/60 text-white w-8 h-8 rounded-full flex items-center justify-center hover:bg-black/80 transition focus:outline-none">
+    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden relative my-auto shadow-2xl modal-inner">
+      <button onclick="window.closeDetailModal()" class="absolute top-4 right-4 z-50 bg-black/60 text-white w-8 h-8 rounded-full flex items-center justify-center hover:bg-black/80 transition focus:outline-none" aria-label="Close detail viewport">
         <i class="fas fa-times text-xs"></i>
       </button>
       <div id="detail-content"></div>
     </div>
   </div>
 
-  <div id="avatar-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl modal-inner">
-      <div class="flex justify-between items-center">
-        <h2 class="text-white font-black text-base uppercase tracking-tight">Update Profile Avatar</h2>
-        <button onclick="document.getElementById('avatar-modal').classList.add('hidden')" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm">
-          <i class="fas fa-times"></i>
-        </button>
+  <div id="avatarModal" class="hidden fixed inset-0 z-[300] flex items-end justify-center bg-black/70 backdrop-blur-sm p-4">
+    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden mb-4 shadow-2xl modal-inner">
+      <div class="flex justify-between items-center p-4 pb-2">
+        <h2 class="text-white font-black text-sm uppercase tracking-tight">Profile Photo Viewport</h2>
+        <button id="closeAvatarBtn" class="w-7 h-7 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 text-xs hover:text-white transition" aria-label="Close avatar panel">✕</button>
       </div>
-      <div class="flex flex-col items-center justify-center py-4 space-y-4">
-        <div class="relative w-28 h-28">
-          <img id="avatar-modal-preview" src="https://ui-avatars.com/api/?name=User" class="w-28 h-28 rounded-full border-4 border-amber-400 object-cover bg-slate-800" alt="Preview">
-        </div>
-        <p class="text-slate-400 text-xs text-center px-4">Does this look good? Click below to save your new photo directly onto your student profile.</p>
-      </div>
-      <div class="grid grid-cols-2 gap-2">
-        <button onclick="document.getElementById('avatar-modal').classList.add('hidden')" class="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
-          Cancel
+
+      <img id="modalAvatarImg" src="" alt="Profile Avatar"
+           class="w-full aspect-square object-cover no-browser-menu select-none"
+           style="-webkit-touch-callout: none; user-select: none;">
+           
+      <div class="flex gap-3 p-4">
+        <button id="copyImageBtn" class="flex-1 flex items-center justify-center gap-2 bg-slate-800 border border-slate-700 text-white font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
+          <i class="far fa-copy"></i> Copy
         </button>
-        <button id="confirmAvatarBtn" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 shadow-lg shadow-amber-400/20">
-          Save Photo
+        <button id="downloadImageBtn" class="flex-1 flex items-center justify-center gap-2 bg-amber-400 text-black font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
+          <i class="fas fa-download"></i> Save
+        </button>
+        <button id="confirmAvatarBtn" class="flex-1 flex items-center justify-center gap-2 bg-slate-800 border border-slate-700 text-emerald-400 font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
+          <i class="fas fa-check"></i> Apply
         </button>
       </div>
     </div>
@@ -574,7 +572,7 @@
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
       <div class="flex justify-between items-center">
         <h2 class="text-white font-black text-base uppercase tracking-tight">Access CampusMarket</h2>
-        <button onclick="window.closeLoginModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm">
+        <button onclick="window.closeLoginModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm" aria-label="Close modal">
           <i class="fas fa-times"></i>
         </button>
       </div>
@@ -623,7 +621,7 @@
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
       <div class="flex justify-between items-center">
         <h2 class="text-white font-black text-base uppercase tracking-tight">Create Account</h2>
-        <button onclick="window.closeSignupModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm">
+        <button onclick="window.closeSignupModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm" aria-label="Close modal">
           <i class="fas fa-times"></i>
         </button>
       </div>
@@ -748,7 +746,7 @@
         'likePost','sharePost','downloadMedia','contactSeller','toggleComments',
         'postComment','toggleFollow','handlePostSubmission','handleAvatarUpload',
         'login','logout','runSearch','saveOnboarding','onboardRegionChange',
-        'initProfileSelects','signOutUser',
+        'initProfileSelects','signOutUser','toggleSavePost'
       ].forEach(makeStub);
 
       window._registerModuleFunction = function(name, fn) {
@@ -771,7 +769,7 @@
       'likePost','sharePost','downloadMedia','contactSeller','toggleComments',
       'postComment','toggleFollow','handlePostSubmission','handleAvatarUpload',
       'login','logout','runSearch','saveOnboarding','onboardRegionChange',
-      'initProfileSelects','signOutUser',
+      'initProfileSelects','signOutUser','toggleSavePost'
     ];
 
     _moduleExports.forEach(name => {
@@ -784,30 +782,6 @@
       _setActiveNav(document.getElementById('nav-btn-feed'));
     }
   </script>
-
-<div id="avatarModal" class="hidden fixed inset-0 z-[300] flex items-end justify-center bg-black/70 backdrop-blur-sm p-4">
-    <div class="bg-slate-900 border border-slate-700 rounded-3xl w-full max-w-sm overflow-hidden mb-4 shadow-2xl">
-        
-        <img id="modalAvatarImg" src="" alt="Profile Avatar"
-             class="w-full aspect-square object-cover no-browser-menu select-none"
-             style="-webkit-touch-callout: none; user-select: none;">
-             
-        <div class="flex gap-3 p-4">
-            <button id="copyImageBtn"
-                class="flex-1 flex items-center justify-center gap-2 bg-slate-800 border border-slate-700 text-white font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
-                <i class="far fa-copy"></i> Copy
-            </button>
-            <button id="downloadImageBtn"
-                class="flex-1 flex items-center justify-center gap-2 bg-amber-400 text-black font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
-                <i class="fas fa-download"></i> Save
-            </button>
-            <button id="closeAvatarBtn"
-                class="px-4 bg-slate-800 border border-slate-700 text-slate-400 font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
-                ✕
-            </button>
-        </div>
-    </div>
-</div>
 
 </body>
 </html>
