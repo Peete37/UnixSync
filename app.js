@@ -36,7 +36,7 @@ let currentCommentsChan = null;
 let allCachedPosts      = [];
 let isAuthInitialized   = false;
 
-// FIX #3 & #4: Persistent state maps that survive feed re-renders
+// Persistent state maps that survive feed re-renders
 const likedPostIds      = new Set(JSON.parse(localStorage.getItem('campus_market_likes') || '[]'));
 const openCommentIds    = new Set(); // tracks which comment sections are open
 
@@ -251,7 +251,6 @@ async function subscribeFeed(queryFactory = null) {
 
     try {
         const data = await fetchFeedSnapshot(queryFactory);
-        // FIX #2: Always normalise to { id, data } shape so toggleCartItem can find posts
         allCachedPosts = data.map(item => ({ id: item.id, data: item }));
         renderFeedFromCache();
     } catch (err) {
@@ -395,7 +394,6 @@ window.openDetail = async function (postId) {
         const isOwn       = viewer && d.user_id === viewer.id;
         const isFollowing = (!isOwn && viewer) ? await checkFollowing(d.user_id) : false;
 
-        // FIX #5: Parse JSON array of URLs for carousel display
         let mediaUrls = [];
         if (d.media_url) {
             if (d.media_url.startsWith('[')) {
@@ -405,7 +403,6 @@ window.openDetail = async function (postId) {
             }
         }
 
-        // Build swipeable carousel if multiple images, single view otherwise
         let mediaBlock = '';
         if (mediaUrls.length > 1) {
             const slides = mediaUrls.map((url, i) =>
@@ -482,7 +479,6 @@ window.openDetail = async function (postId) {
                 </div>
             </div>`;
 
-        // Carousel dot tracker
         if (mediaUrls.length > 1) {
             const carousel = document.getElementById('detail-carousel');
             const dots     = content.querySelectorAll('.carousel-dot');
@@ -517,6 +513,21 @@ window.closeLoginModal = function () {
 };
 
 // ─── 10b. EMAIL AUTH ──────────────────────────────────────────────────────────
+window.loginWithEmail = async function () {
+    const email = document.getElementById('login-email')?.value.trim();
+    const password = document.getElementById('login-password')?.value;
+    if (!email || !password) { showToast('Fill in credentials'); return; }
+    await window.signInWithEmailPassword(email, password);
+};
+
+window.signUpWithEmail = async function () {
+    const name = document.getElementById('signup-name')?.value.trim();
+    const email = document.getElementById('signup-email')?.value.trim();
+    const password = document.getElementById('signup-password')?.value;
+    if (!name || !email || !password) { showToast('Complete all fields'); return; }
+    await window.registerWithEmail(name, email, password);
+};
+
 window.signInWithEmailPassword = async function (email, password) {
     const btn = document.querySelector('#login-modal button[onclick="window.loginWithEmail()"]');
     try {
@@ -679,7 +690,6 @@ if (document.readyState === 'loading') {
 }
 
 // ─── 12. CARD RENDERERS ───────────────────────────────────────────────────────
-
 window.likePost = async function (postId, btn) {
     if (!postId || postId === 'undefined') {
         showToast("Error: Missing Post Identifier");
@@ -695,17 +705,22 @@ window.likePost = async function (postId, btn) {
         likedPostIds.delete(postId);
         icon.className = 'far fa-heart text-slate-300';
         btn.classList.remove('text-rose-500');
-        if (countEl) countEl.textContent = Math.max(0, currentCount - 1);
+        currentCount = Math.max(0, currentCount - 1);
     } else {
         likedPostIds.add(postId);
         icon.className = 'fas fa-heart text-rose-500';
-        if (countEl) countEl.textContent = currentCount + 1;
+        btn.classList.add('text-rose-500');
+        currentCount = currentCount + 1;
     }
 
+    if (countEl) countEl.textContent = currentCount;
     localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
     
     try {
-        // Optional back-end syncing can be safely invoked here
+        await supabase
+            .from("posts")
+            .update({ likes_count: currentCount })
+            .eq("id", postId);
     } catch(e) { console.warn("Like sync delayed:", e); }
 };
 
@@ -736,6 +751,26 @@ window.contactSeller = function (userName, postTitle) {
     window.navigateTo('dms');
     showToast(`Starting chat with ${userName}…`);
     if (typeof window.openDM === 'function') window.openDM(null, userName);
+};
+
+window.postComment = async function(postId, inputEl) {
+    const text = inputEl.value.trim();
+    if (!text || !currentUserData) return;
+    inputEl.value = '';
+
+    try {
+        const metadata = currentUserData.user_metadata || {};
+        await supabase.from('comments').insert({
+            post_id: postId,
+            user_id: currentUserData.id,
+            user_name: metadata.full_name || 'Anonymous Student',
+            user_avatar: metadata.avatar_url || '',
+            text,
+            created_at: new Date().toISOString()
+        });
+    } catch(err) {
+        console.error("Comment submission error:", err);
+    }
 };
 
 window.toggleComments = async function (postId) {
@@ -895,7 +930,7 @@ function renderFeedCard(id, d) {
 
         <div class="px-3 pt-2.5 pb-1 flex items-center justify-between">
             <div class="flex items-center gap-4">
-                <button onclick="likePost('${escAttr(id)}', this)" data-liked="${likedData}" class="flex items-center gap-1 active:scale-90 transition">
+                <button onclick="likePost('${escAttr(id)}', this)" data-liked="${likedData}" class="flex items-center gap-1 active:scale-90 transition ${isLiked ? 'text-rose-500' : ''}">
                     <i class="${heartClass} text-xl"></i>
                     <span class="like-count text-xs font-semibold text-slate-300">${displayLikes}</span>
                 </button>
@@ -938,7 +973,7 @@ function renderFeedCard(id, d) {
                     type="text"
                     placeholder="Add a comment…"
                     class="flex-1 bg-slate-800/80 border border-slate-700/50 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
-                    onkeydown="if(event.key==='Enter') postComment('${escAttr(id)}', this)"
+                    onkeydown="if(event.key==='Enter') window.postComment('${escAttr(id)}', this)"
                 >
             </div>
             <div id="comment-list-${escAttr(id)}" class="max-h-36 overflow-y-auto space-y-1.5 custom-scrollbar"></div>
@@ -958,7 +993,6 @@ window.toggleCartItem = function (postId) {
     if (!postRecord) {
         const cardEl = document.getElementById(`feed-card-${postId}`);
         if (cardEl) {
-            // FIX: Safely select elements using class tokens or valid escaped strings
             const nameEl = Array.from(cardEl.querySelectorAll('p')).find(el => el.classList.contains('text-[12px]'));
             postRecord = {
                 title: cardEl.querySelector('p.text-white')?.textContent || 'Campus Item',
@@ -996,13 +1030,11 @@ window.toggleCartItem = function (postId) {
 
     localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
 
-    // Update Bookmark Styles
     const feedIcon = document.getElementById(`feed-cart-icon-${postId}`)?.querySelector('i');
     if (feedIcon) {
         feedIcon.className = isAdded ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
     }
 
-    // FIX: Moved inside the function boundaries so it doesn't cause a syntax crash
     const detailBtn = document.getElementById(`detail-cart-btn-${postId}`);
     if (detailBtn) {
         const labelText = detailBtn.querySelector('.cart-btn-label');
@@ -1015,7 +1047,25 @@ window.toggleCartItem = function (postId) {
     if (!document.getElementById('cart-container')?.classList.contains('hidden')) {
         renderCartListView();
     }
-}; // Closed cleanly here!
+};
+
+function renderCartListView() {
+    const container = document.getElementById('cart-items-wrapper');
+    if (!container) return;
+    if (userCartList.length === 0) {
+        container.innerHTML = `<p class="p-10 text-center text-slate-500 text-xs uppercase">Your list is empty</p>`;
+        return;
+    }
+    container.innerHTML = userCartList.map(item => `
+        <div class="flex items-center justify-between p-3 bg-slate-900 rounded-xl border border-slate-800">
+            <div class="min-w-0 flex-1 cursor-pointer" onclick="openDetail('${escAttr(item.id)}')">
+                <p class="text-white font-bold text-sm truncate">${esc(item.title)}</p>
+                <p class="text-amber-400 font-extrabold text-xs">GH₵${esc(String(item.price))}</p>
+            </div>
+            <button onclick="window.toggleCartItem('${escAttr(item.id)}')" class="text-red-400 p-2"><i class="fas fa-trash-can"></i></button>
+        </div>
+    `).join('');
+}
 
 // ─── 13. FOLLOW SYSTEM ────────────────────────────────────────────────────────
 async function checkFollowing(targetUserId) {
@@ -1187,15 +1237,13 @@ async function loadFollowingFeed() {
         }
 
         feed.innerHTML = '';
-        posts.forEach(d => { feed.innerHTML += renderFeedCard(d.id, d); });
+        posts.forEach(d => { feed.innerHTML += renderFeedCard(d.id, d); wireCarouselCounters(d.id); });
         refreshFollowButtonStates();
-        wireCarouselCounters();
     } catch (err) {
         console.error("Following feed error:", err);
     }
 }
 
-// FIX #3: After re-render, re-open any comment sections that were open
 function renderFeedFromCache() {
     const feed = document.getElementById('posts-feed');
     if (!feed) return;
@@ -1213,9 +1261,9 @@ function renderFeedFromCache() {
     feed.innerHTML = '';
     allCachedPosts.forEach(({ id, data: d }) => {
         feed.innerHTML += renderFeedCard(id, d);
+        wireCarouselCounters(id);
     });
 
-    // Re-open comments that were open before re-render
     openCommentIds.forEach(postId => {
         const section = document.getElementById(`comments-${postId}`);
         if (section) {
@@ -1243,7 +1291,6 @@ function renderFeedFromCache() {
     });
 
     refreshFollowButtonStates();
-    wireCarouselCounters();
 }
 
 // ─── 15. FILTERING ────────────────────────────────────────────────────────────
@@ -1342,13 +1389,13 @@ window.runSearch = async function (term) {
         const id = item.id;
         const d  = item.data ? item.data : item;
         resultsEl.innerHTML += renderFeedCard(id, d);
+        wireCarouselCounters(id);
     });
 
     refreshFollowButtonStates();
-    wireCarouselCounters();
 };
 
-// ─── 17. POST SUBMISSION (FIX #5 — multi-file carousel upload) ───────────────
+// ─── 17. POST SUBMISSION ─────────────────────────────────────────────────────
 window.handlePostSubmission = async function () {
     if (!currentUserData) {
         window.openLoginModal();
@@ -1387,6 +1434,7 @@ window.handlePostSubmission = async function () {
 
             if (i === 0 && file.type.startsWith('video')) {
                 primaryMediaType = 'video';
+             primaryMediaType = 'video';
             }
         }
 
@@ -1436,7 +1484,7 @@ async function loadProfileStats() {
         const [followersRes, followingRes, postsRes] = await Promise.all([
             supabase.from("follows").select("", { count: "exact", head: true }).eq("following_id", currentUserData.id),
             supabase.from("follows").select("", { count: "exact", head: true }).eq("follower_id",  currentUserData.id),
-            supabase.from("posts").select("id, title, media_url, media_type").eq("user_id", currentUserData.id).order("created_at", { ascending: false })
+            supabase.from("posts").select("id, title, media_url, media_type, price").eq("user_id", currentUserData.id).order("created_at", { ascending: false })
         ]);
 
         const postsCount = postsRes.data ? postsRes.data.length : 0;
@@ -1614,13 +1662,11 @@ window.addEventListener('scroll', () => {
 }, { passive: true });
 
 // ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ──────────────────────────────
-// Change from document.getElementById('posts-feed') to global body delegation
 document.body.addEventListener('click', (event) => {
     const profileClickTarget = event.target.closest('.feed-profile-trigger');
     if (profileClickTarget) {
         event.preventDefault();
         event.stopPropagation();
-        console.log("Profile link caught! Navigating...");
         if (typeof window.navigateTo === 'function') {
             window.navigateTo('profile');
         }
@@ -1659,14 +1705,12 @@ function wireCarouselCounters(postId) {
         if (width <= 0) return;
         const index = Math.round(carousel.scrollLeft / width) + 1;
         counter.textContent = index;
-    });
+    }, { passive: true });
 }
 
 // ─── UTILITY FUNCTION: RENDER PROFILE GRID ITEM ─────────────────────────────
-function renderGridItem(post) {
-    // Falls back gracefully if data is nested inside a cache wrapper
+function renderGridItem(id, post) {
     const d = post.data ? post.data : post;
-    const id = post.id;
     
     let mediaUrl = '';
     if (d.media_url) {
