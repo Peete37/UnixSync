@@ -325,6 +325,9 @@
 
 <body class="bg-[#020617] text-slate-100 min-h-screen antialiased">
 
+  <!-- Root Media Input Layer for Multi-File Selection -->
+  <input type="file" id="mediaInput" class="hidden" accept="image/*,video/*" multiple />
+
   <div class="site-header">
     <div class="header-top">
       <h1 class="logo">Campus<span>Market</span></h1>
@@ -521,8 +524,10 @@
           <textarea id="postDescription" name="postDescription" rows="2" placeholder="Describe your item or skill..." class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs resize-none"></textarea>
         </div>
         <div>
-          <label for="mediaInput" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Media</label>
-          <input type="file" id="mediaInput" name="mediaInput" accept="image/*,video/*" class="w-full text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-700 file:text-white hover:file:bg-slate-600 cursor-pointer">
+          <span class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Media Showcase</span>
+          <button onclick="document.getElementById('mediaInput').click()" type="button" class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-2">
+            <i class="fas fa-cloud-upload-alt text-amber-400"></i> Attach Images / Videos
+          </button>
         </div>
         <button onclick="window.handlePostSubmission()" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-2 transition active:scale-95 shadow-lg shadow-amber-400/20">
           Publish Instantly

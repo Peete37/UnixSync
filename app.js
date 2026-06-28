@@ -96,10 +96,15 @@ const ALL_INSTITUTIONS = [...new Set(Object.values(GHANA_DATA).flat())].sort();
 
 let currentUserData   = null;
 let currentFeedChan   = null;
+let currentCommentsChan = null; // Track single reactive detail streams
 let allCachedPosts    = [];
 let isAuthInitialized = false;
 
+// Cart Management Array Local State
+let userCartList      = JSON.parse(localStorage.getItem("campus_market_cart") || "[]");
+
 Object.defineProperty(window, '_currentUser', { get: () => currentUserData });
+Object.defineProperty(window, '_userCartList', { get: () => userCartList });
 
 // ─── 4. UTILITIES ─────────────────────────────────────────────────────────────
 
@@ -270,6 +275,7 @@ window.login = async function () {
 window.logout = async function () {
     try {
         unsubscribeFeed();
+        if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
         await signOutUser();
         window.navigateTo('feed');
     } catch (err) {
@@ -356,7 +362,8 @@ function setNavHighlight(btn, viewId) {
         feed: 'nav-btn-feed',
         explore: 'nav-btn-explore',
         dms: 'nav-btn-dms',
-        profile: 'auth-profile-nav'
+        profile: 'auth-profile-nav',
+        cart: 'nav-btn-cart'
     };
 
     const fallback = document.getElementById(navMap[viewId]);
@@ -368,11 +375,12 @@ function setNavHighlight(btn, viewId) {
 }
 
 window.navigateTo = function (viewId, btn = null) {
-    ['feed-container', 'profile-container', 'explore-container', 'dms-container']
+    ['feed-container', 'profile-container', 'explore-container', 'dms-container', 'cart-container']
         .forEach(id => document.getElementById(id)?.classList.add('hidden'));
 
     const targetId = viewId === 'feed' ? 'feed-container' : `${viewId}-container`;
-    document.getElementById(targetId)?.classList.remove('hidden');
+    const targetElement = document.getElementById(targetId);
+    if (targetElement) targetElement.classList.remove('hidden');
 
     const tabs = document.getElementById('feed-tabs');
     if (tabs) tabs.style.display = viewId === 'feed' ? 'flex' : 'none';
@@ -380,7 +388,7 @@ window.navigateTo = function (viewId, btn = null) {
     clearNavHighlights();
     setNavHighlight(btn, viewId);
 
-    // ── Auth gates ──
+    // ── Module View Integrations ──
     if (viewId === 'profile') {
         const gate    = document.getElementById('profile-auth-gate');
         const content = document.getElementById('profile-content');
@@ -404,6 +412,10 @@ window.navigateTo = function (viewId, btn = null) {
             gate?.classList.add('hidden');
             content?.classList.remove('hidden');
         }
+    }
+
+    if (viewId === 'cart') {
+        renderCartListView();
     }
 };
 
@@ -431,7 +443,7 @@ window.togglePostModal = function () {
 // ─── 9. DETAIL MODAL ──────────────────────────────────────────────────────────
 
 window.openDetail = async function (postId) {
-    const modal   = document.getElementById('detail-modal');
+    const modal = document.getElementById('detail-modal');
     const content = document.getElementById('detail-content');
     if (!modal || !content) return;
 
@@ -464,6 +476,12 @@ window.openDetail = async function (postId) {
                 ${isFollowing ? '✓ Following' : '+ Follow'}
             </button>` : '';
 
+        const isAddedToCart = userCartList.some(item => item.id === d.id);
+        const cartText = isAddedToCart ? "✓ Added to Chart" : "Add to Chart List";
+        const cartColorClass = isAddedToCart 
+            ? "bg-slate-800 border border-slate-700 text-slate-400" 
+            : "bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
+
         const ctaLabel = d.type === 'skill' ? 'Book Technical Service' : 'Contact Seller';
 
         content.innerHTML = `
@@ -471,7 +489,7 @@ window.openDetail = async function (postId) {
             <div class="p-6 space-y-4">
                 <div class="flex justify-between items-center gap-4">
                     <h1 class="text-2xl font-bold text-white uppercase tracking-tighter">${esc(d.title) || 'Campus Item'}</h1>
-                    <span class="text-amber-400 font-black text-xl shrink-0">GH₵${esc(d.price ?? '0')}</span>
+                    <span class="text-amber-400 font-black text-xl shrink-0">GH₵${esc(String(d.price || 0))}</span>
                 </div>
                 <div class="flex flex-wrap gap-2 text-[10px] uppercase font-bold tracking-wider">
                     <span class="bg-slate-800 text-amber-400 px-2 py-1 rounded border border-slate-700">${esc(d.institution) || 'All Campuses'}</span>
@@ -489,9 +507,18 @@ window.openDetail = async function (postId) {
                     ${followBlock}
                 </div>
                 <p class="text-slate-400 leading-relaxed font-light">${esc(d.description) || 'No description provided.'}</p>
-                <button class="w-full bg-amber-400 text-black font-black py-4 rounded-2xl active:scale-95 transition-transform mt-6 uppercase tracking-wider text-sm">
-                    ${esc(ctaLabel)}
-                </button>
+                
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6">
+                    <button 
+                        id="detail-cart-btn-${escAttr(d.id)}"
+                        onclick="window.toggleCartItem('${escAttr(d.id)}')"
+                        class="w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs ${cartColorClass}">
+                        <i class="fas fa-shopping-basket mr-1.5 text-[11px]"></i><span class="cart-btn-label">${cartText}</span>
+                    </button>
+                    <button onclick="contactSeller('${escAttr(d.user_name)}', '${escAttr(d.title)}')" class="w-full bg-amber-400 text-black font-black py-4 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
+                        ${esc(ctaLabel)}
+                    </button>
+                </div>
             </div>`;
     } catch (e) {
         console.error("Detail load error:", e);
@@ -635,7 +662,6 @@ function _initAvatarLongPress() {
     const downloadImageBtn = document.getElementById('downloadImageBtn');
 
     if (!profileAvatar || !avatarModal || !modalAvatarImg) {
-        // DOM not ready yet — called again after auth populates the avatar
         return;
     }
 
@@ -655,27 +681,22 @@ function _initAvatarLongPress() {
         clearTimeout(_avatarPressTimer);
     }
 
-    // Touch (mobile)
     profileAvatar.addEventListener('touchstart',  startPress,  { passive: true });
     profileAvatar.addEventListener('touchend',    cancelPress);
     profileAvatar.addEventListener('touchmove',   cancelPress);
 
-    // Mouse (desktop)
     profileAvatar.addEventListener('mousedown',   startPress);
     profileAvatar.addEventListener('mouseup',     cancelPress);
     profileAvatar.addEventListener('mouseleave',  cancelPress);
 
-    // Close button
     closeAvatarBtn?.addEventListener('click', () => {
         avatarModal.classList.add('hidden');
     });
 
-    // Close on backdrop tap
     avatarModal.addEventListener('click', (e) => {
         if (e.target === avatarModal) avatarModal.classList.add('hidden');
     });
 
-    // Copy image to clipboard
     copyImageBtn?.addEventListener('click', async () => {
         try {
             const response = await fetch(modalAvatarImg.src);
@@ -690,7 +711,6 @@ function _initAvatarLongPress() {
         }
     });
 
-    // Download image
     downloadImageBtn?.addEventListener('click', async () => {
         try {
             const response = await fetch(modalAvatarImg.src);
@@ -711,7 +731,6 @@ function _initAvatarLongPress() {
     });
 }
 
-// Run once DOM is ready (handles cases where script loads before full parse)
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _initAvatarLongPress);
 } else {
@@ -768,21 +787,82 @@ window.contactSeller = function (userName, postTitle) {
 
     window.navigateTo('dms');
     showToast(`Starting chat with ${userName}…`);
-    window.openDM && window.openDM(null, userName);
+    if (typeof window.openDM === 'function') window.openDM(null, userName);
 };
 
-window.toggleComments = function (postId) {
-    const box = document.getElementById(`comments-${postId}`);
-    if (box) box.classList.toggle('hidden');
+// ─── OPTIMIZED COMMENT RETRIEVAL & REALTIME STREAM FROM DATABASE ───
+window.toggleComments = async function (postId) {
+    const commentSection = document.getElementById(`comments-${postId}`);
+    const list = document.getElementById(`comment-list-${postId}`);
+    if (!commentSection || !list) return;
+
+    commentSection.classList.toggle('hidden');
+
+    if (currentCommentsChan) {
+        supabase.removeChannel(currentCommentsChan);
+        currentCommentsChan = null;
+    }
+
+    if (!commentSection.classList.contains('hidden')) {
+        list.innerHTML = `<p class="text-[10px] text-slate-500 animate-pulse py-2 pl-1">Loading comments...</p>`;
+        
+        const fetchAndRender = async () => {
+            const { data: comments, error } = await supabase
+                .from('comments')
+                .select('*')
+                .eq('post_id', postId)
+                .order('created_at', { ascending: true });
+
+            if (error) throw error;
+            list.innerHTML = '';
+
+            if (!comments || comments.length === 0) {
+                list.innerHTML = `<p class="text-[10px] text-slate-600 italic py-2 pl-1">No comments yet. Start the chat!</p>`;
+                return;
+            }
+
+            comments.forEach(c => {
+                const item = document.createElement('div');
+                item.className = 'flex gap-2 items-start text-left mt-2';
+                item.innerHTML = `
+                    <img src="${esc(c.user_avatar) || 'https://ui-avatars.com/api/?name=U'}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
+                    <div class="bg-slate-800 rounded-2xl px-3 py-2 flex-1 border border-slate-700/20">
+                        <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(c.user_name)}</p>
+                        <p class="text-xs text-slate-200 mt-0.5">${esc(c.text)}</p>
+                    </div>`;
+                list.appendChild(item);
+            });
+        };
+
+        try {
+            await fetchAndRender();
+        } catch (err) {
+            console.error("Error loading comments:", err);
+            list.innerHTML = `<p class="text-[10px] text-red-400 py-1 pl-1">Failed to sync comments.</p>`;
+        }
+
+        // Setup real-time postgres stream dependency for comments panel
+        currentCommentsChan = supabase
+            .channel(`comments-live-${postId}`)
+            .on("postgres_changes", { event: "INSERT", schema: "public", table: "comments", filter: `post_id=eq.${postId}` }, () => {
+                fetchAndRender().catch(console.error);
+            })
+            .subscribe();
+    }
 };
 
 function renderFeedCard(id, d) {
     const viewer     = currentUserData;
     const showFollow = viewer && d.user_id !== viewer.id;
+    const isOwnPost  = viewer && d.user_id === viewer.id;
 
     const mediaBlock = d.media_type === 'video'
-        ? `<video class="w-full h-52 object-cover" autoplay muted loop playsinline src="${esc(d.media_url)}"></video>`
-        : `<img class="w-full h-52 object-cover" src="${esc(d.media_url)}" alt="${esc(d.title)}">`;
+        ? `<div class="w-full max-h-[75vh] bg-black flex items-center justify-center overflow-hidden">
+            <video class="w-full h-auto max-h-[75vh] object-contain" autoplay muted loop playsinline src="${esc(d.media_url)}"></video>
+           </div>`
+        : `<div class="w-full max-h-[75vh] bg-slate-950 flex items-center justify-center overflow-hidden">
+            <img class="w-full h-auto max-h-[75vh] object-contain" src="${esc(d.media_url)}" alt="${esc(d.title)}">
+           </div>`;
 
     const followBlock = showFollow ? `
         <button
@@ -793,86 +873,89 @@ function renderFeedCard(id, d) {
             + Follow
         </button>` : '';
 
+    const deleteBlock = isOwnPost ? `
+        <button
+            onclick="event.stopPropagation(); window.deletePost('${escAttr(id)}')"
+            class="px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-red-950/40 text-red-400 border border-red-900/50 hover:bg-red-900 hover:text-white">
+            <i class="fas fa-trash-can mr-1"></i> Delete
+        </button>` : '';
+
+    const isAddedToCart = userCartList.some(item => item.id === id);
+    const feedCartIconClass = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
+
     return `
-    <div class="bg-slate-900 rounded-3xl overflow-hidden border border-slate-800">
-        <div onclick="openDetail('${escAttr(id)}')" class="cursor-pointer">
+    <div class="bg-slate-900 rounded-2xl overflow-hidden border border-slate-800/60 shadow-xl max-w-md mx-auto my-2">
+        <div onclick="openDetail('${escAttr(id)}')" class="cursor-pointer relative">
             ${mediaBlock}
         </div>
-        <div class="p-4 space-y-3">
-            <div class="flex justify-between items-start gap-3">
-                <div class="flex-1 pr-2 min-w-0">
-                    <p class="font-black text-white text-sm uppercase tracking-tight truncate">${esc(d.title)}</p>
-                    <p class="text-slate-500 text-[10px] uppercase font-bold mt-0.5 truncate">${esc(d.institution) || ''} · ${esc(d.type) || 'product'}</p>
+        <div class="p-3 space-y-2.5">
+            <div class="flex justify-between items-start gap-2">
+                <div class="flex-1 min-w-0 text-left">
+                    <p class="font-bold text-white text-sm tracking-tight line-clamp-2">${esc(d.title)}</p>
+                    <p class="text-slate-400 text-[10px] font-medium mt-0.5">${esc(d.institution) || ''} · ${esc(d.type) || 'product'}</p>
                 </div>
-                <span class="text-amber-400 font-black text-base shrink-0">GH₵${esc(d.price ?? '0')}</span>
+                <span class="text-amber-400 font-black text-sm shrink-0 bg-amber-400/10 px-2 py-0.5 rounded-lg border border-amber-400/20">GH₵${esc(String(d.price || 0))}</span>
             </div>
 
-            <div class="feed-profile-trigger flex items-center justify-between gap-3 cursor-pointer hover:opacity-80 transition-opacity">
+            <div class="feed-profile-trigger flex items-center justify-between gap-3 pt-0.5 cursor-pointer hover:opacity-90 transition">
                 <div class="flex items-center gap-2 min-w-0">
-                    <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-7 h-7 rounded-full border border-slate-700 object-cover" alt="">
-                    <span class="text-xs text-slate-400 font-medium truncate">${esc(d.user_name) || 'Student'}</span>
+                    <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-6 h-6 rounded-full border border-slate-700 object-cover" alt="">
+                    <span class="text-[11px] text-slate-300 font-semibold truncate">${esc(d.user_name) || 'Student'}</span>
                 </div>
-                ${followBlock}
+                <div class="flex gap-1">
+                    ${followBlock}
+                    ${deleteBlock}
+                </div>
             </div>
 
-            <div class="border-t border-slate-800 pt-3 flex items-center justify-between gap-1">
-                <button
-                    data-liked="false"
-                    onclick="likePost('${escAttr(id)}', this)"
-                    class="flex items-center gap-1.5 text-slate-400 hover:text-rose-500 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
-                    <i class="far fa-heart text-sm"></i>
-                    <span class="like-count text-[11px] font-bold">0</span>
-                </button>
-                <button
-                    onclick="toggleComments('${escAttr(id)}')"
-                    class="flex items-center gap-1.5 text-slate-400 hover:text-blue-400 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
-                    <i class="far fa-comment text-sm"></i>
-                    <span class="text-[11px] font-bold">Comment</span>
-                </button>
-                <button
-                    onclick="sharePost('${escAttr(id)}', '${escAttr(d.title)}')"
-                    class="flex items-center gap-1.5 text-slate-400 hover:text-green-400 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
-                    <i class="fas fa-share-nodes text-sm"></i>
-                    <span class="text-[11px] font-bold">Share</span>
-                </button>
-                <button
-                    onclick="downloadMedia('${escAttr(d.media_url)}', '${escAttr(d.title)}')"
-                    class="flex items-center gap-1.5 text-slate-400 hover:text-purple-400 transition active:scale-95 px-2 py-1.5 rounded-xl hover:bg-slate-800">
-                    <i class="fas fa-download text-sm"></i>
-                </button>
+            <div class="border-t border-slate-800/80 pt-2 flex items-center justify-between px-1">
+                <div class="flex items-center gap-4">
+                    <button onclick="likePost('${escAttr(id)}', this)" class="text-slate-300 hover:text-rose-500 transition active:scale-90 flex items-center gap-1">
+                        <i class="far fa-heart text-lg"></i>
+                        <span class="like-count text-xs font-medium">0</span>
+                    </button>
+                    <button onclick="toggleComments('${escAttr(id)}')" class="text-slate-300 hover:text-amber-400 transition active:scale-90 flex items-center gap-1">
+                        <i class="far fa-comment text-lg"></i>
+                    </button>
+                    <button onclick="sharePost('${escAttr(id)}', '${escAttr(d.title)}')" class="text-slate-300 hover:text-green-400 transition active:scale-90">
+                        <i class="far fa-paper-plane text-lg"></i>
+                    </button>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button id="feed-cart-icon-${escAttr(id)}" onclick="window.toggleCartItem('${escAttr(id)}')" class="hover:text-amber-400 transition active:scale-90">
+                        <i class="${feedCartIconClass} text-base"></i>
+                    </button>
+                    <button onclick="downloadMedia('${escAttr(d.media_url)}', '${escAttr(d.title)}')" class="text-slate-400 hover:text-purple-400 transition">
+                        <i class="fas fa-arrow-down text-sm"></i>
+                    </button>
+                </div>
             </div>
 
             <button
                 onclick="contactSeller('${escAttr(d.user_name)}', '${escAttr(d.title)}')"
-                class="w-full flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-300 text-black font-black py-2.5 rounded-2xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md shadow-amber-400/20">
-                <i class="fas fa-bolt text-xs"></i>
-                Contact Seller Directly
+                class="w-full flex items-center justify-center gap-1.5 bg-amber-400 hover:bg-amber-300 text-black font-extrabold py-2 rounded-xl text-[11px] uppercase tracking-wider transition active:scale-[0.98] shadow-md shadow-amber-400/5">
+                <i class="fas fa-bolt text-[10px]"></i>
+                Contact Seller
             </button>
 
-            <div id="comments-${escAttr(id)}" class="hidden space-y-2 pt-1">
+            <div id="comments-${escAttr(id)}" class="hidden space-y-2 pt-1.5 border-t border-slate-800/60">
                 <div class="flex gap-2">
-                    <img src="${esc(viewer?.user_metadata?.avatar_url) || 'https://ui-avatars.com/api/?name=U'}" class="w-7 h-7 rounded-full border border-slate-700 object-cover shrink-0" alt="">
-                    <div class="flex-1 flex gap-2">
+                    <div class="flex-1 flex gap-1.5">
                         <input
                             type="text"
-                            placeholder="Write a comment…"
-                            class="flex-1 bg-slate-800 border border-slate-700 text-white text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-amber-400 transition"
+                            placeholder="Add a comment…"
+                            class="flex-1 bg-slate-800/80 border border-slate-700/50 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
                             onkeydown="if(event.key==='Enter') postComment('${escAttr(id)}', this)"
                         >
-                        <button
-                            onclick="postComment('${escAttr(id)}', this.previousElementSibling)"
-                            class="bg-amber-400 text-black font-black text-xs px-3 py-2 rounded-xl active:scale-95 transition">
-                            Post
-                        </button>
                     </div>
                 </div>
-                <div id="comment-list-${escAttr(id)}" class="space-y-1.5"></div>
+                <div id="comment-list-${escAttr(id)}" class="max-h-36 overflow-y-auto space-y-1.5 custom-scrollbar"></div>
             </div>
         </div>
     </div>`;
 }
 
-window.postComment = function (postId, inputEl) {
+window.postComment = async function (postId, inputEl) {
     const text = inputEl?.value?.trim();
     if (!text) return;
     if (!currentUserData) {
@@ -887,17 +970,38 @@ window.postComment = function (postId, inputEl) {
     const avatar   = metadata.avatar_url || `https://ui-avatars.com/api/?name=U`;
     const name     = metadata.full_name  || 'Student';
 
-    const item = document.createElement('div');
-    item.className = 'flex gap-2 items-start';
-    item.innerHTML = `
-        <img src="${esc(avatar)}" class="w-6 h-6 rounded-full border border-slate-700 object-cover shrink-0 mt-0.5" alt="">
-        <div class="bg-slate-800 rounded-xl px-3 py-2 flex-1">
-            <p class="text-[10px] font-black text-amber-400 uppercase tracking-wider mb-0.5">${esc(name)}</p>
-            <p class="text-xs text-slate-300">${esc(text)}</p>
-        </div>`;
+    try {
+        const { error } = await supabase
+            .from("comments")
+            .insert({
+                post_id: postId,
+                user_id: currentUserData.id,
+                user_name: name,
+                user_avatar: avatar,
+                text: text,
+                created_at: new Date().toISOString()
+            });
 
-    list.appendChild(item);
-    inputEl.value = '';
+        if (error) throw error;
+
+        if(list.innerText.includes("No comments yet")) list.innerHTML = '';
+
+        const item = document.createElement('div');
+        item.className = 'flex gap-2 items-start text-left mt-1.5';
+        item.innerHTML = `
+            <img src="${esc(avatar)}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5" alt="">
+            <div class="bg-slate-800/80 rounded-2xl px-3 py-2 flex-1 border border-slate-700/30">
+                <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(name)}</p>
+                <p class="text-xs text-slate-200 mt-0.5">${esc(text)}</p>
+            </div>`;
+
+        list.appendChild(item);
+        inputEl.value = '';
+        showToast('Comment added! ✓');
+    } catch (err) {
+        console.error("Database comment error:", err);
+        showToast("Failed to save comment.");
+    }
 };
 
 function renderGridItem(id, d) {
@@ -907,6 +1011,107 @@ function renderGridItem(id, d) {
         <img class="w-full h-full object-cover opacity-60" src="${esc(d.media_url)}" alt="">
         <span class="absolute bottom-1 left-1 text-[8px] font-bold text-white uppercase truncate pr-1">${esc(d.title)}</span>
     </div>`;
+}
+
+// ─── 12b. CHART / CART LIST LOGIC ──────────────────────────────────────────
+
+window.toggleCartItem = function (postId) {
+    const postRecord = allCachedPosts.find(p => p.id === postId)?.data;
+    if (!postRecord) {
+        showToast("Cannot link listing instance data.");
+        return;
+    }
+
+    const index = userCartList.findIndex(item => item.id === postId);
+    let isAdded = false;
+
+    if (index > -1) {
+        userCartList.splice(index, 1);
+        showToast("Removed from Chart List");
+    } else {
+        userCartList.push({
+            id: postId,
+            title: postRecord.title,
+            price: postRecord.price,
+            media_url: postRecord.media_url,
+            media_type: postRecord.media_type,
+            institution: postRecord.institution,
+            type: postRecord.type,
+            user_name: postRecord.user_name
+        });
+        showToast("Added to Chart List! ✓");
+        isAdded = true;
+    }
+
+    localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
+
+    // Update global visual nodes inline across view boundaries
+    const feedIcon = document.getElementById(`feed-cart-icon-${postId}`)?.querySelector('i');
+    if (feedIcon) {
+        feedIcon.className = isAdded ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
+    }
+
+    const detailBtn = document.getElementById(`detail-cart-btn-${postId}`);
+    if (detailBtn) {
+        const labelText = detailBtn.querySelector('.cart-btn-label');
+        if (labelText) labelText.textContent = isAdded ? "✓ Added to Chart" : "Add to Chart List";
+        if (isAdded) {
+            detailBtn.className = "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-800 border border-slate-700 text-slate-400";
+        } else {
+            detailBtn.className = "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
+        }
+    }
+
+    // Refresh display view states instantly if open
+    if (!document.getElementById('cart-container')?.classList.contains('hidden')) {
+        renderCartListView();
+    }
+};
+
+function renderCartListView() {
+    const container = document.getElementById('cart-container');
+    if (!container) return;
+
+    // Reset base structural layout template bounds
+    container.innerHTML = `
+        <div class="max-w-md mx-auto px-4 py-6 space-y-4 pb-28">
+            <div class="text-left border-b border-slate-800 pb-3">
+                <h1 class="text-xl font-black text-white uppercase tracking-tight">Your Saved Chart</h1>
+                <p class="text-xs text-slate-500">Tracked campus items & services list</p>
+            </div>
+            <div id="cart-items-wrapper" class="space-y-2.5"></div>
+        </div>`;
+
+    const wrapper = document.getElementById('cart-items-wrapper');
+    if (userCartList.length === 0) {
+        wrapper.innerHTML = `
+            <div class="text-center py-16 space-y-2">
+                <p class="text-4xl">🛒</p>
+                <p class="text-sm font-bold text-slate-400">Your chart list is empty</p>
+                <p class="text-xs text-slate-600 max-w-xs mx-auto">Bookmark listings inside the main feed or details modal to plan your purchases.</p>
+            </div>`;
+        return;
+    }
+
+    userCartList.forEach(item => {
+        const card = document.createElement('div');
+        card.className = "bg-slate-900 border border-slate-800/80 rounded-2xl p-3 flex gap-3 items-center relative text-left";
+        card.innerHTML = `
+            <div onclick="openDetail('${escAttr(item.id)}')" class="w-16 h-16 rounded-xl bg-slate-950 overflow-hidden shrink-0 cursor-pointer border border-slate-800">
+                <img class="w-full h-full object-cover" src="${esc(item.media_url)}" alt="">
+            </div>
+            <div class="flex-1 min-w-0 cursor-pointer" onclick="openDetail('${escAttr(item.id)}')">
+                <h3 class="text-xs font-bold text-white truncate uppercase">${esc(item.title)}</h3>
+                <p class="text-[10px] text-slate-500 truncate mt-0.5">${esc(item.institution || 'All Campuses')} · ${esc(item.user_name || 'Seller')}</p>
+                <p class="text-xs font-black text-amber-400 mt-1">GH₵${esc(String(item.price || 0))}</p>
+            </div>
+            <div class="flex flex-col gap-2">
+                <button onclick="window.toggleCartItem('${escAttr(item.id)}')" class="p-2 text-slate-500 hover:text-red-400 transition text-sm">
+                    <i class="fas fa-trash-can"></i>
+                </button>
+            </div>`;
+        wrapper.appendChild(card);
+    });
 }
 
 // ─── 13. FOLLOW SYSTEM ────────────────────────────────────────────────────────
@@ -1001,6 +1206,56 @@ async function refreshFollowButtonStates() {
         console.warn("refreshFollowButtonStates failed silently:", err);
     }
 }
+
+window.deletePost = async function (postId) {
+    if (!currentUserData) return;
+
+    const confirmDelete = window.confirm("Are you sure you want to delete this listing permanently?");
+    if (!confirmDelete) return;
+
+    try {
+        // Fetch target row snapshot payload to access active image storage URLs before unlinking row entries
+        const { data: currentPost, error: fetchErr } = await supabase
+            .from("posts")
+            .select("media_url")
+            .eq("id", postId)
+            .single();
+
+        if (fetchErr) throw fetchErr;
+
+        // Perform primary bucket unlinking procedures via public storage parser
+        if (currentPost?.media_url) {
+            const pathParts = currentPost.media_url.split('/storage/v1/object/public/posts/');
+            const storagePath = pathParts[1];
+            if (storagePath) {
+                await supabase.storage.from("posts").remove([storagePath]);
+            }
+        }
+
+        const { error: dbDeleteErr } = await supabase
+            .from("posts")
+            .delete()
+            .eq("id", postId)
+            .eq("user_id", currentUserData.id);
+
+        if (dbDeleteErr) throw dbDeleteErr;
+
+        // Evict item from Chart List structural arrays if present
+        const cartIndex = userCartList.findIndex(item => item.id === postId);
+        if (cartIndex > -1) {
+            userCartList.splice(cartIndex, 1);
+            localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
+        }
+
+        showToast("Post deleted successfully! ✓");
+
+        allCachedPosts = allCachedPosts.filter(item => item.id !== postId);
+        renderFeedFromCache();
+    } catch (err) {
+        console.error("Error deleting post from database:", err);
+        showToast("Failed to delete post.");
+    }
+};
 
 // ─── 14. FEED VIEWS ──────────────────────────────────────────────────────────
 
@@ -1375,7 +1630,6 @@ window.openDM = function (targetUserId, targetName) {
 
 if (activeAuthChange) {
     activeAuthChange(async (user) => {
-        // BUG FIX: If offline, freeze the auth UI state. Do not trigger logout routines.
         if (!navigator.onLine) {
             console.warn("[Auth Observer] Network is offline. Ignoring auth state evaluation.");
             return;
@@ -1449,7 +1703,6 @@ if (activeAuthChange) {
                 window.initProfileSelects();
             }
 
-            // Refresh gate visibility on sign-in
             document.getElementById('profile-auth-gate')?.classList.add('hidden');
             document.getElementById('profile-content')?.classList.remove('hidden');
             document.getElementById('dms-auth-gate')?.classList.add('hidden');
@@ -1458,11 +1711,11 @@ if (activeAuthChange) {
             subscribeFeed();
             try { loadProfileStats(); } catch (_) {}
 
-            // Re-init long-press now that avatar src is set
             _initAvatarLongPress();
 
         } else {
             unsubscribeFeed();
+            if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
 
             if (authProfileNav) {
                 authProfileNav.innerHTML = `
@@ -1484,7 +1737,6 @@ if (activeAuthChange) {
             const grid = document.getElementById('profile-grid');
             if (grid) grid.innerHTML = '';
 
-            // Refresh gate visibility on sign-out
             document.getElementById('profile-auth-gate')?.classList.remove('hidden');
             document.getElementById('profile-content')?.classList.add('hidden');
             document.getElementById('dms-auth-gate')?.classList.remove('hidden');
@@ -1492,7 +1744,6 @@ if (activeAuthChange) {
 
             subscribeFeed();
 
-            // BUG FIX: Only throw login window automatically if we are confirmed online
             if (typeof window.openLoginModal === 'function' && navigator.onLine) {
                 window.openLoginModal();
             }
@@ -1549,7 +1800,6 @@ document.getElementById('posts-feed')?.addEventListener('click', (event) => {
 window.addEventListener('offline', () => {
     showToast("⚠️ Connection lost. No Internet.");
     
-    // Optional: Gray out submit actions to prevent database runtime errors while offline
     const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
     if (submitBtn) {
         submitBtn.dataset.originalText = submitBtn.textContent;
@@ -1561,14 +1811,12 @@ window.addEventListener('offline', () => {
 window.addEventListener('online', () => {
     showToast("⚡ Back online! Syncing data...");
     
-    // Restore post creation buttons if they were blocked
     const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
     if (submitBtn && submitBtn.dataset.originalText) {
         submitBtn.textContent = submitBtn.dataset.originalText;
         submitBtn.disabled = false;
     }
     
-    // Silently sync feed details now that network connection is established
     if (typeof subscribeFeed === 'function') {
         subscribeFeed();
     }
