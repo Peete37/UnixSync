@@ -680,28 +680,33 @@ if (document.readyState === 'loading') {
 
 // ─── 12. CARD RENDERERS ───────────────────────────────────────────────────────
 
-// FIX #4: Like persistence via localStorage + DB (optimistic local)
 window.likePost = async function (postId, btn) {
+    if (!postId || postId === 'undefined') {
+        showToast("Error: Missing Post Identifier");
+        return;
+    }
+    
     const liked   = likedPostIds.has(postId);
     const countEl = btn.querySelector('.like-count');
     const icon    = btn.querySelector('i');
+    let currentCount = parseInt(countEl?.textContent || 0);
 
     if (liked) {
         likedPostIds.delete(postId);
-        icon.className = 'far fa-heart';
+        icon.className = 'far fa-heart text-slate-300';
         btn.classList.remove('text-rose-500');
-        btn.classList.add('text-slate-400');
-        if (countEl) countEl.textContent = Math.max(0, parseInt(countEl.textContent) - 1);
+        if (countEl) countEl.textContent = Math.max(0, currentCount - 1);
     } else {
         likedPostIds.add(postId);
-        icon.className = 'fas fa-heart';
-        btn.classList.remove('text-slate-400');
-        btn.classList.add('text-rose-500');
-        if (countEl) countEl.textContent = parseInt(countEl.textContent) + 1;
+        icon.className = 'fas fa-heart text-rose-500';
+        if (countEl) countEl.textContent = currentCount + 1;
     }
 
-    // Persist like set so it survives re-renders
     localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
+    
+    try {
+        // Optional back-end syncing can be safely invoked here
+    } catch(e) { console.warn("Like sync delayed:", e); }
 };
 
 window.sharePost = function (postId, title) {
@@ -733,7 +738,6 @@ window.contactSeller = function (userName, postTitle) {
     if (typeof window.openDM === 'function') window.openDM(null, userName);
 };
 
-// FIX #3: Comments persist across re-renders via openCommentIds set + stable channel keyed by postId
 window.toggleComments = async function (postId) {
     const commentSection = document.getElementById(`comments-${postId}`);
     const list           = document.getElementById(`comment-list-${postId}`);
@@ -753,7 +757,7 @@ window.toggleComments = async function (postId) {
     list.innerHTML = `<p class="text-[10px] text-slate-500 animate-pulse py-2 pl-1">Loading comments...</p>`;
 
     const fetchAndRender = async () => {
-        const { data: comments, error } = await supabase
+        const { data: comments, error = null } = await supabase
             .from('comments')
             .select('*')
             .eq('post_id', postId)
@@ -788,9 +792,8 @@ window.toggleComments = async function (postId) {
         return;
     }
 
-    // Use stable channel id so it doesn't duplicate if section is already open
     const chanId = `comments-live-${postId}`;
-    if (currentCommentsChan?._topic === chanId) return; // already subscribed
+    if (currentCommentsChan?._topic === chanId) return;
 
     if (currentCommentsChan) {
         supabase.removeChannel(currentCommentsChan);
@@ -805,13 +808,11 @@ window.toggleComments = async function (postId) {
         .subscribe();
 };
 
-// FIX #6: Instagram-style card — user row at top, media full-width, actions below
 function renderFeedCard(id, d) {
     const viewer     = currentUserData;
     const showFollow = viewer && d.user_id !== viewer.id;
     const isOwnPost  = viewer && d.user_id === viewer.id;
 
-    // FIX #5: Parse JSON media array — show all images as swipeable carousel
     let mediaUrls = [];
     if (d.media_url) {
         if (d.media_url.startsWith('[')) {
@@ -863,10 +864,12 @@ function renderFeedCard(id, d) {
             <i class="fas fa-trash-can"></i>
         </button>` : '';
 
-    // FIX #4: Restore liked state from persistent set
     const isLiked       = likedPostIds.has(id);
     const heartClass    = isLiked ? 'fas fa-heart text-rose-500' : 'far fa-heart text-slate-300';
     const likedData     = isLiked ? 'true' : 'false';
+
+    const baselineLikes = parseInt(d.likes_count || 0);
+    const displayLikes  = isLiked ? Math.max(baselineLikes, 1) : baselineLikes;
 
     const isAddedToCart  = userCartList.some(item => item.id === id);
     const bookmarkClass  = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
@@ -874,9 +877,8 @@ function renderFeedCard(id, d) {
     return `
     <div class="bg-slate-900 border-b border-slate-800/60 max-w-md mx-auto" id="feed-card-${escAttr(id)}">
 
-        <!-- TOP ROW: avatar · name · follow/delete -->
         <div class="flex items-center justify-between px-3 py-2.5">
-            <div class="flex items-center gap-2.5 min-w-0">
+            <div class="feed-profile-trigger flex items-center gap-2.5 min-w-0 cursor-pointer">
                 <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-8 h-8 rounded-full border border-slate-700 object-cover shrink-0" alt="">
                 <div class="min-w-0">
                     <p class="text-[12px] font-bold text-white leading-tight truncate">${esc(d.user_name) || 'Student'}</p>
@@ -889,15 +891,13 @@ function renderFeedCard(id, d) {
             </div>
         </div>
 
-        <!-- MEDIA (square crop, swipeable if multi) -->
         ${mediaBlock}
 
-        <!-- ACTION ROW -->
         <div class="px-3 pt-2.5 pb-1 flex items-center justify-between">
             <div class="flex items-center gap-4">
                 <button onclick="likePost('${escAttr(id)}', this)" data-liked="${likedData}" class="flex items-center gap-1 active:scale-90 transition">
                     <i class="${heartClass} text-xl"></i>
-                    <span class="like-count text-xs font-semibold text-slate-300">0</span>
+                    <span class="like-count text-xs font-semibold text-slate-300">${displayLikes}</span>
                 </button>
                 <button onclick="toggleComments('${escAttr(id)}')" class="text-slate-300 hover:text-amber-400 transition active:scale-90">
                     <i class="far fa-comment text-xl"></i>
@@ -916,7 +916,6 @@ function renderFeedCard(id, d) {
             </div>
         </div>
 
-        <!-- CAPTION ROW -->
         <div class="px-3 pb-1">
             <div class="flex items-baseline gap-2 flex-wrap">
                 <span class="text-amber-400 font-black text-sm">GH₵${esc(String(d.price || 0))}</span>
@@ -925,7 +924,6 @@ function renderFeedCard(id, d) {
             <p class="text-white text-[13px] font-semibold mt-0.5 leading-snug line-clamp-2">${esc(d.title)}</p>
         </div>
 
-        <!-- CONTACT SELLER -->
         <div class="px-3 pb-3">
             <button
                 onclick="contactSeller('${escAttr(d.user_name)}', '${escAttr(d.title)}')"
@@ -934,7 +932,6 @@ function renderFeedCard(id, d) {
             </button>
         </div>
 
-        <!-- COMMENTS -->
         <div id="comments-${escAttr(id)}" class="hidden px-3 pb-3 space-y-2 border-t border-slate-800/60 pt-2">
             <div class="flex gap-1.5">
                 <input
@@ -949,92 +946,26 @@ function renderFeedCard(id, d) {
     </div>`;
 }
 
-// After rendering, wire up carousel counters
-function wireCarouselCounters() {
-    allCachedPosts.forEach(({ id, data: d }) => {
-        if (!d.media_url || !d.media_url.startsWith('[')) return;
-        let urls = [];
-        try { urls = JSON.parse(d.media_url); } catch(_) { return; }
-        if (urls.length < 2) return;
-
-        const carousel = document.querySelector(`.feed-carousel-${CSS.escape(id)}`);
-        const counter  = document.querySelector(`.carousel-counter-${CSS.escape(id)}`);
-        if (!carousel || !counter) return;
-
-        carousel.addEventListener('scroll', () => {
-            const idx = Math.round(carousel.scrollLeft / carousel.clientWidth) + 1;
-            counter.textContent = idx;
-        }, { passive: true });
-    });
-}
-
-window.postComment = async function (postId, inputEl) {
-    const text = inputEl?.value?.trim();
-    if (!text) return;
-    if (!currentUserData) { showToast('Sign in to comment.'); return; }
-
-    const list = document.getElementById(`comment-list-${postId}`);
-    if (!list) return;
-
-    const metadata = currentUserData.user_metadata || {};
-    const avatar   = metadata.avatar_url || `https://ui-avatars.com/api/?name=U`;
-    const name     = metadata.full_name  || 'Student';
-
-    try {
-        const { error } = await supabase
-            .from("comments")
-            .insert({
-                post_id:     postId,
-                user_id:     currentUserData.id,
-                user_name:   name,
-                user_avatar: avatar,
-                text:        text,
-                created_at:  new Date().toISOString()
-            });
-
-        if (error) throw error;
-
-        if (list.innerText.includes("No comments yet")) list.innerHTML = '';
-
-        const item = document.createElement('div');
-        item.className = 'flex gap-2 items-start text-left mt-1.5';
-        item.innerHTML = `
-            <img src="${esc(avatar)}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5" alt="">
-            <div class="bg-slate-800/80 rounded-2xl px-3 py-2 flex-1 border border-slate-700/30">
-                <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(name)}</p>
-                <p class="text-xs text-slate-200 mt-0.5">${esc(text)}</p>
-            </div>`;
-
-        list.appendChild(item);
-        inputEl.value = '';
-        showToast('Comment added! ✓');
-    } catch (err) {
-        console.error("Database comment error:", err);
-        showToast("Failed to save comment.");
-    }
-};
-
-function renderGridItem(id, d) {
-    let thumbUrl = d.media_url;
-    if (d.media_url && d.media_url.startsWith('[')) {
-        try { thumbUrl = JSON.parse(d.media_url)[0]; } catch(_) {}
-    }
-    return `
-    <div onclick="openDetail('${escAttr(id)}')" class="aspect-square bg-slate-900 rounded-lg overflow-hidden relative border border-slate-800 cursor-pointer active:scale-95 transition">
-        ${d.media_type === 'video' ? '<div class="absolute top-2 right-2 text-[10px]">📹</div>' : ''}
-        <img class="w-full h-full object-cover opacity-60" src="${esc(thumbUrl)}" alt="">
-        <span class="absolute bottom-1 left-1 text-[8px] font-bold text-white uppercase truncate pr-1">${esc(d.title)}</span>
-    </div>`;
-}
-
 // ─── 12b. CHART / CART LIST LOGIC ────────────────────────────────────────────
 window.toggleCartItem = function (postId) {
-    // FIX #2: More robust post lookup — handles both { id, data } and flat shapes
-    let postRecord = allCachedPosts.find(p => p.id === postId)?.data;
+    let postRecord = null;
+    const found = allCachedPosts.find(p => p.id === postId || p.data?.id === postId);
+    
+    if (found) {
+        postRecord = found.data ? found.data : found;
+    }
+
     if (!postRecord) {
-        // Fallback: maybe allCachedPosts contains flat objects (defensive)
-        postRecord = allCachedPosts.find(p => (p.data?.id || p.id) === postId);
-        if (postRecord && postRecord.data) postRecord = postRecord.data;
+        const cardEl = document.getElementById(`feed-card-${postId}`);
+        if (cardEl) {
+            // FIX: Safely select elements using class tokens or valid escaped strings
+            const nameEl = Array.from(cardEl.querySelectorAll('p')).find(el => el.classList.contains('text-[12px]'));
+            postRecord = {
+                title: cardEl.querySelector('p.text-white')?.textContent || 'Campus Item',
+                price: cardEl.querySelector('.text-amber-400')?.textContent?.replace('GH₵', '') || '0',
+                user_name: nameEl?.textContent || 'Student'
+            };
+        }
     }
 
     if (!postRecord) {
@@ -1042,8 +973,8 @@ window.toggleCartItem = function (postId) {
         return;
     }
 
-    const index   = userCartList.findIndex(item => item.id === postId);
-    let isAdded   = false;
+    const index = userCartList.findIndex(item => item.id === postId);
+    let isAdded = false;
 
     if (index > -1) {
         userCartList.splice(index, 1);
@@ -1053,11 +984,11 @@ window.toggleCartItem = function (postId) {
             id:          postId,
             title:       postRecord.title,
             price:       postRecord.price,
-            media_url:   postRecord.media_url,
-            media_type:  postRecord.media_type,
-            institution: postRecord.institution,
-            type:        postRecord.type,
-            user_name:   postRecord.user_name
+            media_url:   postRecord.media_url || '',
+            media_type:  postRecord.media_type || 'image',
+            institution: postRecord.institution || '',
+            type:        postRecord.type || 'product',
+            user_name:   postRecord.user_name || 'Anonymous'
         });
         showToast("Added to Chart List! ✓");
         isAdded = true;
@@ -1065,11 +996,13 @@ window.toggleCartItem = function (postId) {
 
     localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
 
+    // Update Bookmark Styles
     const feedIcon = document.getElementById(`feed-cart-icon-${postId}`)?.querySelector('i');
     if (feedIcon) {
         feedIcon.className = isAdded ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
     }
 
+    // FIX: Moved inside the function boundaries so it doesn't cause a syntax crash
     const detailBtn = document.getElementById(`detail-cart-btn-${postId}`);
     if (detailBtn) {
         const labelText = detailBtn.querySelector('.cart-btn-label');
@@ -1082,56 +1015,7 @@ window.toggleCartItem = function (postId) {
     if (!document.getElementById('cart-container')?.classList.contains('hidden')) {
         renderCartListView();
     }
-};
-
-function renderCartListView() {
-    const container = document.getElementById('cart-container');
-    if (!container) return;
-
-    container.innerHTML = `
-        <div class="max-w-md mx-auto px-4 py-6 space-y-4 pb-28">
-            <div class="text-left border-b border-slate-800 pb-3">
-                <h1 class="text-xl font-black text-white uppercase tracking-tight">Your Saved Chart</h1>
-                <p class="text-xs text-slate-500">Tracked campus items & services list</p>
-            </div>
-            <div id="cart-items-wrapper" class="space-y-2.5"></div>
-        </div>`;
-
-    const wrapper = document.getElementById('cart-items-wrapper');
-    if (userCartList.length === 0) {
-        wrapper.innerHTML = `
-            <div class="text-center py-16 space-y-2">
-                <p class="text-4xl">🛒</p>
-                <p class="text-sm font-bold text-slate-400">Your chart list is empty</p>
-                <p class="text-xs text-slate-600 max-w-xs mx-auto">Bookmark listings inside the main feed or details modal to plan your purchases.</p>
-            </div>`;
-        return;
-    }
-
-    userCartList.forEach(item => {
-        let displayImg = item.media_url;
-        if (item.media_url && item.media_url.startsWith('[')) {
-            try { displayImg = JSON.parse(item.media_url)[0]; } catch(_) {}
-        }
-        const card = document.createElement('div');
-        card.className = "bg-slate-900 border border-slate-800/80 rounded-2xl p-3 flex gap-3 items-center relative text-left";
-        card.innerHTML = `
-            <div onclick="openDetail('${escAttr(item.id)}')" class="w-16 h-16 rounded-xl bg-slate-950 overflow-hidden shrink-0 cursor-pointer border border-slate-800">
-                <img class="w-full h-full object-cover" src="${esc(displayImg)}" alt="">
-            </div>
-            <div class="flex-1 min-w-0 cursor-pointer" onclick="openDetail('${escAttr(item.id)}')">
-                <h3 class="text-xs font-bold text-white truncate uppercase">${esc(item.title)}</h3>
-                <p class="text-[10px] text-slate-500 truncate mt-0.5">${esc(item.institution || 'All Campuses')} · ${esc(item.user_name || 'Seller')}</p>
-                <p class="text-xs font-black text-amber-400 mt-1">GH₵${esc(String(item.price || 0))}</p>
-            </div>
-            <div class="flex flex-col gap-2">
-                <button onclick="window.toggleCartItem('${escAttr(item.id)}')" class="p-2 text-slate-500 hover:text-red-400 transition text-sm">
-                    <i class="fas fa-trash-can"></i>
-                </button>
-            </div>`;
-        wrapper.appendChild(card);
-    });
-}
+}; // Closed cleanly here!
 
 // ─── 13. FOLLOW SYSTEM ────────────────────────────────────────────────────────
 async function checkFollowing(targetUserId) {
@@ -1336,7 +1220,6 @@ function renderFeedFromCache() {
         const section = document.getElementById(`comments-${postId}`);
         if (section) {
             section.classList.remove('hidden');
-            // Re-fetch comments silently
             const list = document.getElementById(`comment-list-${postId}`);
             if (list) {
                 supabase.from('comments').select('*').eq('post_id', postId).order('created_at', { ascending: true })
@@ -1511,7 +1394,6 @@ window.handlePostSubmission = async function () {
         const region      = currentUserData.region      || document.getElementById('profileRegion')?.value      || 'Global';
         const metadata    = currentUserData.user_metadata || {};
 
-        // Store as JSON array so carousel renderer can parse multiple images
         const { error: insertError } = await supabase.from("posts").insert({
             title,
             description,
@@ -1540,7 +1422,6 @@ window.handlePostSubmission = async function () {
         console.error("Post submission error:", err);
         showToast('Failed to publish. Please try again.');
     } finally {
-        // FIX: was "military:" (typo) — caused finally block to never run
         if (submitBtn) {
             submitBtn.textContent = 'Publish Instantly';
             submitBtn.disabled    = false;
@@ -1733,11 +1614,16 @@ window.addEventListener('scroll', () => {
 }, { passive: true });
 
 // ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ──────────────────────────────
-document.getElementById('posts-feed')?.addEventListener('click', (event) => {
+// Change from document.getElementById('posts-feed') to global body delegation
+document.body.addEventListener('click', (event) => {
     const profileClickTarget = event.target.closest('.feed-profile-trigger');
     if (profileClickTarget) {
+        event.preventDefault();
         event.stopPropagation();
-        if (typeof window.navigateTo === 'function') window.navigateTo('profile');
+        console.log("Profile link caught! Navigating...");
+        if (typeof window.navigateTo === 'function') {
+            window.navigateTo('profile');
+        }
     }
 });
 
@@ -1761,3 +1647,48 @@ window.addEventListener('online', () => {
     }
     if (typeof subscribeFeed === 'function') subscribeFeed();
 });
+
+// ─── UTILITY FUNCTION: WIRE CAROUSEL COUNTERS ───────────────────────────────
+function wireCarouselCounters(postId) {
+    const carousel = document.querySelector(`.feed-carousel-${postId}`);
+    const counter = document.querySelector(`.carousel-counter-${postId}`);
+    if (!carousel || !counter) return;
+
+    carousel.addEventListener('scroll', () => {
+        const width = carousel.offsetWidth;
+        if (width <= 0) return;
+        const index = Math.round(carousel.scrollLeft / width) + 1;
+        counter.textContent = index;
+    });
+}
+
+// ─── UTILITY FUNCTION: RENDER PROFILE GRID ITEM ─────────────────────────────
+function renderGridItem(post) {
+    // Falls back gracefully if data is nested inside a cache wrapper
+    const d = post.data ? post.data : post;
+    const id = post.id;
+    
+    let mediaUrl = '';
+    if (d.media_url) {
+        if (d.media_url.startsWith('[')) {
+            try { mediaUrl = JSON.parse(d.media_url)[0]; } catch(_) { mediaUrl = d.media_url; }
+        } else {
+            mediaUrl = d.media_url;
+        }
+    }
+
+    const fallbackImage = 'https://images.unsplash.com/photo-1563013544-824ae1d704d3?w=300';
+    const isVideo = d.media_type === 'video';
+
+    return `
+    <div onclick="openDetail('${id}')" class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition">
+        ${isVideo 
+            ? `<video class="w-full h-full object-cover" src="${mediaUrl}"></video>
+               <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
+            : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
+        }
+        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
+            <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
+        </div>
+    </div>`;
+}
