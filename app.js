@@ -1,113 +1,51 @@
 // ─── 1. IMPORTS ───────────────────────────────────────────────────────────────
 import { supabase } from "./supabase-config.js";
-import { onAuthChange, signInWithGoogle, signOutUser } from "./auth.service.js";
+import { onAuthChange, signInWithGoogle, signOutUser as authSignOut } from "./auth.service.js";
 
 // ─── 2. CONSTANTS ─────────────────────────────────────────────────────────────
-
 const FEED_LIMIT         = 30;
 const SEARCH_LIMIT       = 100;
 const SEARCH_RESULTS_CAP = 20;
 
 const GHANA_DATA = {
-    'Greater Accra': [
-        'University of Ghana (UG)',
-        'University of Professional Studies Accra (UPSA)',
-        'Ghana Institute of Management and Public Administration (GIMPA)',
-        'Accra Technical University (ATU)',
-        'Methodist University Ghana',
-        'Central University',
-        'Academic City University College',
-        'Lancaster University Ghana',
-        'University of Media Arts and Communication (UMAC)',
-        'Radford University College',
-    ],
-    'Ashanti': [
-        'Kwame Nkrumah University of Science and Technology (KNUST)',
-        'Kumasi Technical University (KsTU)',
-        'Kumasi College of Health Sciences',
-        'Pentecost University',
-        'Christian Service University College',
-        'Valley View University (Kumasi Campus)',
-        'Sunyani Technical University',
-    ],
-    'Eastern': [
-        'Koforidua Technical University (KTU)',
-        'University of Energy and Natural Resources (UENR)',
-        'Akenten Appiah-Menka University of Skills Training and Entrepreneurial Development (AAMUSTED)',
-        'Presbyterian University Ghana (Abetifi Campus)',
-    ],
-    'Central': [
-        'University of Cape Coast (UCC)',
-        'Cape Coast Technical University (CCTU)',
-        'University of Education Winneba (UEW)',
-        'Winneba Technical University',
-        'Takoradi Technical University',
-    ],
-    'Western': [
-        'University of Mines and Technology (UMaT)',
-        'Takoradi Technical University (TTU)',
-        'Western Technical University',
-    ],
-    'Northern': [
-        'University for Development Studies (UDS)',
-        'Tamale Technical University',
-        'SD Dombo University of Business and Integrated Development Studies (SDD-UBIDS)',
-    ],
-    'Upper East': [
-        'University for Development Studies (UDS — Bolgatanga Campus)',
-        'Bolgatanga Technical University',
-    ],
-    'Upper West': [
-        'University for Development Studies (UDS — Wa Campus)',
-        'Wa Technical University',
-    ],
-    'Volta': [
-        'Ho Technical University (HTU)',
-        'University of Health and Allied Sciences (UHAS)',
-    ],
-    'Oti': [
-        'Oti Nursing and Midwifery Training College',
-    ],
-    'Bono': [
-        'Sunyani Technical University',
-        'University of Energy and Natural Resources (UENR — Sunyani Campus)',
-    ],
-    'Bono East': [
-        'Techiman Nursing and Midwifery Training College',
-    ],
-    'Ahafo': [
-        'Goaso College of Education',
-    ],
-    'Savannah': [
-        'Damongo College of Education',
-    ],
-    'North East': [
-        'Nalerigu College of Health Sciences',
-    ],
-    'Western North': [
-        'Sefwi Wiawso College of Education',
-    ],
+    'Greater Accra': ['University of Ghana (UG)', 'University of Professional Studies Accra (UPSA)', 'Ghana Institute of Management and Public Administration (GIMPA)', 'Accra Technical University (ATU)', 'Methodist University Ghana', 'Central University', 'Academic City University College', 'Lancaster University Ghana', 'University of Media Arts and Communication (UMAC)', 'Radford University College'],
+    'Ashanti': ['Kwame Nkrumah University of Science and Technology (KNUST)', 'Kumasi Technical University (KsTU)', 'Kumasi College of Health Sciences', 'Pentecost University', 'Christian Service University College', 'Valley View University (Kumasi Campus)', 'Sunyani Technical University'],
+    'Eastern': ['Koforidua Technical University (KTU)', 'University of Energy and Natural Resources (UENR)', 'Akenten Appiah-Menka University of Skills Training and Entrepreneurial Development (AAMUSTED)', 'Presbyterian University Ghana (Abetifi Campus)'],
+    'Central': ['University of Cape Coast (UCC)', 'Cape Coast Technical University (CCTU)', 'University of Education Winneba (UEW)', 'Winneba Technical University', 'Takoradi Technical University'],
+    'Western': ['University of Mines and Technology (UMaT)', 'Takoradi Technical University (TTU)', 'Western Technical University'],
+    'Northern': ['University for Development Studies (UDS)', 'Tamale Technical University', 'SD Dombo University of Business and Integrated Development Studies (SDD-UBIDS)'],
+    'Upper East': ['University for Development Studies (UDS — Bolgatanga Campus)', 'Bolgatanga Technical University'],
+    'Upper West': ['University for Development Studies (UDS — Wa Campus)', 'Wa Technical University'],
+    'Volta': ['Ho Technical University (HTU)', 'University of Health and Allied Sciences (UHAS)'],
+    'Oti': ['Oti Nursing and Midwifery Training College'],
+    'Bono': ['Sunyani Technical University', 'University of Energy and Natural Resources (UENR — Sunyani Campus)'],
+    'Bono East': ['Techiman Nursing and Midwifery Training College'],
+    'Ahafo': ['Goaso College of Education'],
+    'Savannah': ['Damongo College of Education'],
+    'North East': ['Nalerigu College of Health Sciences'],
+    'Western North': ['Sefwi Wiawso College of Education'],
 };
 
 const ALL_REGIONS      = Object.keys(GHANA_DATA).sort();
 const ALL_INSTITUTIONS = [...new Set(Object.values(GHANA_DATA).flat())].sort();
 
 // ─── 3. MODULE STATE ──────────────────────────────────────────────────────────
+let currentUserData     = null;
+let currentFeedChan     = null;
+let currentCommentsChan = null;
+let allCachedPosts      = [];
+let isAuthInitialized   = false;
 
-let currentUserData   = null;
-let currentFeedChan   = null;
-let currentCommentsChan = null; // Track single reactive detail streams
-let allCachedPosts    = [];
-let isAuthInitialized = false;
+// FIX #3 & #4: Persistent state maps that survive feed re-renders
+const likedPostIds      = new Set(JSON.parse(localStorage.getItem('campus_market_likes') || '[]'));
+const openCommentIds    = new Set(); // tracks which comment sections are open
 
-// Cart Management Array Local State
-let userCartList      = JSON.parse(localStorage.getItem("campus_market_cart") || "[]");
+let userCartList = JSON.parse(localStorage.getItem("campus_market_cart") || "[]");
 
-Object.defineProperty(window, '_currentUser', { get: () => currentUserData });
-Object.defineProperty(window, '_userCartList', { get: () => userCartList });
+Object.defineProperty(window, '_currentUser',   { get: () => currentUserData });
+Object.defineProperty(window, '_userCartList',  { get: () => userCartList });
 
 // ─── 4. UTILITIES ─────────────────────────────────────────────────────────────
-
 function esc(str) {
     return String(str ?? '')
         .replace(/&/g, '&amp;')
@@ -154,7 +92,6 @@ if (!activeAuthChange) {
 }
 
 // ─── 5. ONBOARDING MODAL ──────────────────────────────────────────────────────
-
 function injectOnboardingModal() {
     if (document.getElementById('onboarding-modal')) return;
 
@@ -260,7 +197,6 @@ function applyLocationToUI(institution, region) {
 }
 
 // ─── 6. AUTH ACTIONS ──────────────────────────────────────────────────────────
-
 window.login = async function () {
     try {
         document.getElementById('login-modal')?.classList.add('hidden');
@@ -276,7 +212,7 @@ window.logout = async function () {
     try {
         unsubscribeFeed();
         if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
-        await signOutUser();
+        await authSignOut();
         window.navigateTo('feed');
     } catch (err) {
         console.error("Logout failure:", err);
@@ -288,7 +224,6 @@ window.signOutUser = async function () {
 };
 
 // ─── 7. FEED SUBSCRIPTION HELPERS ────────────────────────────────────────────
-
 function unsubscribeFeed() {
     if (currentFeedChan) {
         supabase.removeChannel(currentFeedChan);
@@ -316,6 +251,7 @@ async function subscribeFeed(queryFactory = null) {
 
     try {
         const data = await fetchFeedSnapshot(queryFactory);
+        // FIX #2: Always normalise to { id, data } shape so toggleCartItem can find posts
         allCachedPosts = data.map(item => ({ id: item.id, data: item }));
         renderFeedFromCache();
     } catch (err) {
@@ -341,7 +277,6 @@ async function subscribeFeed(queryFactory = null) {
 }
 
 // ─── 8. NAVIGATION CONTROL ────────────────────────────────────────────────────
-
 function clearNavHighlights() {
     document.querySelectorAll('nav button, .bottom-nav button, nav a').forEach(b => {
         b.classList.remove('nav-active');
@@ -388,7 +323,6 @@ window.navigateTo = function (viewId, btn = null) {
     clearNavHighlights();
     setNavHighlight(btn, viewId);
 
-    // ── Module View Integrations ──
     if (viewId === 'profile') {
         const gate    = document.getElementById('profile-auth-gate');
         const content = document.getElementById('profile-content');
@@ -441,9 +375,8 @@ window.togglePostModal = function () {
 };
 
 // ─── 9. DETAIL MODAL ──────────────────────────────────────────────────────────
-
 window.openDetail = async function (postId) {
-    const modal = document.getElementById('detail-modal');
+    const modal   = document.getElementById('detail-modal');
     const content = document.getElementById('detail-content');
     if (!modal || !content) return;
 
@@ -462,9 +395,38 @@ window.openDetail = async function (postId) {
         const isOwn       = viewer && d.user_id === viewer.id;
         const isFollowing = (!isOwn && viewer) ? await checkFollowing(d.user_id) : false;
 
-        const mediaBlock = d.media_type === 'video'
-            ? `<video class="w-full aspect-video object-cover" controls autoplay src="${esc(d.media_url)}"></video>`
-            : `<img class="w-full object-cover" src="${esc(d.media_url)}" alt="Post Media">`;
+        // FIX #5: Parse JSON array of URLs for carousel display
+        let mediaUrls = [];
+        if (d.media_url) {
+            if (d.media_url.startsWith('[')) {
+                try { mediaUrls = JSON.parse(d.media_url); } catch(_) { mediaUrls = [d.media_url]; }
+            } else {
+                mediaUrls = [d.media_url];
+            }
+        }
+
+        // Build swipeable carousel if multiple images, single view otherwise
+        let mediaBlock = '';
+        if (mediaUrls.length > 1) {
+            const slides = mediaUrls.map((url, i) =>
+                d.media_type === 'video'
+                    ? `<video class="carousel-slide w-full aspect-video object-cover shrink-0 snap-start" ${i === 0 ? 'autoplay' : ''} controls src="${esc(url)}"></video>`
+                    : `<img class="carousel-slide w-full object-cover shrink-0 snap-start" src="${esc(url)}" alt="Image ${i+1}">`
+            ).join('');
+            mediaBlock = `
+                <div class="relative w-full">
+                    <div id="detail-carousel" class="flex overflow-x-auto snap-x snap-mandatory scroll-smooth no-scrollbar" style="scroll-snap-type:x mandatory;">
+                        ${slides}
+                    </div>
+                    <div class="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
+                        ${mediaUrls.map((_, i) => `<div class="carousel-dot w-1.5 h-1.5 rounded-full ${i === 0 ? 'bg-amber-400' : 'bg-white/40'}"></div>`).join('')}
+                    </div>
+                </div>`;
+        } else if (mediaUrls.length === 1) {
+            mediaBlock = d.media_type === 'video'
+                ? `<video class="w-full aspect-video object-cover" controls autoplay src="${esc(mediaUrls[0])}"></video>`
+                : `<img class="w-full object-cover" src="${esc(mediaUrls[0])}" alt="Post Media">`;
+        }
 
         const followBlock = (!isOwn && viewer) ? `
             <button
@@ -476,10 +438,10 @@ window.openDetail = async function (postId) {
                 ${isFollowing ? '✓ Following' : '+ Follow'}
             </button>` : '';
 
-        const isAddedToCart = userCartList.some(item => item.id === d.id);
-        const cartText = isAddedToCart ? "✓ Added to Chart" : "Add to Chart List";
-        const cartColorClass = isAddedToCart 
-            ? "bg-slate-800 border border-slate-700 text-slate-400" 
+        const isAddedToCart  = userCartList.some(item => item.id === d.id);
+        const cartText       = isAddedToCart ? "✓ Added to Chart" : "Add to Chart List";
+        const cartColorClass = isAddedToCart
+            ? "bg-slate-800 border border-slate-700 text-slate-400"
             : "bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
 
         const ctaLabel = d.type === 'skill' ? 'Book Technical Service' : 'Contact Seller';
@@ -507,9 +469,8 @@ window.openDetail = async function (postId) {
                     ${followBlock}
                 </div>
                 <p class="text-slate-400 leading-relaxed font-light">${esc(d.description) || 'No description provided.'}</p>
-                
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6">
-                    <button 
+                    <button
                         id="detail-cart-btn-${escAttr(d.id)}"
                         onclick="window.toggleCartItem('${escAttr(d.id)}')"
                         class="w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs ${cartColorClass}">
@@ -520,6 +481,20 @@ window.openDetail = async function (postId) {
                     </button>
                 </div>
             </div>`;
+
+        // Carousel dot tracker
+        if (mediaUrls.length > 1) {
+            const carousel = document.getElementById('detail-carousel');
+            const dots     = content.querySelectorAll('.carousel-dot');
+            carousel?.addEventListener('scroll', () => {
+                const idx = Math.round(carousel.scrollLeft / carousel.clientWidth);
+                dots.forEach((d, i) => {
+                    d.classList.toggle('bg-amber-400', i === idx);
+                    d.classList.toggle('bg-white/40',  i !== idx);
+                });
+            }, { passive: true });
+        }
+
     } catch (e) {
         console.error("Detail load error:", e);
         content.innerHTML = `<p class="p-10 text-center text-red-500 text-xs">Error loading post.</p>`;
@@ -531,7 +506,6 @@ window.closeDetailModal = function () {
 };
 
 // ─── 10. LOGIN MODAL ──────────────────────────────────────────────────────────
-
 window.openLoginModal = function () {
     document.getElementById('signup-modal')?.classList.add('hidden');
     document.getElementById('login-modal')?.classList.remove('hidden');
@@ -543,7 +517,6 @@ window.closeLoginModal = function () {
 };
 
 // ─── 10b. EMAIL AUTH ──────────────────────────────────────────────────────────
-
 window.signInWithEmailPassword = async function (email, password) {
     const btn = document.querySelector('#login-modal button[onclick="window.loginWithEmail()"]');
     try {
@@ -581,34 +554,22 @@ window.registerWithEmail = async function (name, email, password) {
 };
 
 // ─── 11. AVATAR UPLOAD ────────────────────────────────────────────────────────
-
 window.handleAvatarUpload = async function (inputEl) {
     const file = inputEl?.files?.[0];
     if (!file) return;
 
-    if (!currentUserData) {
-        showToast('Please sign in first.');
-        return;
-    }
-
-    if (!file.type.startsWith('image/')) {
-        showToast('Please choose an image file.');
-        return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-        showToast('Image must be under 5 MB.');
-        return;
-    }
+    if (!currentUserData) { showToast('Please sign in first.'); return; }
+    if (!file.type.startsWith('image/')) { showToast('Please choose an image file.'); return; }
+    if (file.size > 5 * 1024 * 1024) { showToast('Image must be under 5 MB.'); return; }
 
     const previewEl = document.getElementById('profile-ui-avatar');
-    const localURL = URL.createObjectURL(file);
+    const localURL  = URL.createObjectURL(file);
     if (previewEl) previewEl.src = localURL;
 
     showToast('Uploading avatar…');
 
     try {
-        const ext = file.name.split('.').pop();
+        const ext         = file.name.split('.').pop();
         const storagePath = `${currentUserData.id}/avatar.${ext}`;
 
         const { error: uploadErr } = await supabase.storage
@@ -618,7 +579,6 @@ window.handleAvatarUpload = async function (inputEl) {
         if (uploadErr) throw uploadErr;
 
         const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(storagePath);
-
         const dynamicUrl = `${publicUrl}?t=${Date.now()}`;
 
         const { error: dbErr } = await supabase
@@ -634,14 +594,11 @@ window.handleAvatarUpload = async function (inputEl) {
         currentUserData.user_metadata.avatar_url = publicUrl;
 
         if (previewEl) previewEl.src = publicUrl;
-
         showToast('Avatar updated! ✓');
     } catch (err) {
         console.error('Avatar upload error:', err);
         if (previewEl) {
-            previewEl.src =
-                currentUserData.user_metadata?.avatar_url ||
-                'https://ui-avatars.com/api/?name=User';
+            previewEl.src = currentUserData.user_metadata?.avatar_url || 'https://ui-avatars.com/api/?name=User';
         }
         showToast('Upload failed. Please try again.');
     } finally {
@@ -650,20 +607,16 @@ window.handleAvatarUpload = async function (inputEl) {
 };
 
 // ─── 11b. AVATAR LONG-PRESS MODAL ────────────────────────────────────────────
-
 let _avatarPressTimer = null;
-
 function _initAvatarLongPress() {
-    const profileAvatar  = document.getElementById('profile-ui-avatar');
-    const avatarModal    = document.getElementById('avatarModal');
-    const modalAvatarImg = document.getElementById('modalAvatarImg');
-    const closeAvatarBtn = document.getElementById('closeAvatarBtn');
-    const copyImageBtn   = document.getElementById('copyImageBtn');
+    const profileAvatar    = document.getElementById('profile-ui-avatar');
+    const avatarModal      = document.getElementById('avatarModal');
+    const modalAvatarImg   = document.getElementById('modalAvatarImg');
+    const closeAvatarBtn   = document.getElementById('closeAvatarBtn');
+    const copyImageBtn     = document.getElementById('copyImageBtn');
     const downloadImageBtn = document.getElementById('downloadImageBtn');
 
-    if (!profileAvatar || !avatarModal || !modalAvatarImg) {
-        return;
-    }
+    if (!profileAvatar || !avatarModal || !modalAvatarImg) return;
 
     function openAvatarModal(src) {
         modalAvatarImg.src = src;
@@ -672,38 +625,26 @@ function _initAvatarLongPress() {
 
     function startPress() {
         clearTimeout(_avatarPressTimer);
-        _avatarPressTimer = setTimeout(() => {
-            openAvatarModal(profileAvatar.src);
-        }, 600);
+        _avatarPressTimer = setTimeout(() => { openAvatarModal(profileAvatar.src); }, 600);
     }
 
-    function cancelPress() {
-        clearTimeout(_avatarPressTimer);
-    }
+    function cancelPress() { clearTimeout(_avatarPressTimer); }
 
     profileAvatar.addEventListener('touchstart',  startPress,  { passive: true });
     profileAvatar.addEventListener('touchend',    cancelPress);
     profileAvatar.addEventListener('touchmove',   cancelPress);
-
     profileAvatar.addEventListener('mousedown',   startPress);
     profileAvatar.addEventListener('mouseup',     cancelPress);
     profileAvatar.addEventListener('mouseleave',  cancelPress);
 
-    closeAvatarBtn?.addEventListener('click', () => {
-        avatarModal.classList.add('hidden');
-    });
-
-    avatarModal.addEventListener('click', (e) => {
-        if (e.target === avatarModal) avatarModal.classList.add('hidden');
-    });
+    closeAvatarBtn?.addEventListener('click', () => { avatarModal.classList.add('hidden'); });
+    avatarModal.addEventListener('click', (e) => { if (e.target === avatarModal) avatarModal.classList.add('hidden'); });
 
     copyImageBtn?.addEventListener('click', async () => {
         try {
             const response = await fetch(modalAvatarImg.src);
             const blob = await response.blob();
-            await navigator.clipboard.write([
-                new ClipboardItem({ [blob.type]: blob })
-            ]);
+            await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
             showToast('✓ Image copied to clipboard!');
         } catch (err) {
             console.error('Copy failed:', err);
@@ -714,11 +655,11 @@ function _initAvatarLongPress() {
     downloadImageBtn?.addEventListener('click', async () => {
         try {
             const response = await fetch(modalAvatarImg.src);
-            const blob = await response.blob();
-            const blobUrl = window.URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = blobUrl;
-            link.download = `avatar-${Date.now()}.jpg`;
+            const blob     = await response.blob();
+            const blobUrl  = window.URL.createObjectURL(blob);
+            const link     = document.createElement('a');
+            link.href      = blobUrl;
+            link.download  = `avatar-${Date.now()}.jpg`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -739,29 +680,32 @@ if (document.readyState === 'loading') {
 
 // ─── 12. CARD RENDERERS ───────────────────────────────────────────────────────
 
-window.likePost = function (postId, btn) {
-    const liked = btn.dataset.liked === 'true';
+// FIX #4: Like persistence via localStorage + DB (optimistic local)
+window.likePost = async function (postId, btn) {
+    const liked   = likedPostIds.has(postId);
     const countEl = btn.querySelector('.like-count');
-    const icon = btn.querySelector('i');
+    const icon    = btn.querySelector('i');
 
     if (liked) {
-        btn.dataset.liked = 'false';
+        likedPostIds.delete(postId);
         icon.className = 'far fa-heart';
         btn.classList.remove('text-rose-500');
         btn.classList.add('text-slate-400');
         if (countEl) countEl.textContent = Math.max(0, parseInt(countEl.textContent) - 1);
     } else {
-        btn.dataset.liked = 'true';
+        likedPostIds.add(postId);
         icon.className = 'fas fa-heart';
         btn.classList.remove('text-slate-400');
         btn.classList.add('text-rose-500');
         if (countEl) countEl.textContent = parseInt(countEl.textContent) + 1;
     }
+
+    // Persist like set so it survives re-renders
+    localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
 };
 
 window.sharePost = function (postId, title) {
     const text = `Check out "${title}" on CampusMarket!`;
-
     if (navigator.share) {
         navigator.share({ title, text, url: window.location.href }).catch(() => {});
     } else {
@@ -772,10 +716,10 @@ window.sharePost = function (postId, title) {
 
 window.downloadMedia = function (mediaUrl, title) {
     if (!mediaUrl) return;
-    const a = document.createElement('a');
-    a.href = mediaUrl;
+    const a    = document.createElement('a');
+    a.href     = mediaUrl;
     a.download = title || 'campus-market';
-    a.target = '_blank';
+    a.target   = '_blank';
     a.click();
 };
 
@@ -784,89 +728,128 @@ window.contactSeller = function (userName, postTitle) {
         showToast('Please sign in to contact the seller.');
         return;
     }
-
     window.navigateTo('dms');
     showToast(`Starting chat with ${userName}…`);
     if (typeof window.openDM === 'function') window.openDM(null, userName);
 };
 
-// ─── OPTIMIZED COMMENT RETRIEVAL & REALTIME STREAM FROM DATABASE ───
+// FIX #3: Comments persist across re-renders via openCommentIds set + stable channel keyed by postId
 window.toggleComments = async function (postId) {
     const commentSection = document.getElementById(`comments-${postId}`);
-    const list = document.getElementById(`comment-list-${postId}`);
+    const list           = document.getElementById(`comment-list-${postId}`);
     if (!commentSection || !list) return;
 
-    commentSection.classList.toggle('hidden');
+    const isOpen = !commentSection.classList.contains('hidden');
+
+    if (isOpen) {
+        commentSection.classList.add('hidden');
+        openCommentIds.delete(postId);
+        return;
+    }
+
+    commentSection.classList.remove('hidden');
+    openCommentIds.add(postId);
+
+    list.innerHTML = `<p class="text-[10px] text-slate-500 animate-pulse py-2 pl-1">Loading comments...</p>`;
+
+    const fetchAndRender = async () => {
+        const { data: comments, error } = await supabase
+            .from('comments')
+            .select('*')
+            .eq('post_id', postId)
+            .order('created_at', { ascending: true });
+
+        if (error) throw error;
+        list.innerHTML = '';
+
+        if (!comments || comments.length === 0) {
+            list.innerHTML = `<p class="text-[10px] text-slate-600 italic py-2 pl-1">No comments yet. Start the chat!</p>`;
+            return;
+        }
+
+        comments.forEach(c => {
+            const item = document.createElement('div');
+            item.className = 'flex gap-2 items-start text-left mt-2';
+            item.innerHTML = `
+                <img src="${esc(c.user_avatar) || 'https://ui-avatars.com/api/?name=U'}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
+                <div class="bg-slate-800 rounded-2xl px-3 py-2 flex-1 border border-slate-700/20">
+                    <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(c.user_name)}</p>
+                    <p class="text-xs text-slate-200 mt-0.5">${esc(c.text)}</p>
+                </div>`;
+            list.appendChild(item);
+        });
+    };
+
+    try {
+        await fetchAndRender();
+    } catch (err) {
+        console.error("Error loading comments:", err);
+        list.innerHTML = `<p class="text-[10px] text-red-400 py-1 pl-1">Failed to sync comments.</p>`;
+        return;
+    }
+
+    // Use stable channel id so it doesn't duplicate if section is already open
+    const chanId = `comments-live-${postId}`;
+    if (currentCommentsChan?._topic === chanId) return; // already subscribed
 
     if (currentCommentsChan) {
         supabase.removeChannel(currentCommentsChan);
         currentCommentsChan = null;
     }
 
-    if (!commentSection.classList.contains('hidden')) {
-        list.innerHTML = `<p class="text-[10px] text-slate-500 animate-pulse py-2 pl-1">Loading comments...</p>`;
-        
-        const fetchAndRender = async () => {
-            const { data: comments, error } = await supabase
-                .from('comments')
-                .select('*')
-                .eq('post_id', postId)
-                .order('created_at', { ascending: true });
-
-            if (error) throw error;
-            list.innerHTML = '';
-
-            if (!comments || comments.length === 0) {
-                list.innerHTML = `<p class="text-[10px] text-slate-600 italic py-2 pl-1">No comments yet. Start the chat!</p>`;
-                return;
-            }
-
-            comments.forEach(c => {
-                const item = document.createElement('div');
-                item.className = 'flex gap-2 items-start text-left mt-2';
-                item.innerHTML = `
-                    <img src="${esc(c.user_avatar) || 'https://ui-avatars.com/api/?name=U'}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
-                    <div class="bg-slate-800 rounded-2xl px-3 py-2 flex-1 border border-slate-700/20">
-                        <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(c.user_name)}</p>
-                        <p class="text-xs text-slate-200 mt-0.5">${esc(c.text)}</p>
-                    </div>`;
-                list.appendChild(item);
-            });
-        };
-
-        try {
-            await fetchAndRender();
-        } catch (err) {
-            console.error("Error loading comments:", err);
-            list.innerHTML = `<p class="text-[10px] text-red-400 py-1 pl-1">Failed to sync comments.</p>`;
-        }
-
-        // Setup real-time postgres stream dependency for comments panel
-        currentCommentsChan = supabase
-            .channel(`comments-live-${postId}`)
-            .on("postgres_changes", { event: "INSERT", schema: "public", table: "comments", filter: `post_id=eq.${postId}` }, () => {
-                fetchAndRender().catch(console.error);
-            })
-            .subscribe();
-    }
+    currentCommentsChan = supabase
+        .channel(chanId)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "comments", filter: `post_id=eq.${postId}` }, () => {
+            fetchAndRender().catch(console.error);
+        })
+        .subscribe();
 };
 
+// FIX #6: Instagram-style card — user row at top, media full-width, actions below
 function renderFeedCard(id, d) {
     const viewer     = currentUserData;
     const showFollow = viewer && d.user_id !== viewer.id;
     const isOwnPost  = viewer && d.user_id === viewer.id;
 
-    const mediaBlock = d.media_type === 'video'
-        ? `<div class="w-full max-h-[75vh] bg-black flex items-center justify-center overflow-hidden">
-            <video class="w-full h-auto max-h-[75vh] object-contain" autoplay muted loop playsinline src="${esc(d.media_url)}"></video>
-           </div>`
-        : `<div class="w-full max-h-[75vh] bg-slate-950 flex items-center justify-center overflow-hidden">
-            <img class="w-full h-auto max-h-[75vh] object-contain" src="${esc(d.media_url)}" alt="${esc(d.title)}">
-           </div>`;
+    // FIX #5: Parse JSON media array — show all images as swipeable carousel
+    let mediaUrls = [];
+    if (d.media_url) {
+        if (d.media_url.startsWith('[')) {
+            try { mediaUrls = JSON.parse(d.media_url); } catch(_) { mediaUrls = [d.media_url]; }
+        } else {
+            mediaUrls = [d.media_url];
+        }
+    }
+
+    let mediaBlock = '';
+    if (mediaUrls.length > 1) {
+        const slides = mediaUrls.map((url, i) =>
+            d.media_type === 'video'
+                ? `<video class="w-full aspect-square object-cover shrink-0 snap-start" ${i === 0 ? 'autoplay muted loop playsinline' : 'muted loop playsinline'} src="${esc(url)}"></video>`
+                : `<img class="w-full aspect-square object-cover shrink-0 snap-start" src="${esc(url)}" alt="${esc(d.title)} ${i+1}">`
+        ).join('');
+        mediaBlock = `
+            <div class="relative w-full" onclick="openDetail('${escAttr(id)}')">
+                <div class="feed-carousel-${escAttr(id)} flex overflow-x-auto snap-x snap-mandatory scroll-smooth no-scrollbar cursor-pointer" style="scroll-snap-type:x mandatory;">
+                    ${slides}
+                </div>
+                <div class="absolute top-2 right-2 bg-black/60 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                    <span class="carousel-counter-${escAttr(id)}">1</span>/${mediaUrls.length}
+                </div>
+            </div>`;
+    } else if (mediaUrls.length === 1) {
+        mediaBlock = d.media_type === 'video'
+            ? `<div onclick="openDetail('${escAttr(id)}')" class="w-full bg-black cursor-pointer">
+                <video class="w-full aspect-square object-cover" autoplay muted loop playsinline src="${esc(mediaUrls[0])}"></video>
+               </div>`
+            : `<div onclick="openDetail('${escAttr(id)}')" class="w-full cursor-pointer">
+                <img class="w-full aspect-square object-cover" src="${esc(mediaUrls[0])}" alt="${esc(d.title)}">
+               </div>`;
+    }
 
     const followBlock = showFollow ? `
         <button
-            class="follow-btn px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700"
+            class="follow-btn px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700 ml-2"
             data-follow-uid="${esc(d.user_id)}"
             data-active="false"
             onclick="toggleFollow('${escAttr(d.user_id)}','${escAttr(d.user_name)}','${escAttr(d.user_avatar)}')">
@@ -876,92 +859,119 @@ function renderFeedCard(id, d) {
     const deleteBlock = isOwnPost ? `
         <button
             onclick="event.stopPropagation(); window.deletePost('${escAttr(id)}')"
-            class="px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-red-950/40 text-red-400 border border-red-900/50 hover:bg-red-900 hover:text-white">
-            <i class="fas fa-trash-can mr-1"></i> Delete
+            class="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-red-950/40 text-red-400 border border-red-900/50">
+            <i class="fas fa-trash-can"></i>
         </button>` : '';
 
-    const isAddedToCart = userCartList.some(item => item.id === id);
-    const feedCartIconClass = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
+    // FIX #4: Restore liked state from persistent set
+    const isLiked       = likedPostIds.has(id);
+    const heartClass    = isLiked ? 'fas fa-heart text-rose-500' : 'far fa-heart text-slate-300';
+    const likedData     = isLiked ? 'true' : 'false';
+
+    const isAddedToCart  = userCartList.some(item => item.id === id);
+    const bookmarkClass  = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
 
     return `
-    <div class="bg-slate-900 rounded-2xl overflow-hidden border border-slate-800/60 shadow-xl max-w-md mx-auto my-2">
-        <div onclick="openDetail('${escAttr(id)}')" class="cursor-pointer relative">
-            ${mediaBlock}
+    <div class="bg-slate-900 border-b border-slate-800/60 max-w-md mx-auto" id="feed-card-${escAttr(id)}">
+
+        <!-- TOP ROW: avatar · name · follow/delete -->
+        <div class="flex items-center justify-between px-3 py-2.5">
+            <div class="flex items-center gap-2.5 min-w-0">
+                <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-8 h-8 rounded-full border border-slate-700 object-cover shrink-0" alt="">
+                <div class="min-w-0">
+                    <p class="text-[12px] font-bold text-white leading-tight truncate">${esc(d.user_name) || 'Student'}</p>
+                    <p class="text-[10px] text-slate-500 leading-tight truncate">${esc(d.institution) || ''}</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+                ${followBlock}
+                ${deleteBlock}
+            </div>
         </div>
-        <div class="p-3 space-y-2.5">
-            <div class="flex justify-between items-start gap-2">
-                <div class="flex-1 min-w-0 text-left">
-                    <p class="font-bold text-white text-sm tracking-tight line-clamp-2">${esc(d.title)}</p>
-                    <p class="text-slate-400 text-[10px] font-medium mt-0.5">${esc(d.institution) || ''} · ${esc(d.type) || 'product'}</p>
-                </div>
-                <span class="text-amber-400 font-black text-sm shrink-0 bg-amber-400/10 px-2 py-0.5 rounded-lg border border-amber-400/20">GH₵${esc(String(d.price || 0))}</span>
-            </div>
 
-            <div class="feed-profile-trigger flex items-center justify-between gap-3 pt-0.5 cursor-pointer hover:opacity-90 transition">
-                <div class="flex items-center gap-2 min-w-0">
-                    <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-6 h-6 rounded-full border border-slate-700 object-cover" alt="">
-                    <span class="text-[11px] text-slate-300 font-semibold truncate">${esc(d.user_name) || 'Student'}</span>
-                </div>
-                <div class="flex gap-1">
-                    ${followBlock}
-                    ${deleteBlock}
-                </div>
-            </div>
+        <!-- MEDIA (square crop, swipeable if multi) -->
+        ${mediaBlock}
 
-            <div class="border-t border-slate-800/80 pt-2 flex items-center justify-between px-1">
-                <div class="flex items-center gap-4">
-                    <button onclick="likePost('${escAttr(id)}', this)" class="text-slate-300 hover:text-rose-500 transition active:scale-90 flex items-center gap-1">
-                        <i class="far fa-heart text-lg"></i>
-                        <span class="like-count text-xs font-medium">0</span>
-                    </button>
-                    <button onclick="toggleComments('${escAttr(id)}')" class="text-slate-300 hover:text-amber-400 transition active:scale-90 flex items-center gap-1">
-                        <i class="far fa-comment text-lg"></i>
-                    </button>
-                    <button onclick="sharePost('${escAttr(id)}', '${escAttr(d.title)}')" class="text-slate-300 hover:text-green-400 transition active:scale-90">
-                        <i class="far fa-paper-plane text-lg"></i>
-                    </button>
-                </div>
-                <div class="flex items-center gap-3">
-                    <button id="feed-cart-icon-${escAttr(id)}" onclick="window.toggleCartItem('${escAttr(id)}')" class="hover:text-amber-400 transition active:scale-90">
-                        <i class="${feedCartIconClass} text-base"></i>
-                    </button>
-                    <button onclick="downloadMedia('${escAttr(d.media_url)}', '${escAttr(d.title)}')" class="text-slate-400 hover:text-purple-400 transition">
-                        <i class="fas fa-arrow-down text-sm"></i>
-                    </button>
-                </div>
+        <!-- ACTION ROW -->
+        <div class="px-3 pt-2.5 pb-1 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+                <button onclick="likePost('${escAttr(id)}', this)" data-liked="${likedData}" class="flex items-center gap-1 active:scale-90 transition">
+                    <i class="${heartClass} text-xl"></i>
+                    <span class="like-count text-xs font-semibold text-slate-300">0</span>
+                </button>
+                <button onclick="toggleComments('${escAttr(id)}')" class="text-slate-300 hover:text-amber-400 transition active:scale-90">
+                    <i class="far fa-comment text-xl"></i>
+                </button>
+                <button onclick="sharePost('${escAttr(id)}', '${escAttr(d.title)}')" class="text-slate-300 hover:text-green-400 transition active:scale-90">
+                    <i class="far fa-paper-plane text-xl"></i>
+                </button>
             </div>
+            <div class="flex items-center gap-3">
+                <button id="feed-cart-icon-${escAttr(id)}" onclick="window.toggleCartItem('${escAttr(id)}')" class="hover:text-amber-400 transition active:scale-90">
+                    <i class="${bookmarkClass} text-xl"></i>
+                </button>
+                <button onclick="downloadMedia('${escAttr(mediaUrls[0] || '')}', '${escAttr(d.title)}')" class="text-slate-400 hover:text-purple-400 transition">
+                    <i class="fas fa-arrow-down text-base"></i>
+                </button>
+            </div>
+        </div>
 
+        <!-- CAPTION ROW -->
+        <div class="px-3 pb-1">
+            <div class="flex items-baseline gap-2 flex-wrap">
+                <span class="text-amber-400 font-black text-sm">GH₵${esc(String(d.price || 0))}</span>
+                <span class="text-[10px] text-slate-500 uppercase font-semibold">${esc(d.type) || 'product'}</span>
+            </div>
+            <p class="text-white text-[13px] font-semibold mt-0.5 leading-snug line-clamp-2">${esc(d.title)}</p>
+        </div>
+
+        <!-- CONTACT SELLER -->
+        <div class="px-3 pb-3">
             <button
                 onclick="contactSeller('${escAttr(d.user_name)}', '${escAttr(d.title)}')"
-                class="w-full flex items-center justify-center gap-1.5 bg-amber-400 hover:bg-amber-300 text-black font-extrabold py-2 rounded-xl text-[11px] uppercase tracking-wider transition active:scale-[0.98] shadow-md shadow-amber-400/5">
-                <i class="fas fa-bolt text-[10px]"></i>
-                Contact Seller
+                class="w-full flex items-center justify-center gap-1.5 bg-amber-400 text-black font-extrabold py-2.5 rounded-xl text-[11px] uppercase tracking-wider transition active:scale-[0.98]">
+                <i class="fas fa-bolt text-[10px]"></i> Contact Seller
             </button>
+        </div>
 
-            <div id="comments-${escAttr(id)}" class="hidden space-y-2 pt-1.5 border-t border-slate-800/60">
-                <div class="flex gap-2">
-                    <div class="flex-1 flex gap-1.5">
-                        <input
-                            type="text"
-                            placeholder="Add a comment…"
-                            class="flex-1 bg-slate-800/80 border border-slate-700/50 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
-                            onkeydown="if(event.key==='Enter') postComment('${escAttr(id)}', this)"
-                        >
-                    </div>
-                </div>
-                <div id="comment-list-${escAttr(id)}" class="max-h-36 overflow-y-auto space-y-1.5 custom-scrollbar"></div>
+        <!-- COMMENTS -->
+        <div id="comments-${escAttr(id)}" class="hidden px-3 pb-3 space-y-2 border-t border-slate-800/60 pt-2">
+            <div class="flex gap-1.5">
+                <input
+                    type="text"
+                    placeholder="Add a comment…"
+                    class="flex-1 bg-slate-800/80 border border-slate-700/50 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
+                    onkeydown="if(event.key==='Enter') postComment('${escAttr(id)}', this)"
+                >
             </div>
+            <div id="comment-list-${escAttr(id)}" class="max-h-36 overflow-y-auto space-y-1.5 custom-scrollbar"></div>
         </div>
     </div>`;
+}
+
+// After rendering, wire up carousel counters
+function wireCarouselCounters() {
+    allCachedPosts.forEach(({ id, data: d }) => {
+        if (!d.media_url || !d.media_url.startsWith('[')) return;
+        let urls = [];
+        try { urls = JSON.parse(d.media_url); } catch(_) { return; }
+        if (urls.length < 2) return;
+
+        const carousel = document.querySelector(`.feed-carousel-${CSS.escape(id)}`);
+        const counter  = document.querySelector(`.carousel-counter-${CSS.escape(id)}`);
+        if (!carousel || !counter) return;
+
+        carousel.addEventListener('scroll', () => {
+            const idx = Math.round(carousel.scrollLeft / carousel.clientWidth) + 1;
+            counter.textContent = idx;
+        }, { passive: true });
+    });
 }
 
 window.postComment = async function (postId, inputEl) {
     const text = inputEl?.value?.trim();
     if (!text) return;
-    if (!currentUserData) {
-        showToast('Sign in to comment.');
-        return;
-    }
+    if (!currentUserData) { showToast('Sign in to comment.'); return; }
 
     const list = document.getElementById(`comment-list-${postId}`);
     if (!list) return;
@@ -974,17 +984,17 @@ window.postComment = async function (postId, inputEl) {
         const { error } = await supabase
             .from("comments")
             .insert({
-                post_id: postId,
-                user_id: currentUserData.id,
-                user_name: name,
+                post_id:     postId,
+                user_id:     currentUserData.id,
+                user_name:   name,
                 user_avatar: avatar,
-                text: text,
-                created_at: new Date().toISOString()
+                text:        text,
+                created_at:  new Date().toISOString()
             });
 
         if (error) throw error;
 
-        if(list.innerText.includes("No comments yet")) list.innerHTML = '';
+        if (list.innerText.includes("No comments yet")) list.innerHTML = '';
 
         const item = document.createElement('div');
         item.className = 'flex gap-2 items-start text-left mt-1.5';
@@ -1005,39 +1015,49 @@ window.postComment = async function (postId, inputEl) {
 };
 
 function renderGridItem(id, d) {
+    let thumbUrl = d.media_url;
+    if (d.media_url && d.media_url.startsWith('[')) {
+        try { thumbUrl = JSON.parse(d.media_url)[0]; } catch(_) {}
+    }
     return `
     <div onclick="openDetail('${escAttr(id)}')" class="aspect-square bg-slate-900 rounded-lg overflow-hidden relative border border-slate-800 cursor-pointer active:scale-95 transition">
         ${d.media_type === 'video' ? '<div class="absolute top-2 right-2 text-[10px]">📹</div>' : ''}
-        <img class="w-full h-full object-cover opacity-60" src="${esc(d.media_url)}" alt="">
+        <img class="w-full h-full object-cover opacity-60" src="${esc(thumbUrl)}" alt="">
         <span class="absolute bottom-1 left-1 text-[8px] font-bold text-white uppercase truncate pr-1">${esc(d.title)}</span>
     </div>`;
 }
 
-// ─── 12b. CHART / CART LIST LOGIC ──────────────────────────────────────────
-
+// ─── 12b. CHART / CART LIST LOGIC ────────────────────────────────────────────
 window.toggleCartItem = function (postId) {
-    const postRecord = allCachedPosts.find(p => p.id === postId)?.data;
+    // FIX #2: More robust post lookup — handles both { id, data } and flat shapes
+    let postRecord = allCachedPosts.find(p => p.id === postId)?.data;
+    if (!postRecord) {
+        // Fallback: maybe allCachedPosts contains flat objects (defensive)
+        postRecord = allCachedPosts.find(p => (p.data?.id || p.id) === postId);
+        if (postRecord && postRecord.data) postRecord = postRecord.data;
+    }
+
     if (!postRecord) {
         showToast("Cannot link listing instance data.");
         return;
     }
 
-    const index = userCartList.findIndex(item => item.id === postId);
-    let isAdded = false;
+    const index   = userCartList.findIndex(item => item.id === postId);
+    let isAdded   = false;
 
     if (index > -1) {
         userCartList.splice(index, 1);
         showToast("Removed from Chart List");
     } else {
         userCartList.push({
-            id: postId,
-            title: postRecord.title,
-            price: postRecord.price,
-            media_url: postRecord.media_url,
-            media_type: postRecord.media_type,
+            id:          postId,
+            title:       postRecord.title,
+            price:       postRecord.price,
+            media_url:   postRecord.media_url,
+            media_type:  postRecord.media_type,
             institution: postRecord.institution,
-            type: postRecord.type,
-            user_name: postRecord.user_name
+            type:        postRecord.type,
+            user_name:   postRecord.user_name
         });
         showToast("Added to Chart List! ✓");
         isAdded = true;
@@ -1045,7 +1065,6 @@ window.toggleCartItem = function (postId) {
 
     localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
 
-    // Update global visual nodes inline across view boundaries
     const feedIcon = document.getElementById(`feed-cart-icon-${postId}`)?.querySelector('i');
     if (feedIcon) {
         feedIcon.className = isAdded ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
@@ -1055,14 +1074,11 @@ window.toggleCartItem = function (postId) {
     if (detailBtn) {
         const labelText = detailBtn.querySelector('.cart-btn-label');
         if (labelText) labelText.textContent = isAdded ? "✓ Added to Chart" : "Add to Chart List";
-        if (isAdded) {
-            detailBtn.className = "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-800 border border-slate-700 text-slate-400";
-        } else {
-            detailBtn.className = "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
-        }
+        detailBtn.className = isAdded
+            ? "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-800 border border-slate-700 text-slate-400"
+            : "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
     }
 
-    // Refresh display view states instantly if open
     if (!document.getElementById('cart-container')?.classList.contains('hidden')) {
         renderCartListView();
     }
@@ -1072,7 +1088,6 @@ function renderCartListView() {
     const container = document.getElementById('cart-container');
     if (!container) return;
 
-    // Reset base structural layout template bounds
     container.innerHTML = `
         <div class="max-w-md mx-auto px-4 py-6 space-y-4 pb-28">
             <div class="text-left border-b border-slate-800 pb-3">
@@ -1094,11 +1109,15 @@ function renderCartListView() {
     }
 
     userCartList.forEach(item => {
+        let displayImg = item.media_url;
+        if (item.media_url && item.media_url.startsWith('[')) {
+            try { displayImg = JSON.parse(item.media_url)[0]; } catch(_) {}
+        }
         const card = document.createElement('div');
         card.className = "bg-slate-900 border border-slate-800/80 rounded-2xl p-3 flex gap-3 items-center relative text-left";
         card.innerHTML = `
             <div onclick="openDetail('${escAttr(item.id)}')" class="w-16 h-16 rounded-xl bg-slate-950 overflow-hidden shrink-0 cursor-pointer border border-slate-800">
-                <img class="w-full h-full object-cover" src="${esc(item.media_url)}" alt="">
+                <img class="w-full h-full object-cover" src="${esc(displayImg)}" alt="">
             </div>
             <div class="flex-1 min-w-0 cursor-pointer" onclick="openDetail('${escAttr(item.id)}')">
                 <h3 class="text-xs font-bold text-white truncate uppercase">${esc(item.title)}</h3>
@@ -1115,10 +1134,8 @@ function renderCartListView() {
 }
 
 // ─── 13. FOLLOW SYSTEM ────────────────────────────────────────────────────────
-
 async function checkFollowing(targetUserId) {
     if (!currentUserData || !targetUserId) return false;
-
     try {
         const { data, error } = await supabase
             .from("follows")
@@ -1126,19 +1143,12 @@ async function checkFollowing(targetUserId) {
             .eq("follower_id", currentUserData.id)
             .eq("following_id", targetUserId)
             .maybeSingle();
-
         return !!data && !error;
-    } catch {
-        return false;
-    }
+    } catch { return false; }
 }
 
 window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
-    if (!currentUserData) {
-        alert("Please login first.");
-        return;
-    }
-
+    if (!currentUserData) { alert("Please login first."); return; }
     if (targetUserId === currentUserData.id) return;
 
     try {
@@ -1155,13 +1165,13 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
         } else {
             const metadata = currentUserData.user_metadata || {};
             await supabase.from("follows").insert({
-                follower_id: currentUserData.id,
-                follower_name: metadata.full_name || 'Student',
-                follower_avatar: metadata.avatar_url || '',
-                following_id: targetUserId,
-                following_name: targetName,
+                follower_id:      currentUserData.id,
+                follower_name:    metadata.full_name || 'Student',
+                follower_avatar:  metadata.avatar_url || '',
+                following_id:     targetUserId,
+                following_name:   targetName,
                 following_avatar: targetAvatar,
-                created_at: new Date().toISOString()
+                created_at:       new Date().toISOString()
             });
             updateFollowButtons(targetUserId, true);
         }
@@ -1176,8 +1186,8 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
 
 function updateFollowButtons(targetUserId, isFollowing) {
     const cardClass = isFollowing
-        ? 'follow-btn px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600'
-        : 'follow-btn px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700';
+        ? 'follow-btn px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600 ml-2'
+        : 'follow-btn px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700 ml-2';
 
     const detailClass = isFollowing
         ? 'follow-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600'
@@ -1194,13 +1204,11 @@ function updateFollowButtons(targetUserId, isFollowing) {
 
 async function refreshFollowButtonStates() {
     if (!currentUserData) return;
-
     try {
         const { data } = await supabase
             .from("follows")
             .select("following_id")
             .eq("follower_id", currentUserData.id);
-
         data?.forEach(row => updateFollowButtons(row.following_id, true));
     } catch (err) {
         console.warn("refreshFollowButtonStates failed silently:", err);
@@ -1209,12 +1217,10 @@ async function refreshFollowButtonStates() {
 
 window.deletePost = async function (postId) {
     if (!currentUserData) return;
-
     const confirmDelete = window.confirm("Are you sure you want to delete this listing permanently?");
     if (!confirmDelete) return;
 
     try {
-        // Fetch target row snapshot payload to access active image storage URLs before unlinking row entries
         const { data: currentPost, error: fetchErr } = await supabase
             .from("posts")
             .select("media_url")
@@ -1223,12 +1229,12 @@ window.deletePost = async function (postId) {
 
         if (fetchErr) throw fetchErr;
 
-        // Perform primary bucket unlinking procedures via public storage parser
         if (currentPost?.media_url) {
-            const pathParts = currentPost.media_url.split('/storage/v1/object/public/posts/');
-            const storagePath = pathParts[1];
-            if (storagePath) {
-                await supabase.storage.from("posts").remove([storagePath]);
+            const targets = currentPost.media_url.startsWith('[') ? JSON.parse(currentPost.media_url) : [currentPost.media_url];
+            for (const url of targets) {
+                const pathParts   = url.split('/storage/v1/object/public/posts/');
+                const storagePath = pathParts[1];
+                if (storagePath) await supabase.storage.from("posts").remove([storagePath]);
             }
         }
 
@@ -1240,7 +1246,6 @@ window.deletePost = async function (postId) {
 
         if (dbDeleteErr) throw dbDeleteErr;
 
-        // Evict item from Chart List structural arrays if present
         const cartIndex = userCartList.findIndex(item => item.id === postId);
         if (cartIndex > -1) {
             userCartList.splice(cartIndex, 1);
@@ -1248,7 +1253,6 @@ window.deletePost = async function (postId) {
         }
 
         showToast("Post deleted successfully! ✓");
-
         allCachedPosts = allCachedPosts.filter(item => item.id !== postId);
         renderFeedFromCache();
     } catch (err) {
@@ -1258,7 +1262,6 @@ window.deletePost = async function (postId) {
 };
 
 // ─── 14. FEED VIEWS ──────────────────────────────────────────────────────────
-
 async function loadFollowingFeed() {
     if (!currentUserData) return;
 
@@ -1302,11 +1305,13 @@ async function loadFollowingFeed() {
         feed.innerHTML = '';
         posts.forEach(d => { feed.innerHTML += renderFeedCard(d.id, d); });
         refreshFollowButtonStates();
+        wireCarouselCounters();
     } catch (err) {
         console.error("Following feed error:", err);
     }
 }
 
+// FIX #3: After re-render, re-open any comment sections that were open
 function renderFeedFromCache() {
     const feed = document.getElementById('posts-feed');
     if (!feed) return;
@@ -1326,11 +1331,39 @@ function renderFeedFromCache() {
         feed.innerHTML += renderFeedCard(id, d);
     });
 
+    // Re-open comments that were open before re-render
+    openCommentIds.forEach(postId => {
+        const section = document.getElementById(`comments-${postId}`);
+        if (section) {
+            section.classList.remove('hidden');
+            // Re-fetch comments silently
+            const list = document.getElementById(`comment-list-${postId}`);
+            if (list) {
+                supabase.from('comments').select('*').eq('post_id', postId).order('created_at', { ascending: true })
+                    .then(({ data: comments }) => {
+                        if (!comments || comments.length === 0) return;
+                        list.innerHTML = '';
+                        comments.forEach(c => {
+                            const item = document.createElement('div');
+                            item.className = 'flex gap-2 items-start text-left mt-2';
+                            item.innerHTML = `
+                                <img src="${esc(c.user_avatar) || 'https://ui-avatars.com/api/?name=U'}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
+                                <div class="bg-slate-800 rounded-2xl px-3 py-2 flex-1 border border-slate-700/20">
+                                    <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(c.user_name)}</p>
+                                    <p class="text-xs text-slate-200 mt-0.5">${esc(c.text)}</p>
+                                </div>`;
+                            list.appendChild(item);
+                        });
+                    }).catch(() => {});
+            }
+        }
+    });
+
     refreshFollowButtonStates();
+    wireCarouselCounters();
 }
 
 // ─── 15. FILTERING ────────────────────────────────────────────────────────────
-
 window.filterFeed = function (type, clickedBtn = null) {
     if (!isAuthInitialized) return;
 
@@ -1355,14 +1388,8 @@ window.filterFeed = function (type, clickedBtn = null) {
     }
 
     const queryFactory = () => {
-        let q = supabase
-            .from("posts")
-            .select("*");
-
-        if (type !== 'all') {
-            q = q.eq("type", type);
-        }
-
+        let q = supabase.from("posts").select("*");
+        if (type !== 'all') q = q.eq("type", type);
         return q.order("created_at", { ascending: false }).limit(FEED_LIMIT);
     };
 
@@ -1370,13 +1397,11 @@ window.filterFeed = function (type, clickedBtn = null) {
 };
 
 // ─── 16. SEARCH ──────────────────────────────────────────────────────────────
-
 window.runSearch = async function (term) {
     const resultsEl = document.getElementById('search-results');
     if (!resultsEl) return;
 
     const trimmedTerm = term.trim();
-
     if (!trimmedTerm) {
         window.navigateTo('feed');
         return;
@@ -1384,7 +1409,6 @@ window.runSearch = async function (term) {
 
     window.navigateTo('explore');
     resultsEl.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Searching Campus...</div>`;
-
     const lower = trimmedTerm.toLowerCase();
 
     if (!allCachedPosts || allCachedPosts.length === 0) {
@@ -1406,7 +1430,6 @@ window.runSearch = async function (term) {
     const matches = allCachedPosts.filter(item => {
         const d = item.data ? item.data : item;
         if (!d) return false;
-
         return (
             (d.title       || '').toLowerCase().includes(lower) ||
             (d.description || '').toLowerCase().includes(lower) ||
@@ -1434,15 +1457,15 @@ window.runSearch = async function (term) {
 
     matches.slice(0, SEARCH_RESULTS_CAP).forEach(item => {
         const id = item.id;
-        const d = item.data ? item.data : item;
+        const d  = item.data ? item.data : item;
         resultsEl.innerHTML += renderFeedCard(id, d);
     });
 
     refreshFollowButtonStates();
+    wireCarouselCounters();
 };
 
-// ─── 17. POST SUBMISSION ──────────────────────────────────────────────────────
-
+// ─── 17. POST SUBMISSION (FIX #5 — multi-file carousel upload) ───────────────
 window.handlePostSubmission = async function () {
     if (!currentUserData) {
         window.openLoginModal();
@@ -1453,62 +1476,63 @@ window.handlePostSubmission = async function () {
     const description = document.getElementById('postDescription')?.value.trim();
     const type        = document.getElementById('postType')?.value;
     const price       = document.getElementById('postPrice')?.value;
-    const mediaFile   = document.getElementById('mediaInput')?.files[0];
+    const mediaFiles  = document.getElementById('mediaInput')?.files;
     const submitBtn   = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
 
-    if (!title) {
-        showToast('Please enter a title.');
-        return;
-    }
+    if (!title) { showToast('Please enter a title.'); return; }
+    if (!mediaFiles || mediaFiles.length === 0) { showToast('Please attach at least one image or video.'); return; }
 
-    if (!mediaFile) {
-        showToast('Please attach an image or video.');
-        return;
-    }
-
-    if (submitBtn) {
-        submitBtn.textContent = 'Uploading...';
-        submitBtn.disabled = true;
-    }
+    if (submitBtn) { submitBtn.textContent = 'Uploading entries...'; submitBtn.disabled = true; }
 
     try {
-        const ext = mediaFile.name.split('.').pop();
-        const storagePath = `${currentUserData.id}/${Date.now()}.${ext}`;
+        const publicUrls      = [];
+        let primaryMediaType  = 'image';
 
-        const { error: uploadError } = await supabase.storage
-            .from("posts")
-            .upload(storagePath, mediaFile, { contentType: mediaFile.type });
+        for (let i = 0; i < mediaFiles.length; i++) {
+            const file        = mediaFiles[i];
+            const ext         = file.name.split('.').pop();
+            const storagePath = `${currentUserData.id}/${Date.now()}-${i}.${ext}`;
 
-        if (uploadError) throw uploadError;
+            const { error: uploadError } = await supabase.storage
+                .from("posts")
+                .upload(storagePath, file, { contentType: file.type });
 
-        const { data: { publicUrl } } = supabase.storage.from("posts").getPublicUrl(storagePath);
-        const mediaType = mediaFile.type.startsWith('video') ? 'video' : 'image';
+            if (uploadError) throw uploadError;
+
+            const { data: { publicUrl } } = supabase.storage.from("posts").getPublicUrl(storagePath);
+            publicUrls.push(publicUrl);
+
+            if (i === 0 && file.type.startsWith('video')) {
+                primaryMediaType = 'video';
+            }
+        }
 
         const institution = currentUserData.institution || document.getElementById('profileInstitution')?.value || 'Global';
-        const region      = currentUserData.region || document.getElementById('profileRegion')?.value || 'Global';
+        const region      = currentUserData.region      || document.getElementById('profileRegion')?.value      || 'Global';
         const metadata    = currentUserData.user_metadata || {};
 
-        const { error: insertError = null } = await supabase.from("posts").insert({
+        // Store as JSON array so carousel renderer can parse multiple images
+        const { error: insertError } = await supabase.from("posts").insert({
             title,
             description,
             type,
-            price: parseFloat(price) || 0,
-            media_url: publicUrl,
-            media_type: mediaType,
+            price:       parseFloat(price) || 0,
+            media_url:   JSON.stringify(publicUrls),
+            media_type:  primaryMediaType,
             institution,
             region,
-            user_name: metadata.full_name || 'Anonymous Student',
+            user_name:   metadata.full_name  || 'Anonymous Student',
             user_avatar: metadata.avatar_url || '',
-            user_id: currentUserData.id,
-            created_at: new Date().toISOString()
+            user_id:     currentUserData.id,
+            created_at:  new Date().toISOString()
         });
 
         if (insertError) throw insertError;
 
-        document.getElementById('postTitle').value = '';
+        document.getElementById('postTitle').value       = '';
         document.getElementById('postDescription').value = '';
-        document.getElementById('postPrice').value = '';
-        document.getElementById('mediaInput').value = '';
+        document.getElementById('postPrice').value       = '';
+        document.getElementById('mediaInput').value      = '';
 
         window.togglePostModal();
         showToast('Post published! 🎉');
@@ -1516,39 +1540,25 @@ window.handlePostSubmission = async function () {
         console.error("Post submission error:", err);
         showToast('Failed to publish. Please try again.');
     } finally {
+        // FIX: was "military:" (typo) — caused finally block to never run
         if (submitBtn) {
             submitBtn.textContent = 'Publish Instantly';
-            submitBtn.disabled = false;
+            submitBtn.disabled    = false;
         }
     }
 };
 
 // ─── 18. PROFILE STATS ───────────────────────────────────────────────────────
-
 async function loadProfileStats() {
     if (!currentUserData) return;
-
     try {
         const [followersRes, followingRes, postsRes] = await Promise.all([
-            supabase
-                .from("follows")
-                .select("", { count: "exact", head: true })
-                .eq("following_id", currentUserData.id),
-
-            supabase
-                .from("follows")
-                .select("", { count: "exact", head: true })
-                .eq("follower_id", currentUserData.id),
-
-            supabase
-                .from("posts")
-                .select("id, title, media_url, media_type")
-                .eq("user_id", currentUserData.id)
-                .order("created_at", { ascending: false })
+            supabase.from("follows").select("", { count: "exact", head: true }).eq("following_id", currentUserData.id),
+            supabase.from("follows").select("", { count: "exact", head: true }).eq("follower_id",  currentUserData.id),
+            supabase.from("posts").select("id, title, media_url, media_type").eq("user_id", currentUserData.id).order("created_at", { ascending: false })
         ]);
 
         const postsCount = postsRes.data ? postsRes.data.length : 0;
-
         setEl('profile-followers-count', followersRes.count || 0);
         setEl('profile-following-count', followingRes.count || 0);
         setEl('profile-posts-count', postsCount);
@@ -1556,17 +1566,12 @@ async function loadProfileStats() {
         const grid = document.getElementById('profile-grid');
         if (grid) {
             grid.innerHTML = '';
-            postsRes.data?.forEach(d => {
-                grid.innerHTML += renderGridItem(d.id, d);
-            });
+            postsRes.data?.forEach(d => { grid.innerHTML += renderGridItem(d.id, d); });
         }
-    } catch (err) {
-        console.warn("Profile stats error:", err);
-    }
+    } catch (err) { console.warn("Profile stats error:", err); }
 }
 
 // ─── 19. SETTINGS PERSISTENCE ────────────────────────────────────────────────
-
 window.initProfileSelects = function () {
     const regEl  = document.getElementById('profileRegion');
     const instEl = document.getElementById('profileInstitution');
@@ -1574,14 +1579,10 @@ window.initProfileSelects = function () {
     if (regEl && !regEl.dataset.populated) {
         regEl.innerHTML = buildOptions(ALL_REGIONS);
         regEl.dataset.populated = 'true';
-
         regEl.addEventListener('change', () => {
-            if (instEl) {
-                instEl.innerHTML = buildInstitutionOptions(regEl.value, instEl.value);
-            }
+            if (instEl) instEl.innerHTML = buildInstitutionOptions(regEl.value, instEl.value);
         });
     }
-
     if (instEl && !instEl.dataset.populated) {
         instEl.innerHTML = buildOptions(ALL_INSTITUTIONS);
         instEl.dataset.populated = 'true';
@@ -1590,29 +1591,20 @@ window.initProfileSelects = function () {
 
 document.getElementById('saveLocationBtn')?.addEventListener('click', async () => {
     if (!currentUserData) return;
-
     const institution = document.getElementById('profileInstitution')?.value;
     const region      = document.getElementById('profileRegion')?.value;
 
-    if (!institution || !region) {
-        showToast('Please select both a region and institution.');
-        return;
-    }
+    if (!institution || !region) { showToast('Please select both a region and institution.'); return; }
 
     try {
-        const { error } = await supabase
-            .from("profiles")
-            .update({ institution, region })
-            .eq("id", currentUserData.id);
-
+        const { error } = await supabase.from("profiles").update({ institution, region }).eq("id", currentUserData.id);
         if (error) throw error;
 
         currentUserData.institution = institution;
-        currentUserData.region = region;
+        currentUserData.region      = region;
 
         const locationEl = document.getElementById('profile-ui-location');
         if (locationEl) locationEl.textContent = `${institution} · ${region}`;
-
         showToast('Settings updated ✓');
     } catch (err) {
         console.error("Save settings error:", err);
@@ -1621,13 +1613,11 @@ document.getElementById('saveLocationBtn')?.addEventListener('click', async () =
 });
 
 // ─── 20. DM STUB ─────────────────────────────────────────────────────────────
-
 window.openDM = function (targetUserId, targetName) {
     console.warn(`[DMs] openDM called for ${targetUserId} (${targetName}) — not yet implemented.`);
 };
 
 // ─── 21. AUTH OBSERVER ───────────────────────────────────────────────────────
-
 if (activeAuthChange) {
     activeAuthChange(async (user) => {
         if (!navigator.onLine) {
@@ -1635,8 +1625,8 @@ if (activeAuthChange) {
             return;
         }
 
-        currentUserData = user;
-        const authProfileNav = document.getElementById('auth-profile-nav');
+        currentUserData          = user;
+        const authProfileNav     = document.getElementById('auth-profile-nav');
 
         if (typeof window.updateAuthButton === 'function') {
             window.updateAuthButton(user);
@@ -1644,42 +1634,27 @@ if (activeAuthChange) {
 
         if (user) {
             const metadata = user.user_metadata || {};
-
             document.getElementById('login-modal')?.classList.add('hidden');
             document.getElementById('signup-modal')?.classList.add('hidden');
             document.getElementById('onboarding-modal')?.remove();
 
             if (authProfileNav) {
-                authProfileNav.innerHTML = `
-                    <i class="fas fa-user text-lg"></i>
-                    <span class="text-[10px] uppercase font-bold tracking-wider">Profile</span>
-                `;
-                authProfileNav.onclick = function (e) {
-                    e.stopPropagation();
-                    window.navigateTo('profile', authProfileNav);
-                };
+                authProfileNav.innerHTML = `<i class="fas fa-user text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Profile</span>`;
+                authProfileNav.onclick = function (e) { e.stopPropagation(); window.navigateTo('profile', authProfileNav); };
             }
 
             const avatarEl = document.getElementById('profile-ui-avatar');
             const nameEl   = document.getElementById('profile-ui-name');
 
             try {
-                const { data: savedUserRow } = await supabase
-                    .from("profiles")
-                    .select("avatar, institution, region")
-                    .eq("id", user.id)
-                    .maybeSingle();
-
-                const savedAvatar =
-                    savedUserRow?.avatar ||
-                    metadata.avatar_url ||
-                    `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
+                const { data: savedUserRow } = await supabase.from("profiles").select("avatar, institution, region").eq("id", user.id).maybeSingle();
+                const savedAvatar = savedUserRow?.avatar || metadata.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
 
                 if (!currentUserData.user_metadata) currentUserData.user_metadata = {};
                 currentUserData.user_metadata.avatar_url = savedAvatar;
 
                 if (avatarEl) avatarEl.src = savedAvatar;
-                if (nameEl) nameEl.textContent = metadata.full_name || 'Campus Student';
+                if (nameEl)   nameEl.textContent = metadata.full_name || 'Campus Student';
 
                 window.initProfileSelects();
 
@@ -1687,19 +1662,13 @@ if (activeAuthChange) {
                     injectOnboardingModal();
                 } else {
                     currentUserData.institution = savedUserRow.institution || '';
-                    currentUserData.region = savedUserRow.region || '';
+                    currentUserData.region      = savedUserRow.region || '';
                     applyLocationToUI(savedUserRow.institution || '', savedUserRow.region || '');
                 }
             } catch (err) {
                 console.warn("User doc sync bypassed (using local auth state):", err);
-
-                if (avatarEl) {
-                    avatarEl.src =
-                        metadata.avatar_url ||
-                        `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
-                }
-                if (nameEl) nameEl.textContent = metadata.full_name || 'Campus Student';
-
+                if (avatarEl) avatarEl.src = metadata.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
+                if (nameEl)   nameEl.textContent = metadata.full_name || 'Campus Student';
                 window.initProfileSelects();
             }
 
@@ -1710,29 +1679,21 @@ if (activeAuthChange) {
 
             subscribeFeed();
             try { loadProfileStats(); } catch (_) {}
-
             _initAvatarLongPress();
-
         } else {
             unsubscribeFeed();
             if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
 
             if (authProfileNav) {
-                authProfileNav.innerHTML = `
-                    <i class="fas fa-sign-in-alt text-lg"></i>
-                    <span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>
-                `;
-                authProfileNav.onclick = function (e) {
-                    e.stopPropagation();
-                    window.openLoginModal();
-                };
+                authProfileNav.innerHTML = `<i class="fas fa-sign-in-alt text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>`;
+                authProfileNav.onclick = function (e) { e.stopPropagation(); window.openLoginModal(); };
             }
 
-            setEl('profile-ui-name', 'Campus Student');
-            setEl('profile-ui-location', 'Global Network');
-            setEl('profile-followers-count', '0');
-            setEl('profile-following-count', '0');
-            setEl('profile-posts-count', '0');
+            setEl('profile-ui-name',           'Campus Student');
+            setEl('profile-ui-location',       'Global Network');
+            setEl('profile-followers-count',   '0');
+            setEl('profile-following-count',   '0');
+            setEl('profile-posts-count',       '0');
 
             const grid = document.getElementById('profile-grid');
             if (grid) grid.innerHTML = '';
@@ -1743,14 +1704,12 @@ if (activeAuthChange) {
             document.getElementById('dms-content')?.classList.add('hidden');
 
             subscribeFeed();
-
             if (typeof window.openLoginModal === 'function' && navigator.onLine) {
                 window.openLoginModal();
             }
         }
 
         isAuthInitialized = true;
-
         if (!document.querySelector('.bottom-nav button.nav-active, nav button.nav-active, nav a.nav-active')) {
             document.getElementById('nav-btn-feed')?.classList.add('nav-active');
         }
@@ -1758,66 +1717,47 @@ if (activeAuthChange) {
 }
 
 // ─── 22. SCROLL DIRECTION DETECTOR FOR NAVBAR ────────────────────────────────
-
 let lastScrollY = window.scrollY;
-
 window.addEventListener('scroll', () => {
     const bottomNav = document.querySelector('.bottom-nav-container');
     if (!bottomNav) return;
-
     const currentScrollY = window.scrollY;
 
-    if (currentScrollY < 20) {
-        bottomNav.classList.remove('bottom-nav-hidden');
-        return;
-    }
-
+    if (currentScrollY < 20) { bottomNav.classList.remove('bottom-nav-hidden'); return; }
     if (currentScrollY > lastScrollY) {
         bottomNav.classList.add('bottom-nav-hidden');
     } else {
         bottomNav.classList.remove('bottom-nav-hidden');
     }
-
     lastScrollY = currentScrollY;
 }, { passive: true });
 
 // ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ──────────────────────────────
-
 document.getElementById('posts-feed')?.addEventListener('click', (event) => {
     const profileClickTarget = event.target.closest('.feed-profile-trigger');
-
     if (profileClickTarget) {
         event.stopPropagation();
-
-        if (typeof window.navigateTo === 'function') {
-            window.navigateTo('profile');
-        }
+        if (typeof window.navigateTo === 'function') window.navigateTo('profile');
     }
 });
 
-// ─── 24. NATIVE INTERNET CONNECTIVITY DETECTOR ────────────────────────────────
-
+// ─── 24. NATIVE INTERNET CONNECTIVITY DETECTOR ───────────────────────────────
 window.addEventListener('offline', () => {
     showToast("⚠️ Connection lost. No Internet.");
-    
     const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
     if (submitBtn) {
         submitBtn.dataset.originalText = submitBtn.textContent;
-        submitBtn.textContent = 'Offline (Waiting for Connection)';
-        submitBtn.disabled = true;
+        submitBtn.textContent          = 'Offline (Waiting for Connection)';
+        submitBtn.disabled             = true;
     }
 });
 
 window.addEventListener('online', () => {
     showToast("⚡ Back online! Syncing data...");
-    
     const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
     if (submitBtn && submitBtn.dataset.originalText) {
         submitBtn.textContent = submitBtn.dataset.originalText;
-        submitBtn.disabled = false;
+        submitBtn.disabled    = false;
     }
-    
-    if (typeof subscribeFeed === 'function') {
-        subscribeFeed();
-    }
+    if (typeof subscribeFeed === 'function') subscribeFeed();
 });
