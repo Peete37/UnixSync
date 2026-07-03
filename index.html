@@ -56,6 +56,37 @@
 
     .logo span { color: #fbbf24; }
 
+    .header-icon-btn {
+      position: relative;
+      width: 34px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: #cbd5e1;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .header-icon-btn:hover { color: #fbbf24; border-color: rgba(251,191,36,0.3); }
+    .header-icon-btn .badge-dot {
+      position: absolute;
+      top: -3px;
+      right: -3px;
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: #fbbf24;
+      color: #000;
+      font-size: 9px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid #020617;
+    }
+
     /* ── SEARCH ── */
     .search-wrap { position: relative; }
 
@@ -101,6 +132,15 @@
       scrollbar-width: none;
     }
     #posts-feed::-webkit-scrollbar { display: none; }
+
+    /* When Products tab renders a grid, disable snap-scroll behavior so
+       the grid can scroll normally instead of snapping per-row. */
+    #posts-feed.grid-mode {
+      scroll-snap-type: none;
+      height: auto;
+      min-height: calc(100vh - 140px);
+      overflow-y: visible;
+    }
 
     .tiktok-card {
       scroll-snap-align: start;
@@ -197,7 +237,7 @@
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
       border-top: 1px solid rgba(255,255,255,0.07);
-      padding: 8px 24px 20px;
+      padding: 8px 12px 20px;
       z-index: 50;
       transition: transform 0.3s ease;
     }
@@ -215,21 +255,22 @@
       flex-direction: column;
       align-items: center;
       gap: 3px;
-      font-size: 9px;
+      font-size: 8.5px;
       font-weight: 700;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.05em;
       text-transform: uppercase;
       transition: color 0.15s;
-      padding: 4px 8px;
+      padding: 4px 6px;
       border-radius: 10px;
       background: none;
       border: none;
       cursor: pointer;
       color: #64748b;
+      position: relative;
     }
 
     .bottom-nav button i {
-      font-size: 18px;
+      font-size: 17px;
       color: #64748b;
       transition: color 0.15s;
     }
@@ -244,9 +285,26 @@
     .bottom-nav button.nav-active i   { color: #fbbf24; }
     .bottom-nav button.nav-active span { color: #ffffff; }
 
+    .nav-cart-badge {
+      position: absolute;
+      top: -2px;
+      right: 2px;
+      min-width: 14px;
+      height: 14px;
+      padding: 0 3px;
+      border-radius: 999px;
+      background: #fbbf24;
+      color: #000;
+      font-size: 8px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
     .nav-fab-btn {
-      width: 46px !important;
-      height: 46px !important;
+      width: 42px !important;
+      height: 42px !important;
       background: linear-gradient(135deg, #fbbf24, #f59e0b) !important;
       border-radius: 50% !important;
       display: flex !important;
@@ -265,7 +323,7 @@
     }
 
     .nav-fab-btn i {
-      font-size: 16px !important;
+      font-size: 15px !important;
       color: #000 !important;
     }
 
@@ -317,11 +375,27 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
 
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { scrollbar-width: none; }
+
     main { padding-bottom: 100px; }
 
     .bottom-nav-hidden { transform: translateY(100%); }
-    
+
     .no-browser-menu { -webkit-touch-callout: none; user-select: none; }
+
+    .line-clamp-1 {
+      display: -webkit-box;
+      -webkit-line-clamp: 1;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .line-clamp-2 {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
   </style>
 </head>
 
@@ -332,6 +406,10 @@
   <div class="site-header">
     <div class="header-top">
       <h1 class="logo">Campus<span>Market</span></h1>
+      <button class="header-icon-btn" onclick="window.navigateTo('cart', document.getElementById('nav-btn-cart'))" aria-label="Saved items">
+        <i class="fas fa-bookmark text-xs"></i>
+        <span id="header-cart-badge" class="badge-dot hidden">0</span>
+      </button>
     </div>
     <div class="search-wrap">
       <i class="fas fa-search"></i>
@@ -376,13 +454,15 @@
         </button>
       </div>
 
-      <div id="dms-content" class="hidden space-y-4">
-        <div class="text-center py-16 space-y-3 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
-          <p class="text-3xl">💬</p>
-          <p class="font-black text-white uppercase tracking-tight text-sm">Inbox & Chat Channels</p>
-          <p class="text-slate-500 text-xs max-w-xs mx-auto">Connect directly with student freelancers or product vendors on your campus.</p>
-        </div>
+      <div id="dms-content" class="hidden space-y-4"></div>
+    </div>
+
+    <div id="cart-container" class="hidden pb-24 space-y-4">
+      <div class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl">
+        <h2 class="text-white font-black text-sm uppercase tracking-wider mb-1">Saved Items</h2>
+        <p class="text-slate-400 text-xs">Everything you've bookmarked across CampusMarket lives here.</p>
       </div>
+      <div id="cart-items-wrapper" class="space-y-3"></div>
     </div>
 
     <div id="profile-container" class="hidden pb-24 space-y-6">
@@ -484,6 +564,10 @@
         <i class="fas fa-envelope"></i>
         <span>DMs</span>
       </button>
+      <button id="nav-btn-cart" onclick="window.navigateTo('cart', this)">
+        <i class="fas fa-bookmark"></i>
+        <span id="nav-cart-badge-wrap" class="relative">Saved</span>
+      </button>
       <button id="auth-profile-nav" onclick="window.navigateTo('profile', this)">
         <i class="fas fa-sign-in-alt"></i>
         <span>Sign In</span>
@@ -526,6 +610,7 @@
           <button onclick="document.getElementById('mediaInput').click()" type="button" class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-2">
             <i class="fas fa-cloud-upload-alt text-amber-400"></i> Attach Images / Videos
           </button>
+          <p id="mediaFileCount" class="text-[10px] text-slate-500 mt-1.5 text-center"></p>
         </div>
         <button onclick="window.handlePostSubmission()" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-2 transition active:scale-95 shadow-lg shadow-amber-400/20">
           Publish Instantly
@@ -553,7 +638,7 @@
       <img id="modalAvatarImg" src="" alt="Profile Avatar"
            class="w-full aspect-square object-cover no-browser-menu select-none"
            style="-webkit-touch-callout: none; user-select: none;">
-           
+
       <div class="flex gap-3 p-4">
         <button id="copyImageBtn" class="flex-1 flex items-center justify-center gap-2 bg-slate-800 border border-slate-700 text-white font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
           <i class="far fa-copy"></i> Copy
@@ -585,7 +670,7 @@
         Continue with Google
       </button>
       <div class="login-divider">or sign in with email</div>
-      
+
       <form onsubmit="event.preventDefault(); window.loginWithEmail();" class="space-y-3">
         <div>
           <label for="login-email" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Email Address</label>
@@ -630,7 +715,7 @@
         Sign up with Google
       </button>
       <div class="login-divider">or create with email</div>
-      
+
       <form onsubmit="event.preventDefault(); window.signUpWithEmail();" class="space-y-3">
         <div>
           <label for="signup-name" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Full Name</label>
@@ -668,7 +753,7 @@
   </div>
 
   <script>
-    const _NAV_VIEWS = ['feed-container','explore-container','dms-container','profile-container'];
+    const _NAV_VIEWS = ['feed-container','explore-container','dms-container','profile-container','cart-container'];
 
     function _setActiveNav(activeBtn) {
       document.querySelectorAll('.bottom-nav button').forEach(btn => btn.classList.remove('nav-active'));
@@ -724,8 +809,30 @@
       document.getElementById('signup-modal')?.classList.add('hidden');
     };
 
+    // Live count of attached files for the "Create Listing" modal, and a
+    // running badge on the header/nav bookmark icons for saved-item count.
     document.addEventListener('DOMContentLoaded', function() {
       _setActiveNav(document.getElementById('nav-btn-feed'));
+
+      const mediaInput = document.getElementById('mediaInput');
+      mediaInput?.addEventListener('change', function() {
+        const countEl = document.getElementById('mediaFileCount');
+        if (!countEl) return;
+        const n = mediaInput.files?.length || 0;
+        countEl.textContent = n > 0 ? `${n} file${n > 1 ? 's' : ''} attached — swipe to view after posting` : '';
+      });
+
+      function refreshCartBadges() {
+        const list = window._userCartList || [];
+        const n = list.length;
+        const headerBadge = document.getElementById('header-cart-badge');
+        if (headerBadge) {
+          if (n > 0) { headerBadge.textContent = n > 99 ? '99+' : n; headerBadge.classList.remove('hidden'); }
+          else { headerBadge.classList.add('hidden'); }
+        }
+      }
+      refreshCartBadges();
+      setInterval(refreshCartBadges, 1500);
     });
 
     /* ── PROXY STUBS ── */
@@ -746,7 +853,8 @@
         'likePost','sharePost','downloadMedia','contactSeller','toggleComments',
         'postComment','toggleFollow','handlePostSubmission','handleAvatarUpload',
         'login','logout','runSearch','saveOnboarding','onboardRegionChange',
-        'initProfileSelects','signOutUser','toggleSavePost'
+        'initProfileSelects','signOutUser','toggleSavePost','toggleCartItem',
+        'openDM','closeDMThread','sendChatMessage'
       ].forEach(makeStub);
 
       window._registerModuleFunction = function(name, fn) {
@@ -769,7 +877,8 @@
       'likePost','sharePost','downloadMedia','contactSeller','toggleComments',
       'postComment','toggleFollow','handlePostSubmission','handleAvatarUpload',
       'login','logout','runSearch','saveOnboarding','onboardRegionChange',
-      'initProfileSelects','signOutUser','toggleSavePost'
+      'initProfileSelects','signOutUser','toggleSavePost','toggleCartItem',
+      'openDM','closeDMThread','sendChatMessage'
     ];
 
     _moduleExports.forEach(name => {

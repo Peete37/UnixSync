@@ -35,6 +35,15 @@ let currentFeedChan     = null;
 let currentCommentsChan = null;
 let allCachedPosts      = [];
 let isAuthInitialized   = false;
+let isOnline            = navigator.onLine;
+let currentFeedType     = 'all'; // tracks active tab: all | following | product | skill
+
+// DM state
+let currentConversationsChan = null;
+let currentMessagesChan      = null;
+let activeConversationId     = null;
+let activeConversationPeer   = null; // { id, name, avatar }
+let conversationsCache       = [];
 
 // Persistent state maps that survive feed re-renders
 const likedPostIds      = new Set(JSON.parse(localStorage.getItem('campus_market_likes') || '[]'));
@@ -81,6 +90,23 @@ function showToast(msg) {
     t.textContent = msg;
     document.body.appendChild(t);
     setTimeout(() => t.remove(), 2800);
+}
+
+function timeAgo(dateStr) {
+    if (!dateStr) return '';
+    const diff = (Date.now() - new Date(dateStr).getTime()) / 1000;
+    if (diff < 60) return 'now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+    if (diff < 604800) return `${Math.floor(diff / 86400)}d`;
+    const d = new Date(dateStr);
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function formatClockTime(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
 const activeAuthChange = typeof onAuthChange === 'function'
@@ -211,6 +237,8 @@ window.login = async function () {
 window.logout = async function () {
     try {
         unsubscribeFeed();
+        unsubscribeConversations();
+        unsubscribeActiveThread();
         if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
         await authSignOut();
         window.navigateTo('feed');
@@ -252,14 +280,14 @@ async function subscribeFeed(queryFactory = null) {
     try {
         const data = await fetchFeedSnapshot(queryFactory);
         allCachedPosts = data.map(item => ({ id: item.id, data: item }));
-        
+
         // Sync local bookmark view mapping if authenticated
         if (currentUserData) {
             const { data: remoteSaves } = await supabase
                 .from("saves")
                 .select("post_id")
                 .eq("user_id", currentUserData.id);
-            
+
             if (remoteSaves) {
                 const savedIds = remoteSaves.map(s => s.post_id);
                 userCartList = userCartList.filter(item => savedIds.includes(item.id));
@@ -373,7 +401,11 @@ window.navigateTo = function (viewId, btn = null) {
         } else {
             gate?.classList.add('hidden');
             content?.classList.remove('hidden');
+            openInboxView();
         }
+    } else {
+        // leaving DMs view entirely (not opening a thread) — tear down thread listener
+        if (viewId !== 'dms-thread') unsubscribeActiveThread();
     }
 
     if (viewId === 'cart') {
@@ -502,7 +534,7 @@ window.openDetail = async function (postId) {
                         class="w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs ${cartColorClass}">
                         <i class="fas fa-shopping-basket mr-1.5 text-[11px]"></i><span class="cart-btn-label">${cartText}</span>
                     </button>
-                    <button onclick="contactSeller('${escAttr(d.user_name)}', '${escAttr(d.title)}')" class="w-full bg-amber-400 text-black font-black py-4 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
+                    <button onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}')" class="w-full bg-amber-400 text-black font-black py-4 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
                         ${esc(ctaLabel)}
                     </button>
                 </div>
@@ -532,6 +564,12 @@ window.closeDetailModal = function () {
 
 // ─── 10. LOGIN MODAL ──────────────────────────────────────────────────────────
 window.openLoginModal = function () {
+    // Never show credential entry while offline — keeps the app feeling
+    // professional instead of dumping a broken form on a dead connection.
+    if (!isOnline) {
+        showToast("You're offline. Reconnect to sign in.");
+        return;
+    }
     document.getElementById('signup-modal')?.classList.add('hidden');
     document.getElementById('login-modal')?.classList.remove('hidden');
 };
@@ -558,6 +596,7 @@ window.signUpWithEmail = async function () {
 };
 
 window.signInWithEmailPassword = async function (email, password) {
+    if (!isOnline) { showToast("You're offline. Reconnect to sign in."); return; }
     const btn = document.querySelector('#login-modal button[onclick="window.loginWithEmail()"]');
     try {
         if (btn) { btn.textContent = 'Signing in…'; btn.disabled = true; }
@@ -574,6 +613,7 @@ window.signInWithEmailPassword = async function (email, password) {
 };
 
 window.registerWithEmail = async function (name, email, password) {
+    if (!isOnline) { showToast("You're offline. Reconnect to sign up."); return; }
     const btn = document.querySelector('#signup-modal button[onclick="window.signUpWithEmail()"]');
     try {
         if (btn) { btn.textContent = 'Creating account…'; btn.disabled = true; }
@@ -728,7 +768,7 @@ window.likePost = async function (postId, btn) {
         showToast("Error: Missing Post Identifier");
         return;
     }
-    
+
     const liked   = likedPostIds.has(postId);
     const countEl = btn.querySelector('.like-count');
     const icon    = btn.querySelector('i');
@@ -749,8 +789,15 @@ window.likePost = async function (postId, btn) {
 
     if (countEl) countEl.textContent = currentCount;
     localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
-    
-    // 2. Execute Backend sync
+
+    // Keep the in-memory cache in sync so a re-render (tab switch, search,
+    // etc.) before the next DB refresh doesn't show a stale count.
+    const cachedEntry = allCachedPosts.find(p => p.id === postId);
+    if (cachedEntry?.data) cachedEntry.data.likes_count = currentCount;
+
+    // 2. Execute Backend sync — this is what makes likes survive reload.
+    // Uses atomic RPC counters (increment_post_likes / decrement_post_likes)
+    // defined in migration.sql so concurrent likes never clobber each other.
     try {
         if (liked) {
             await supabase
@@ -758,16 +805,22 @@ window.likePost = async function (postId, btn) {
                 .delete()
                 .eq("post_id", postId)
                 .eq("user_id", currentUserData.id);
+            await supabase.rpc('decrement_post_likes', { post_id_input: postId });
         } else {
-            await supabase
+            const { error: insertErr } = await supabase
                 .from("likes")
                 .insert({
                     post_id: postId,
                     user_id: currentUserData.id
                 });
+            // Unique constraint means a duplicate like just fails silently —
+            // don't double-increment the counter in that case.
+            if (!insertErr) {
+                await supabase.rpc('increment_post_likes', { post_id_input: postId });
+            }
         }
-    } catch(e) { 
-        console.warn("Like sync delayed or rejected:", e); 
+    } catch(e) {
+        console.warn("Like sync delayed or rejected:", e);
     }
 };
 
@@ -790,14 +843,18 @@ window.downloadMedia = function (mediaUrl, title) {
     a.click();
 };
 
-window.contactSeller = function (userName, postTitle) {
+// Now opens a real DM thread with the seller instead of just landing on
+// an empty inbox. Falls back gracefully if seller info is incomplete.
+window.contactSeller = function (sellerId, userName, sellerAvatar, postTitle) {
     if (!currentUserData) {
         showToast('Please sign in to contact the seller.');
         return;
     }
-    window.navigateTo('dms');
-    showToast(`Starting chat with ${userName}…`);
-    if (typeof window.openDM === 'function') window.openDM(null, userName);
+    if (!sellerId || sellerId === currentUserData.id) {
+        window.navigateTo('dms');
+        return;
+    }
+    window.openDM(sellerId, userName, sellerAvatar);
 };
 
 window.postComment = async function(postId, inputEl) {
@@ -950,8 +1007,9 @@ function renderFeedCard(id, d) {
     const heartClass    = isLiked ? 'fas fa-heart text-rose-500' : 'far fa-heart text-slate-300';
     const likedData     = isLiked ? 'true' : 'false';
 
-    const baselineLikes = parseInt(d.likes_count || 0);
-    const displayLikes  = isLiked ? Math.max(baselineLikes, 1) : baselineLikes;
+    // likes_count now comes straight from the DB and is kept accurate via
+    // the RPC counters, so this reflects the true persisted count on load.
+    const displayLikes  = parseInt(d.likes_count || 0);
 
     const isAddedToCart  = userCartList.some(item => item.id === id);
     const bookmarkClass  = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
@@ -1008,7 +1066,7 @@ function renderFeedCard(id, d) {
 
         <div class="px-3 pb-3">
             <button
-                onclick="contactSeller('${escAttr(d.user_name)}', '${escAttr(d.title)}')"
+                onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}')"
                 class="w-full flex items-center justify-center gap-1.5 bg-amber-400 text-black font-extrabold py-2.5 rounded-xl text-[11px] uppercase tracking-wider transition active:scale-[0.98]">
                 <i class="fas fa-bolt text-[10px]"></i> Contact Seller
             </button>
@@ -1026,6 +1084,65 @@ function renderFeedCard(id, d) {
             <div id="comment-list-${escAttr(id)}" class="max-h-36 overflow-y-auto space-y-1.5 custom-scrollbar"></div>
         </div>
     </div>`;
+}
+
+// ─── 12c. PRODUCT GRID RENDERER (4-square style, Products tab only) ──────────
+function renderProductGridCard(id, d) {
+    let mediaUrl = '';
+    if (d.media_url) {
+        if (d.media_url.startsWith('[')) {
+            try { mediaUrl = JSON.parse(d.media_url)[0]; } catch(_) { mediaUrl = d.media_url; }
+        } else {
+            mediaUrl = d.media_url;
+        }
+    }
+
+    const isVideo = d.media_type === 'video';
+    const isAddedToCart = userCartList.some(item => item.id === id);
+    const bookmarkClass = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-white/80";
+
+    return `
+    <div class="bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden" id="grid-card-${escAttr(id)}">
+        <div class="relative aspect-square w-full bg-slate-950 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
+            ${isVideo
+                ? `<video class="w-full h-full object-cover" muted loop playsinline autoplay src="${esc(mediaUrl)}"></video>`
+                : `<img class="w-full h-full object-cover" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
+            }
+            <button
+                onclick="event.stopPropagation(); window.toggleCartItem('${escAttr(id)}')"
+                class="absolute top-2 right-2 w-7 h-7 flex items-center justify-center bg-black/50 rounded-full active:scale-90 transition">
+                <i class="${bookmarkClass} text-xs"></i>
+            </button>
+            <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-2 pt-4 pb-1.5">
+                <span class="text-amber-400 font-black text-[11px]">GH₵${esc(String(d.price || 0))}</span>
+            </div>
+        </div>
+        <div class="p-2">
+            <p class="text-white text-[11px] font-semibold leading-snug line-clamp-1">${esc(d.title)}</p>
+            <p class="text-slate-500 text-[9px] truncate mt-0.5">${esc(d.user_name) || 'Student'}</p>
+        </div>
+    </div>`;
+}
+
+function renderProductGrid() {
+    const feed = document.getElementById('posts-feed');
+    if (!feed) return;
+
+    const products = allCachedPosts.filter(({ data: d }) => (d.type || 'product') === 'product');
+
+    if (products.length === 0) {
+        feed.innerHTML = `
+            <div class="text-center py-16 space-y-3">
+                <p class="text-4xl">📦</p>
+                <p class="font-bold text-white">No products yet</p>
+                <p class="text-slate-500 text-xs">Be the first to list one!</p>
+            </div>`;
+        return;
+    }
+
+    feed.innerHTML = `<div class="grid grid-cols-2 gap-2.5 py-2">${
+        products.map(({ id, data: d }) => renderProductGridCard(id, d)).join('')
+    }</div>`;
 }
 
 // ─── 12b. CHART / CART LIST LOGIC (NOW BACKEND POWERED!) ──────────────────────
@@ -1083,6 +1200,12 @@ window.toggleCartItem = async function (postId) {
     const feedIcon = document.getElementById(`feed-cart-icon-${postId}`)?.querySelector('i');
     if (feedIcon) {
         feedIcon.className = !isRemoving ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
+    }
+
+    const gridIcon = document.getElementById(`grid-card-${postId}`)?.querySelector('i.fa-bookmark, i.fa-bookmark ~ i');
+    const gridBtn  = document.getElementById(`grid-card-${postId}`)?.querySelector('button i');
+    if (gridBtn) {
+        gridBtn.className = !isRemoving ? "fas fa-bookmark text-amber-400 text-xs" : "far fa-bookmark text-white/80 text-xs";
     }
 
     const detailBtn = document.getElementById(`detail-cart-btn-${postId}`);
@@ -1315,6 +1438,12 @@ function renderFeedFromCache() {
     const feed = document.getElementById('posts-feed');
     if (!feed) return;
 
+    // Products tab renders as a 4-square grid instead of the snap-scroll feed
+    if (currentFeedType === 'product') {
+        renderProductGrid();
+        return;
+    }
+
     if (allCachedPosts.length === 0) {
         feed.innerHTML = `
             <div class="text-center py-16 space-y-3">
@@ -1364,6 +1493,8 @@ function renderFeedFromCache() {
 window.filterFeed = function (type, clickedBtn = null) {
     if (!isAuthInitialized) return;
 
+    currentFeedType = type;
+
     if (clickedBtn) {
         document.querySelectorAll('.feed-tab-btn').forEach(btn => {
             btn.classList.replace('text-amber-400', 'text-slate-500');
@@ -1384,9 +1515,11 @@ window.filterFeed = function (type, clickedBtn = null) {
         feed.innerHTML = '<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Loading...</div>';
     }
 
+    // Product tab still fetches ALL posts (so grid + other tabs share cache)
+    // but renderFeedFromCache() switches to grid layout based on currentFeedType.
     const queryFactory = () => {
         let q = supabase.from("posts").select("*");
-        if (type !== 'all') q = q.eq("type", type);
+        if (type !== 'all' && type !== 'product') q = q.eq("type", type);
         return q.order("created_at", { ascending: false }).limit(FEED_LIMIT);
     };
 
@@ -1485,6 +1618,9 @@ window.handlePostSubmission = async function () {
         const publicUrls      = [];
         let primaryMediaType  = 'image';
 
+        // Multi-file upload: every file the user attached is uploaded and
+        // stored as a JSON array in media_url, which both the feed carousel
+        // and detail-view carousel already render as a swipeable gallery.
         for (let i = 0; i < mediaFiles.length; i++) {
             const file        = mediaFiles[i];
             const ext         = file.name.split('.').pop();
@@ -1520,6 +1656,7 @@ window.handlePostSubmission = async function () {
             user_name:   metadata.full_name  || 'Anonymous Student',
             user_avatar: metadata.avatar_url || '',
             user_id:     currentUserData.id,
+            likes_count: 0,
             created_at:  new Date().toISOString()
         });
 
@@ -1531,7 +1668,7 @@ window.handlePostSubmission = async function () {
         document.getElementById('mediaInput').value      = '';
 
         window.togglePostModal();
-        showToast('Post published! 🎉');
+        showToast(`Post published with ${publicUrls.length} file${publicUrls.length > 1 ? 's' : ''}! 🎉`);
     } catch (err) {
         console.error("Post submission error:", err);
         showToast('Failed to publish. Please try again.');
@@ -1607,14 +1744,309 @@ document.getElementById('saveLocationBtn')?.addEventListener('click', async () =
     }
 });
 
-// ─── 20. DM STUB ─────────────────────────────────────────────────────────────
-window.openDM = function (targetUserId, targetName) {
-    console.warn(`[DMs] openDM called for ${targetUserId} (${targetName}) — not yet implemented.`);
+// ─── 20. DMs — WHATSAPP-STYLE INBOX + CHAT THREAD ────────────────────────────
+// Requires migration.sql to have been run (conversations + messages tables,
+// get_or_create_conversation RPC). See that file for schema/RLS.
+
+function unsubscribeConversations() {
+    if (currentConversationsChan) {
+        supabase.removeChannel(currentConversationsChan);
+        currentConversationsChan = null;
+    }
+}
+
+function unsubscribeActiveThread() {
+    if (currentMessagesChan) {
+        supabase.removeChannel(currentMessagesChan);
+        currentMessagesChan = null;
+    }
+    activeConversationId = null;
+    activeConversationPeer = null;
+}
+
+function dmPeerInfo(conv) {
+    // conversations store user_a/user_b symmetrically; figure out which
+    // side is "me" and return the other person's display info.
+    const isA = conv.user_a === currentUserData.id;
+    return {
+        id:     isA ? conv.user_b : conv.user_a,
+        name:   (isA ? conv.user_b_name   : conv.user_a_name)   || 'Student',
+        avatar: (isA ? conv.user_b_avatar : conv.user_a_avatar) || 'https://ui-avatars.com/api/?name=Student'
+    };
+}
+
+async function openInboxView() {
+    const content = document.getElementById('dms-content');
+    if (!content || !currentUserData) return;
+
+    content.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Loading chats...</div>`;
+
+    try {
+        const { data, error } = await supabase
+            .from('conversations')
+            .select('*')
+            .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
+            .order('last_message_at', { ascending: false });
+
+        if (error) throw error;
+        conversationsCache = data || [];
+        renderInboxList();
+        subscribeConversationsList();
+    } catch (err) {
+        console.error("Inbox load error:", err);
+        content.innerHTML = `<div class="p-12 text-center text-red-400 text-xs">Couldn't load your chats. Pull to refresh.</div>`;
+    }
+}
+
+function renderInboxList() {
+    const content = document.getElementById('dms-content');
+    if (!content) return;
+
+    if (conversationsCache.length === 0) {
+        content.innerHTML = `
+            <div class="text-center py-16 space-y-3 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
+                <p class="text-3xl">💬</p>
+                <p class="font-black text-white uppercase tracking-tight text-sm">No chats yet</p>
+                <p class="text-slate-500 text-xs max-w-xs mx-auto">Tap "Contact Seller" on any listing to start a conversation.</p>
+            </div>`;
+        return;
+    }
+
+    content.innerHTML = `<div class="divide-y divide-slate-800/60 bg-slate-900 border border-slate-800/60 rounded-3xl overflow-hidden">${
+        conversationsCache.map(conv => {
+            const peer = dmPeerInfo(conv);
+            const isUnread = conv.last_sender && conv.last_sender !== currentUserData.id && !conv.last_read_by_me;
+            return `
+            <button
+                onclick="window.openDM('${escAttr(peer.id)}','${escAttr(peer.name)}','${escAttr(peer.avatar)}')"
+                class="w-full flex items-center gap-3 p-3.5 text-left active:bg-slate-800/60 transition">
+                <img src="${esc(peer.avatar)}" class="w-12 h-12 rounded-full object-cover border border-slate-700 shrink-0" alt="">
+                <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between gap-2">
+                        <p class="text-white font-bold text-sm truncate">${esc(peer.name)}</p>
+                        <span class="text-[10px] text-slate-500 shrink-0">${esc(timeAgo(conv.last_message_at))}</span>
+                    </div>
+                    <p class="text-xs ${isUnread ? 'text-slate-200 font-semibold' : 'text-slate-500'} truncate mt-0.5">${esc(conv.last_message) || 'Say hello 👋'}</p>
+                </div>
+                ${isUnread ? '<div class="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0"></div>' : ''}
+            </button>`;
+        }).join('')
+    }</div>`;
+}
+
+function subscribeConversationsList() {
+    unsubscribeConversations();
+    if (!currentUserData) return;
+
+    currentConversationsChan = supabase
+        .channel(`conversations-live-${currentUserData.id}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, async () => {
+            try {
+                const { data } = await supabase
+                    .from('conversations')
+                    .select('*')
+                    .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
+                    .order('last_message_at', { ascending: false });
+                conversationsCache = data || [];
+                // Only re-render the list if we're actually looking at it
+                if (!activeConversationId) renderInboxList();
+            } catch (_) {}
+        })
+        .subscribe();
+}
+
+// Opens (or creates) a conversation and renders the WhatsApp-style thread view.
+window.openDM = async function (otherUserId, otherUserName, otherUserAvatar) {
+    if (!currentUserData) { window.openLoginModal(); return; }
+    if (!otherUserId) { window.navigateTo('dms'); return; }
+    if (otherUserId === currentUserData.id) return;
+
+    window.navigateTo('dms');
+    const content = document.getElementById('dms-content');
+    if (!content) return;
+
+    unsubscribeActiveThread();
+    content.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Opening chat...</div>`;
+
+    try {
+        const metadata = currentUserData.user_metadata || {};
+        const { data: convId, error } = await supabase.rpc('get_or_create_conversation', {
+            other_user_id:     otherUserId,
+            other_user_name:   otherUserName || 'Student',
+            other_user_avatar: otherUserAvatar || '',
+            my_name:            metadata.full_name  || 'Student',
+            my_avatar:           metadata.avatar_url || ''
+        });
+
+        if (error) throw error;
+
+        activeConversationId   = convId;
+        activeConversationPeer = { id: otherUserId, name: otherUserName || 'Student', avatar: otherUserAvatar || 'https://ui-avatars.com/api/?name=Student' };
+
+        renderChatThreadShell();
+        await loadAndRenderMessages();
+        subscribeActiveThreadMessages();
+    } catch (err) {
+        console.error("Open DM error:", err);
+        content.innerHTML = `<div class="p-12 text-center text-red-400 text-xs">Couldn't open this chat. Try again.</div>`;
+    }
+};
+
+function renderChatThreadShell() {
+    const content = document.getElementById('dms-content');
+    if (!content || !activeConversationPeer) return;
+
+    content.innerHTML = `
+        <div class="flex flex-col" style="height: calc(100vh - 220px);">
+            <div class="flex items-center gap-3 pb-3 border-b border-slate-800/60 mb-3">
+                <button onclick="window.closeDMThread()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 text-slate-300 active:scale-90 transition shrink-0">
+                    <i class="fas fa-arrow-left text-xs"></i>
+                </button>
+                <img src="${esc(activeConversationPeer.avatar)}" class="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0" alt="">
+                <p class="text-white font-bold text-sm truncate">${esc(activeConversationPeer.name)}</p>
+            </div>
+            <div id="chat-messages" class="flex-1 overflow-y-auto space-y-2 px-1 pb-2"></div>
+            <div class="flex items-center gap-2 pt-2 border-t border-slate-800/60">
+                <input
+                    type="text"
+                    id="chat-input"
+                    placeholder="Message..."
+                    class="flex-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-full px-4 py-2.5 focus:outline-none focus:border-amber-400 transition"
+                    onkeydown="if(event.key==='Enter') window.sendChatMessage()"
+                >
+                <button onclick="window.sendChatMessage()" class="w-10 h-10 flex items-center justify-center bg-amber-400 text-black rounded-full active:scale-90 transition shrink-0">
+                    <i class="fas fa-paper-plane text-xs"></i>
+                </button>
+            </div>
+        </div>`;
+}
+
+function renderChatBubble(msg) {
+    const isMe = msg.sender_id === currentUserData.id;
+    return `
+        <div class="flex ${isMe ? 'justify-end' : 'justify-start'}">
+            <div class="max-w-[75%] ${isMe ? 'bg-amber-400 text-black' : 'bg-slate-800 text-white'} rounded-2xl ${isMe ? 'rounded-br-sm' : 'rounded-bl-sm'} px-3.5 py-2">
+                <p class="text-sm break-words">${esc(msg.text)}</p>
+                <p class="text-[9px] ${isMe ? 'text-black/50' : 'text-slate-400'} mt-1 text-right">${esc(formatClockTime(msg.created_at))}</p>
+            </div>
+        </div>`;
+}
+
+async function loadAndRenderMessages() {
+    const container = document.getElementById('chat-messages');
+    if (!container || !activeConversationId) return;
+
+    container.innerHTML = `<p class="text-center text-[10px] text-slate-500 animate-pulse py-4">Loading messages...</p>`;
+
+    try {
+        const { data: messages, error } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('conversation_id', activeConversationId)
+            .order('created_at', { ascending: true });
+
+        if (error) throw error;
+
+        if (!messages || messages.length === 0) {
+            container.innerHTML = `<p class="text-center text-[11px] text-slate-500 py-6">No messages yet. Say hello 👋</p>`;
+        } else {
+            container.innerHTML = messages.map(renderChatBubble).join('');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Mark incoming messages as read
+        supabase.from('messages')
+            .update({ read: true })
+            .eq('conversation_id', activeConversationId)
+            .neq('sender_id', currentUserData.id)
+            .eq('read', false)
+            .then(() => {}).catch(() => {});
+    } catch (err) {
+        console.error("Load messages error:", err);
+        container.innerHTML = `<p class="text-center text-[11px] text-red-400 py-6">Couldn't load messages.</p>`;
+    }
+}
+
+function subscribeActiveThreadMessages() {
+    if (currentMessagesChan) {
+        supabase.removeChannel(currentMessagesChan);
+        currentMessagesChan = null;
+    }
+    if (!activeConversationId) return;
+
+    currentMessagesChan = supabase
+        .channel(`messages-live-${activeConversationId}`)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `conversation_id=eq.${activeConversationId}` }, (payload) => {
+            const container = document.getElementById('chat-messages');
+            if (!container) return;
+            // Avoid duplicating our own optimistically-rendered bubble
+            if (container.dataset.lastOptimisticId === String(payload.new.id)) return;
+            const emptyState = container.querySelector('p');
+            if (emptyState && container.children.length === 1) container.innerHTML = '';
+            container.innerHTML += renderChatBubble(payload.new);
+            container.scrollTop = container.scrollHeight;
+        })
+        .subscribe();
+}
+
+window.sendChatMessage = async function () {
+    const input = document.getElementById('chat-input');
+    const text  = input?.value.trim();
+    if (!text || !activeConversationId || !currentUserData) return;
+
+    input.value = '';
+
+    const optimisticMsg = {
+        id: `local-${Date.now()}`,
+        sender_id: currentUserData.id,
+        text,
+        created_at: new Date().toISOString()
+    };
+
+    const container = document.getElementById('chat-messages');
+    if (container) {
+        const emptyState = container.querySelector('p');
+        if (emptyState && container.children.length === 1) container.innerHTML = '';
+        container.innerHTML += renderChatBubble(optimisticMsg);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    try {
+        const { error: msgErr } = await supabase.from('messages').insert({
+            conversation_id: activeConversationId,
+            sender_id: currentUserData.id,
+            text
+        });
+        if (msgErr) throw msgErr;
+
+        await supabase.from('conversations').update({
+            last_message: text,
+            last_message_at: new Date().toISOString(),
+            last_sender: currentUserData.id
+        }).eq('id', activeConversationId);
+    } catch (err) {
+        console.error("Send message error:", err);
+        showToast('Message failed to send.');
+    }
+};
+
+window.closeDMThread = function () {
+    unsubscribeActiveThread();
+    openInboxView();
+};
+
+// Legacy stub kept for any old call sites that don't pass full peer info.
+window.openDM_legacy = function (targetUserId, targetName) {
+    console.warn(`[DMs] openDM called with incomplete info for ${targetUserId} (${targetName}).`);
 };
 
 // ─── 21. AUTH OBSERVER ───────────────────────────────────────────────────────
 if (activeAuthChange) {
     activeAuthChange(async (user) => {
+        // Bug fix: previously any auth-null event (including ones triggered
+        // by a network drop) would force the login modal open. Now we only
+        // treat this as a "signed out" transition when we're actually online,
+        // so losing connectivity never dumps credential fields on screen.
         if (!navigator.onLine) {
             console.warn("[Auth Observer] Network is offline. Ignoring auth state evaluation.");
             return;
@@ -1677,6 +2109,8 @@ if (activeAuthChange) {
             _initAvatarLongPress();
         } else {
             unsubscribeFeed();
+            unsubscribeConversations();
+            unsubscribeActiveThread();
             if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
 
             if (authProfileNav) {
@@ -1699,6 +2133,8 @@ if (activeAuthChange) {
             document.getElementById('dms-content')?.classList.add('hidden');
 
             subscribeFeed();
+            // Only auto-open the login modal on a genuine signed-out state
+            // while online — never as a side-effect of connectivity loss.
             if (typeof window.openLoginModal === 'function' && navigator.onLine) {
                 window.openLoginModal();
             }
@@ -1740,18 +2176,28 @@ document.body.addEventListener('click', (event) => {
 });
 
 // ─── 24. NATIVE INTERNET CONNECTIVITY DETECTOR ───────────────────────────────
+// Fix: previously going offline could still leave login/signup modals open
+// or let them be triggered by the auth observer. Now we explicitly close
+// any open credential modals the moment connectivity drops, and show a
+// calm, professional toast instead — matching how other production apps
+// (WhatsApp, Instagram) handle connectivity loss.
 window.addEventListener('offline', () => {
-    showToast("⚠️ Connection lost. No Internet.");
+    isOnline = false;
+    document.getElementById('login-modal')?.classList.add('hidden');
+    document.getElementById('signup-modal')?.classList.add('hidden');
+
+    showToast("You're offline");
     const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
     if (submitBtn) {
         submitBtn.dataset.originalText = submitBtn.textContent;
-        submitBtn.textContent          = 'Offline (Waiting for Connection)';
+        submitBtn.textContent          = 'Waiting for connection...';
         submitBtn.disabled             = true;
     }
 });
 
 window.addEventListener('online', () => {
-    showToast("⚡ Back online! Syncing data...");
+    isOnline = true;
+    showToast("Back online");
     const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
     if (submitBtn && submitBtn.dataset.originalText) {
         submitBtn.textContent = submitBtn.dataset.originalText;
@@ -1777,7 +2223,7 @@ function wireCarouselCounters(postId) {
 // ─── UTILITY FUNCTION: RENDER PROFILE GRID ITEM ─────────────────────────────
 function renderGridItem(id, post) {
     const d = post.data ? post.data : post;
-    
+
     let mediaUrl = '';
     if (d.media_url) {
         if (d.media_url.startsWith('[')) {
@@ -1792,7 +2238,7 @@ function renderGridItem(id, post) {
 
     return `
     <div onclick="openDetail('${id}')" class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition">
-        ${isVideo 
+        ${isVideo
             ? `<video class="w-full h-full object-cover" src="${mediaUrl}"></video>
                <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
             : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
