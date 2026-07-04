@@ -373,8 +373,17 @@ window.navigateTo = function (viewId, btn = null) {
     const targetElement = document.getElementById(targetId);
     if (targetElement) targetElement.classList.remove('hidden');
 
+    // feed-tabs now lives in the merged header row (always visible), but
+    // it only applies to the feed itself — hide it on other views the
+    // same way the old two-row header did.
     const tabs = document.getElementById('feed-tabs');
     if (tabs) tabs.style.display = viewId === 'feed' ? 'flex' : 'none';
+
+    // Leaving the feed always exits Reels overlay mode so the header goes
+    // back to its normal solid bar on Profile/DMs/Explore/Cart.
+    if (viewId !== 'feed') {
+        document.getElementById('site-header')?.classList.remove('header-reels-mode');
+    }
 
     clearNavHighlights();
     setNavHighlight(btn, viewId);
@@ -857,25 +866,140 @@ window.contactSeller = function (sellerId, userName, sellerAvatar, postTitle) {
     window.openDM(sellerId, userName, sellerAvatar);
 };
 
-window.postComment = async function(postId, inputEl) {
+window.postComment = async function(postId, inputEl, parentCommentId = null) {
     const text = inputEl.value.trim();
     if (!text || !currentUserData) return;
     inputEl.value = '';
 
     try {
         const metadata = currentUserData.user_metadata || {};
-        await supabase.from('comments').insert({
+        const insertPayload = {
             post_id: postId,
             user_id: currentUserData.id,
             user_name: metadata.full_name || 'Anonymous Student',
             user_avatar: metadata.avatar_url || '',
             text,
             created_at: new Date().toISOString()
-        });
+        };
+        if (parentCommentId) insertPayload.parent_comment_id = parentCommentId;
+        await supabase.from('comments').insert(insertPayload);
     } catch(err) {
         console.error("Comment submission error:", err);
     }
 };
+
+// Tracks which comment (if any) is currently being replied to, per post,
+// so the reply target is visible and Enter posts as a reply not a new
+// top-level comment.
+const activeReplyTarget = {};
+
+window.startCommentReply = function (postId, commentId, commentAuthor) {
+    activeReplyTarget[postId] = commentId;
+    const input = document.querySelector(`#comments-${postId} input[type="text"]`);
+    if (input) {
+        input.placeholder = `Replying to ${commentAuthor}…`;
+        input.dataset.replyTo = commentId;
+        input.focus();
+    }
+    const cancelBtn = document.getElementById(`cancel-reply-${postId}`);
+    if (cancelBtn) cancelBtn.classList.remove('hidden');
+};
+
+window.cancelCommentReply = function (postId) {
+    delete activeReplyTarget[postId];
+    const input = document.querySelector(`#comments-${postId} input[type="text"]`);
+    if (input) {
+        input.placeholder = 'Add a comment…';
+        delete input.dataset.replyTo;
+    }
+    const cancelBtn = document.getElementById(`cancel-reply-${postId}`);
+    if (cancelBtn) cancelBtn.classList.add('hidden');
+};
+
+// Wraps postComment so the comment input's Enter key correctly posts as a
+// reply when a reply target is active, then clears the reply state.
+window.submitCommentFromInput = function (postId, inputEl) {
+    const parentId = inputEl.dataset.replyTo || null;
+    window.postComment(postId, inputEl, parentId);
+    if (parentId) window.cancelCommentReply(postId);
+};
+
+const likedCommentIds = new Set(JSON.parse(localStorage.getItem('campus_market_comment_likes') || '[]'));
+
+window.likeComment = async function (commentId, btn) {
+    if (!currentUserData) { showToast("Please sign in to like comments."); return; }
+
+    const liked = likedCommentIds.has(commentId);
+    const countEl = btn.querySelector('.comment-like-count');
+    const icon = btn.querySelector('i');
+    let count = parseInt(countEl?.textContent || 0);
+
+    if (liked) {
+        likedCommentIds.delete(commentId);
+        icon.className = 'far fa-thumbs-up text-slate-400';
+        count = Math.max(0, count - 1);
+    } else {
+        likedCommentIds.add(commentId);
+        icon.className = 'fas fa-thumbs-up text-amber-400';
+        count = count + 1;
+    }
+    if (countEl) countEl.textContent = count;
+    localStorage.setItem('campus_market_comment_likes', JSON.stringify([...likedCommentIds]));
+
+    try {
+        if (liked) {
+            await supabase.from('comment_likes').delete().eq('comment_id', commentId).eq('user_id', currentUserData.id);
+            await supabase.rpc('decrement_comment_likes', { comment_id_input: commentId });
+        } else {
+            const { error } = await supabase.from('comment_likes').insert({ comment_id: commentId, user_id: currentUserData.id });
+            if (!error) await supabase.rpc('increment_comment_likes', { comment_id_input: commentId });
+        }
+    } catch (e) {
+        console.warn("Comment like sync delayed:", e);
+    }
+};
+
+window.deleteComment = async function (commentId, postId) {
+    if (!currentUserData) return;
+    const confirmed = window.confirm("Delete this comment?");
+    if (!confirmed) return;
+
+    try {
+        const { error } = await supabase.from('comments').delete().eq('id', commentId).eq('user_id', currentUserData.id);
+        if (error) throw error;
+        document.getElementById(`comment-item-${commentId}`)?.remove();
+        showToast("Comment deleted");
+    } catch (err) {
+        console.error("Error deleting comment:", err);
+        showToast("Failed to delete comment.");
+    }
+};
+
+function renderCommentItem(c, postId) {
+    const isLiked = likedCommentIds.has(c.id);
+    const heartClass = isLiked ? 'fas fa-thumbs-up text-amber-400' : 'far fa-thumbs-up text-slate-400';
+    const isOwn = currentUserData && c.user_id === currentUserData.id;
+    const indentClass = c.parent_comment_id ? 'ml-7' : '';
+
+    return `
+        <div class="flex gap-2 items-start text-left mt-2 ${indentClass}" id="comment-item-${escAttr(c.id)}">
+            <img src="${esc(c.user_avatar) || 'https://ui-avatars.com/api/?name=U'}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
+            <div class="bg-slate-800 rounded-2xl px-3 py-2 flex-1 border border-slate-700/20">
+                <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(c.user_name)}</p>
+                <p class="text-xs text-slate-200 mt-0.5">${esc(c.text)}</p>
+                <div class="flex items-center gap-3 mt-1.5">
+                    <button onclick="window.likeComment('${escAttr(c.id)}', this)" class="flex items-center gap-1">
+                        <i class="${heartClass} text-[11px]"></i>
+                        <span class="comment-like-count text-[10px] text-slate-400 font-semibold">${parseInt(c.likes_count || 0)}</span>
+                    </button>
+                    <button onclick="window.startCommentReply('${escAttr(postId)}', '${escAttr(c.id)}', '${escAttr(c.user_name)}')" class="text-[10px] text-slate-400 font-semibold hover:text-amber-400 transition">
+                        Reply
+                    </button>
+                    ${isOwn ? `<button onclick="window.deleteComment('${escAttr(c.id)}', '${escAttr(postId)}')" class="text-[10px] text-red-400 font-semibold hover:text-red-300 transition">Delete</button>` : ''}
+                </div>
+            </div>
+        </div>`;
+}
 
 window.toggleComments = async function (postId) {
     const commentSection = document.getElementById(`comments-${postId}`);
@@ -910,16 +1034,15 @@ window.toggleComments = async function (postId) {
             return;
         }
 
-        comments.forEach(c => {
-            const item = document.createElement('div');
-            item.className = 'flex gap-2 items-start text-left mt-2';
-            item.innerHTML = `
-                <img src="${esc(c.user_avatar) || 'https://ui-avatars.com/api/?name=U'}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
-                <div class="bg-slate-800 rounded-2xl px-3 py-2 flex-1 border border-slate-700/20">
-                    <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(c.user_name)}</p>
-                    <p class="text-xs text-slate-200 mt-0.5">${esc(c.text)}</p>
-                </div>`;
-            list.appendChild(item);
+        // Top-level comments first, replies immediately after their parent
+        const topLevel = comments.filter(c => !c.parent_comment_id);
+        const replies  = comments.filter(c => c.parent_comment_id);
+
+        topLevel.forEach(c => {
+            list.innerHTML += renderCommentItem(c, postId);
+            replies.filter(r => r.parent_comment_id === c.id).forEach(r => {
+                list.innerHTML += renderCommentItem(r, postId);
+            });
         });
     };
 
@@ -1073,13 +1196,14 @@ function renderFeedCard(id, d) {
         </div>
 
         <div id="comments-${escAttr(id)}" class="hidden px-3 pb-3 space-y-2 border-t border-slate-800/60 pt-2">
-            <div class="flex gap-1.5">
+            <div class="flex items-center gap-1.5">
                 <input
                     type="text"
                     placeholder="Add a comment…"
                     class="flex-1 bg-slate-800/80 border border-slate-700/50 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
-                    onkeydown="if(event.key==='Enter') window.postComment('${escAttr(id)}', this)"
+                    onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
                 >
+                <button id="cancel-reply-${escAttr(id)}" onclick="window.cancelCommentReply('${escAttr(id)}')" class="hidden text-[10px] text-slate-500 hover:text-white px-1">✕</button>
             </div>
             <div id="comment-list-${escAttr(id)}" class="max-h-36 overflow-y-auto space-y-1.5 custom-scrollbar"></div>
         </div>
@@ -1145,6 +1269,99 @@ function renderProductGrid() {
     feed.innerHTML = `<div class="grid grid-cols-2 gap-2.5 py-2">${
         products.map(({ id, data: d }) => renderProductGridCard(id, d)).join('')
     }</div>`;
+}
+
+// ─── 12d. REELS FEED (TikTok-style full-bleed vertical video) ────────────────
+function renderReelCard(id, d) {
+    let mediaUrls = [];
+    if (d.media_url) {
+        if (d.media_url.startsWith('[')) {
+            try { mediaUrls = JSON.parse(d.media_url); } catch(_) { mediaUrls = [d.media_url]; }
+        } else {
+            mediaUrls = [d.media_url];
+        }
+    }
+    const videoUrl = mediaUrls[0] || '';
+
+    const isLiked = likedPostIds.has(id);
+    const heartClass = isLiked ? 'fas fa-heart text-rose-500' : 'far fa-heart text-white';
+    const displayLikes = parseInt(d.likes_count || 0);
+    const isAddedToCart = userCartList.some(item => item.id === id);
+    const bookmarkClass = isAddedToCart ? 'fas fa-bookmark text-amber-400' : 'far fa-bookmark text-white';
+    const isOwnPost = currentUserData && d.user_id === currentUserData.id;
+
+    const deleteBlock = isOwnPost ? `
+        <button onclick="event.stopPropagation(); window.deletePost('${escAttr(id)}')" class="reel-action-btn">
+            <i class="fas fa-trash-can text-red-400 text-lg"></i>
+        </button>` : '';
+
+    return `
+    <div class="reel-card" id="reel-card-${escAttr(id)}">
+        <video class="reel-video" src="${esc(videoUrl)}" loop muted playsinline autoplay onclick="this.muted = !this.muted"></video>
+
+        <div class="reel-actions">
+            <button onclick="likePost('${escAttr(id)}', this)" data-liked="${isLiked ? 'true' : 'false'}" class="reel-action-btn flex flex-col items-center">
+                <i class="${heartClass} text-2xl"></i>
+                <span class="like-count text-white text-[10px] font-bold mt-1">${displayLikes}</span>
+            </button>
+            <button onclick="toggleComments('${escAttr(id)}')" class="reel-action-btn">
+                <i class="far fa-comment text-2xl text-white"></i>
+            </button>
+            <button onclick="window.toggleCartItem('${escAttr(id)}')" class="reel-action-btn">
+                <i class="${bookmarkClass} text-2xl"></i>
+            </button>
+            <button onclick="sharePost('${escAttr(id)}', '${escAttr(d.title)}')" class="reel-action-btn">
+                <i class="far fa-paper-plane text-2xl text-white"></i>
+            </button>
+            ${deleteBlock}
+        </div>
+
+        <div class="reel-info">
+            <div class="flex items-center gap-2 mb-1.5">
+                <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-8 h-8 rounded-full border border-white/40 object-cover" alt="">
+                <p class="text-white font-bold text-sm">${esc(d.user_name) || 'Student'}</p>
+            </div>
+            <p class="text-white text-sm font-semibold leading-snug line-clamp-2">${esc(d.title)}</p>
+            <p class="text-amber-400 font-black text-sm mt-1">GH₵${esc(String(d.price || 0))}</p>
+        </div>
+
+        <div id="comments-${escAttr(id)}" class="hidden reel-comments">
+            <div class="flex items-center gap-1.5 mb-2">
+                <input
+                    type="text"
+                    placeholder="Add a comment…"
+                    class="flex-1 bg-black/60 border border-white/20 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
+                    onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
+                >
+                <button id="cancel-reply-${escAttr(id)}" onclick="window.cancelCommentReply('${escAttr(id)}')" class="hidden text-[10px] text-white/60 hover:text-white px-1">✕</button>
+            </div>
+            <div id="comment-list-${escAttr(id)}" class="max-h-48 overflow-y-auto space-y-1.5"></div>
+        </div>
+    </div>`;
+}
+
+function renderReelsFeed() {
+    const feed = document.getElementById('posts-feed');
+    if (!feed) return;
+
+    feed.classList.remove('grid-mode');
+    feed.classList.add('reels-mode');
+
+    const reels = allCachedPosts.filter(({ data: d }) => d.media_type === 'video');
+
+    if (reels.length === 0) {
+        feed.innerHTML = `
+            <div class="h-full flex items-center justify-center text-center py-16 space-y-3 px-6">
+                <div>
+                    <p class="text-4xl mb-3">🎬</p>
+                    <p class="font-bold text-white">No reels yet</p>
+                    <p class="text-slate-400 text-xs mt-1">Post a video to be the first!</p>
+                </div>
+            </div>`;
+        return;
+    }
+
+    feed.innerHTML = reels.map(({ id, data: d }) => renderReelCard(id, d)).join('');
 }
 
 // ─── 12b. CHART / CART LIST LOGIC (NOW BACKEND POWERED!) ──────────────────────
@@ -1440,13 +1657,19 @@ function renderFeedFromCache() {
     const feed = document.getElementById('posts-feed');
     if (!feed) return;
 
+    // Reels tab: full-bleed vertical video feed, TikTok-style
+    if (currentFeedType === 'reels') {
+        renderReelsFeed();
+        return;
+    }
+
     // Products tab renders as a 4-square grid instead of the snap-scroll feed
     if (currentFeedType === 'product') {
         renderProductGrid();
         return;
     }
 
-    feed.classList.remove('grid-mode');
+    feed.classList.remove('grid-mode', 'reels-mode');
 
     if (allCachedPosts.length === 0) {
         feed.innerHTML = `
@@ -1474,16 +1697,13 @@ function renderFeedFromCache() {
                     .then(({ data: comments }) => {
                         if (!comments || comments.length === 0) return;
                         list.innerHTML = '';
-                        comments.forEach(c => {
-                            const item = document.createElement('div');
-                            item.className = 'flex gap-2 items-start text-left mt-2';
-                            item.innerHTML = `
-                                <img src="${esc(c.user_avatar) || 'https://ui-avatars.com/api/?name=U'}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
-                                <div class="bg-slate-800 rounded-2xl px-3 py-2 flex-1 border border-slate-700/20">
-                                    <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(c.user_name)}</p>
-                                    <p class="text-xs text-slate-200 mt-0.5">${esc(c.text)}</p>
-                                </div>`;
-                            list.appendChild(item);
+                        const topLevel = comments.filter(c => !c.parent_comment_id);
+                        const replies  = comments.filter(c => c.parent_comment_id);
+                        topLevel.forEach(c => {
+                            list.innerHTML += renderCommentItem(c, postId);
+                            replies.filter(r => r.parent_comment_id === c.id).forEach(r => {
+                                list.innerHTML += renderCommentItem(r, postId);
+                            });
                         });
                     }).catch(() => {});
             }
@@ -1508,6 +1728,16 @@ window.filterFeed = function (type, clickedBtn = null) {
         clickedBtn.classList.replace('border-transparent', 'border-amber-400');
     }
 
+    // Reels tab: TikTok-style overlay header, and the feed shows video
+    // posts only (media_type = 'video'), not a "type" column filter —
+    // reels are a view of existing video posts, not a new post type.
+    const header = document.getElementById('site-header');
+    if (type === 'reels') {
+        header?.classList.add('header-reels-mode');
+    } else {
+        header?.classList.remove('header-reels-mode');
+    }
+
     if (type === 'following') {
         unsubscribeFeed();
         loadFollowingFeed();
@@ -1523,7 +1753,11 @@ window.filterFeed = function (type, clickedBtn = null) {
     // but renderFeedFromCache() switches to grid layout based on currentFeedType.
     const queryFactory = () => {
         let q = supabase.from("posts").select("*");
-        if (type !== 'all' && type !== 'product') q = q.eq("type", type);
+        if (type === 'reels') {
+            q = q.eq("media_type", "video");
+        } else if (type !== 'all' && type !== 'product') {
+            q = q.eq("type", type);
+        }
         return q.order("created_at", { ascending: false }).limit(FEED_LIMIT);
     };
 
@@ -2050,205 +2284,4 @@ if (activeAuthChange) {
         // Bug fix: previously any auth-null event (including ones triggered
         // by a network drop) would force the login modal open. Now we only
         // treat this as a "signed out" transition when we're actually online,
-        // so losing connectivity never dumps credential fields on screen.
-        if (!navigator.onLine) {
-            console.warn("[Auth Observer] Network is offline. Ignoring auth state evaluation.");
-            return;
-        }
-
-        currentUserData          = user;
-        const authProfileNav     = document.getElementById('auth-profile-nav');
-
-        if (typeof window.updateAuthButton === 'function') {
-            window.updateAuthButton(user);
-        }
-
-        if (user) {
-            const metadata = user.user_metadata || {};
-            document.getElementById('login-modal')?.classList.add('hidden');
-            document.getElementById('signup-modal')?.classList.add('hidden');
-            document.getElementById('onboarding-modal')?.remove();
-
-            if (authProfileNav) {
-                authProfileNav.innerHTML = `<i class="fas fa-user text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Profile</span>`;
-                authProfileNav.onclick = function (e) { e.stopPropagation(); window.navigateTo('profile', authProfileNav); };
-            }
-
-            const avatarEl = document.getElementById('profile-ui-avatar');
-            const nameEl   = document.getElementById('profile-ui-name');
-
-            try {
-                const { data: savedUserRow } = await supabase.from("profiles").select("avatar, institution, region").eq("id", user.id).maybeSingle();
-                const savedAvatar = savedUserRow?.avatar || metadata.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
-
-                if (!currentUserData.user_metadata) currentUserData.user_metadata = {};
-                currentUserData.user_metadata.avatar_url = savedAvatar;
-
-                if (avatarEl) avatarEl.src = savedAvatar;
-                if (nameEl)   nameEl.textContent = metadata.full_name || 'Campus Student';
-
-                window.initProfileSelects();
-
-                if (!savedUserRow || !savedUserRow.institution || !savedUserRow.region) {
-                    injectOnboardingModal();
-                } else {
-                    currentUserData.institution = savedUserRow.institution || '';
-                    currentUserData.region      = savedUserRow.region || '';
-                    applyLocationToUI(savedUserRow.institution || '', savedUserRow.region || '');
-                }
-            } catch (err) {
-                console.warn("User doc sync bypassed (using local auth state):", err);
-                if (avatarEl) avatarEl.src = metadata.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
-                if (nameEl)   nameEl.textContent = metadata.full_name || 'Campus Student';
-                window.initProfileSelects();
-            }
-
-            document.getElementById('profile-auth-gate')?.classList.add('hidden');
-            document.getElementById('profile-content')?.classList.remove('hidden');
-            document.getElementById('dms-auth-gate')?.classList.add('hidden');
-            document.getElementById('dms-content')?.classList.remove('hidden');
-
-            subscribeFeed();
-            try { loadProfileStats(); } catch (_) {}
-            _initAvatarLongPress();
-        } else {
-            unsubscribeFeed();
-            unsubscribeConversations();
-            unsubscribeActiveThread();
-            if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
-
-            if (authProfileNav) {
-                authProfileNav.innerHTML = `<i class="fas fa-sign-in-alt text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>`;
-                authProfileNav.onclick = function (e) { e.stopPropagation(); window.openLoginModal(); };
-            }
-
-            setEl('profile-ui-name',           'Campus Student');
-            setEl('profile-ui-location',       'Global Network');
-            setEl('profile-followers-count',   '0');
-            setEl('profile-following-count',   '0');
-            setEl('profile-posts-count',       '0');
-
-            const grid = document.getElementById('profile-grid');
-            if (grid) grid.innerHTML = '';
-
-            document.getElementById('profile-auth-gate')?.classList.remove('hidden');
-            document.getElementById('profile-content')?.classList.add('hidden');
-            document.getElementById('dms-auth-gate')?.classList.remove('hidden');
-            document.getElementById('dms-content')?.classList.add('hidden');
-
-            subscribeFeed();
-            // Only auto-open the login modal on a genuine signed-out state
-            // while online — never as a side-effect of connectivity loss.
-            if (typeof window.openLoginModal === 'function' && navigator.onLine) {
-                window.openLoginModal();
-            }
-        }
-
-        isAuthInitialized = true;
-        if (!document.querySelector('.bottom-nav button.nav-active, nav button.nav-active, nav a.nav-active')) {
-            document.getElementById('nav-btn-feed')?.classList.add('nav-active');
-        }
-    });
-}
-
-// ─── 22. SCROLL DIRECTION DETECTOR FOR NAVBAR ────────────────────────────────
-let lastScrollY = window.scrollY;
-window.addEventListener('scroll', () => {
-    const bottomNav = document.querySelector('.bottom-nav-container');
-    if (!bottomNav) return;
-    const currentScrollY = window.scrollY;
-
-    if (currentScrollY < 20) { bottomNav.classList.remove('bottom-nav-hidden'); return; }
-    if (currentScrollY > lastScrollY) {
-        bottomNav.classList.add('bottom-nav-hidden');
-    } else {
-        bottomNav.classList.remove('bottom-nav-hidden');
-    }
-    lastScrollY = currentScrollY;
-}, { passive: true });
-
-// ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ──────────────────────────────
-document.body.addEventListener('click', (event) => {
-    const profileClickTarget = event.target.closest('.feed-profile-trigger');
-    if (profileClickTarget) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (typeof window.navigateTo === 'function') {
-            window.navigateTo('profile');
-        }
-    }
-});
-
-// ─── 24. NATIVE INTERNET CONNECTIVITY DETECTOR ───────────────────────────────
-// Fix: previously going offline could still leave login/signup modals open
-// or let them be triggered by the auth observer. Now we explicitly close
-// any open credential modals the moment connectivity drops, and show a
-// calm, professional toast instead — matching how other production apps
-// (WhatsApp, Instagram) handle connectivity loss.
-window.addEventListener('offline', () => {
-    isOnline = false;
-    document.getElementById('login-modal')?.classList.add('hidden');
-    document.getElementById('signup-modal')?.classList.add('hidden');
-
-    showToast("You're offline");
-    const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
-    if (submitBtn) {
-        submitBtn.dataset.originalText = submitBtn.textContent;
-        submitBtn.textContent          = 'Waiting for connection...';
-        submitBtn.disabled             = true;
-    }
-});
-
-window.addEventListener('online', () => {
-    isOnline = true;
-    showToast("Back online");
-    const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
-    if (submitBtn && submitBtn.dataset.originalText) {
-        submitBtn.textContent = submitBtn.dataset.originalText;
-        submitBtn.disabled    = false;
-    }
-    if (typeof subscribeFeed === 'function') subscribeFeed();
-});
-
-// ─── UTILITY FUNCTION: WIRE CAROUSEL COUNTERS ───────────────────────────────
-function wireCarouselCounters(postId) {
-    const carousel = document.querySelector(`.feed-carousel-${postId}`);
-    const counter = document.querySelector(`.carousel-counter-${postId}`);
-    if (!carousel || !counter) return;
-
-    carousel.addEventListener('scroll', () => {
-        const width = carousel.offsetWidth;
-        if (width <= 0) return;
-        const index = Math.round(carousel.scrollLeft / width) + 1;
-        counter.textContent = index;
-    }, { passive: true });
-}
-
-// ─── UTILITY FUNCTION: RENDER PROFILE GRID ITEM ─────────────────────────────
-function renderGridItem(id, post) {
-    const d = post.data ? post.data : post;
-
-    let mediaUrl = '';
-    if (d.media_url) {
-        if (d.media_url.startsWith('[')) {
-            try { mediaUrl = JSON.parse(d.media_url)[0]; } catch(_) { mediaUrl = d.media_url; }
-        } else {
-            mediaUrl = d.media_url;
-        }
-    }
-
-    const fallbackImage = 'https://images.unsplash.com/photo-1563013544-824ae1d704d3?w=300';
-    const isVideo = d.media_type === 'video';
-
-    return `
-    <div onclick="openDetail('${id}')" class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition">
-        ${isVideo
-            ? `<video class="w-full h-full object-cover" src="${mediaUrl}"></video>
-               <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
-            : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
-        }
-        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
-            <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
-        </div>
-    </div>`;
-}
+        // so losing
