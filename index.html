@@ -37,11 +37,6 @@
       padding: 12px 16px;
       max-width: 448px;
       margin: 0 auto;
-      transition: transform 0.3s ease;
-    }
-
-    .site-header-hidden {
-      transform: translateY(-100%);
     }
 
     .header-top {
@@ -408,10 +403,10 @@
 
   <input type="file" id="mediaInput" class="hidden" accept="image/*,video/*" multiple />
 
-  <div class="site-header" id="site-header">
+  <div class="site-header">
     <div class="header-top">
       <h1 class="logo">Campus<span>Market</span></h1>
-      <button id="nav-btn-cart" class="header-icon-btn" onclick="window.navigateTo('cart', document.getElementById('nav-btn-cart'))" aria-label="Saved items">
+      <button class="header-icon-btn" onclick="window.navigateTo('cart', document.getElementById('nav-btn-cart'))" aria-label="Saved items">
         <i class="fas fa-bookmark text-xs"></i>
         <span id="header-cart-badge" class="badge-dot hidden">0</span>
       </button>
@@ -432,12 +427,11 @@
   <main class="px-4 pt-4 max-w-md mx-auto">
 
     <div id="feed-container" class="pb-24">
-      <div id="feed-tabs" class="flex border-b border-slate-900 text-[11px] font-bold tracking-wider uppercase mb-4 overflow-x-auto no-scrollbar">
-        <button onclick="window.filterFeed('all', this)" class="feed-tab-btn flex-1 pb-3 text-center text-amber-400 border-b-2 border-amber-400 whitespace-nowrap px-1">All</button>
-        <button onclick="window.filterFeed('following', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300 whitespace-nowrap px-1">Following</button>
-        <button onclick="window.filterFeed('product', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300 whitespace-nowrap px-1">Products</button>
-        <button onclick="window.filterFeed('skill', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300 whitespace-nowrap px-1">Services</button>
-        <button onclick="window.navigateTo('cart', document.getElementById('nav-btn-cart'))" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300 whitespace-nowrap px-1">Saved</button>
+      <div id="feed-tabs" class="flex border-b border-slate-900 text-xs font-bold tracking-wider uppercase mb-4">
+        <button onclick="window.filterFeed('all', this)" class="feed-tab-btn flex-1 pb-3 text-center text-amber-400 border-b-2 border-amber-400">All</button>
+        <button onclick="window.filterFeed('following', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Following</button>
+        <button onclick="window.filterFeed('product', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Products</button>
+        <button onclick="window.filterFeed('skill', this)" class="feed-tab-btn flex-1 pb-3 text-center text-slate-500 border-b-2 border-transparent hover:text-slate-300">Services</button>
       </div>
       <div id="posts-feed"></div>
     </div>
@@ -569,6 +563,10 @@
       <button id="nav-btn-dms" onclick="window.navigateTo('dms', this)">
         <i class="fas fa-envelope"></i>
         <span>DMs</span>
+      </button>
+      <button id="nav-btn-cart" onclick="window.navigateTo('cart', this)">
+        <i class="fas fa-bookmark"></i>
+        <span id="nav-cart-badge-wrap" class="relative">Saved</span>
       </button>
       <button id="auth-profile-nav" onclick="window.navigateTo('profile', this)">
         <i class="fas fa-sign-in-alt"></i>
@@ -812,7 +810,7 @@
     };
 
     // Live count of attached files for the "Create Listing" modal, and a
-    // running badge on the header bookmark icon for saved-item count.
+    // running badge on the header/nav bookmark icons for saved-item count.
     document.addEventListener('DOMContentLoaded', function() {
       _setActiveNav(document.getElementById('nav-btn-feed'));
 
@@ -837,19 +835,9 @@
       setInterval(refreshCartBadges, 1500);
     });
 
-    /* ── PROXY STUBS ──
-       CRITICAL FIX: _registerModuleFunction previously had no guard against
-       being called twice for the same name. If that happened, it could end
-       up doing `window[name] = window[name]` (registering the real function
-       against itself), which recurses infinitely the moment it's called —
-       this was the exact cause of "Maximum call stack size exceeded" and
-       every button breaking at once, since the failure happens inside a
-       shared function all buttons route through.
-       The guard below makes registration idempotent: once a name is marked
-       real, later registration calls are ignored instead of re-wrapping it. */
+    /* ── PROXY STUBS ── */
     (function() {
       const _queue = {};
-      const _registered = {};
 
       function makeStub(name) {
         _queue[name] = [];
@@ -870,9 +858,6 @@
       ].forEach(makeStub);
 
       window._registerModuleFunction = function(name, fn) {
-        if (_registered[name]) return; // already wired to a real function — never re-register
-        if (typeof fn !== 'function') return;
-        _registered[name] = true;
         window['_real_' + name] = fn;
         window[name] = fn;
         if (_queue[name] && _queue[name].length) {
@@ -896,12 +881,7 @@
       'openDM','closeDMThread','sendChatMessage'
     ];
 
-    // Guard here too: only register a name if window[name] is currently the
-    // stub (i.e. it hasn't been registered yet). This prevents this second
-    // script block from ever re-wrapping an already-real function, which is
-    // what caused the recursive self-reference in the first place.
     _moduleExports.forEach(name => {
-      if (window['_real_' + name]) return; // already registered — skip
       if (typeof window[name] === 'function' && typeof window._registerModuleFunction === 'function') {
         window._registerModuleFunction(name, window[name]);
       }
