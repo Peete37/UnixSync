@@ -2284,4 +2284,205 @@ if (activeAuthChange) {
         // Bug fix: previously any auth-null event (including ones triggered
         // by a network drop) would force the login modal open. Now we only
         // treat this as a "signed out" transition when we're actually online,
-        // so losing
+        // so losing connectivity never dumps credential fields on screen.
+        if (!navigator.onLine) {
+            console.warn("[Auth Observer] Network is offline. Ignoring auth state evaluation.");
+            return;
+        }
+
+        currentUserData          = user;
+        const authProfileNav     = document.getElementById('auth-profile-nav');
+
+        if (typeof window.updateAuthButton === 'function') {
+            window.updateAuthButton(user);
+        }
+
+        if (user) {
+            const metadata = user.user_metadata || {};
+            document.getElementById('login-modal')?.classList.add('hidden');
+            document.getElementById('signup-modal')?.classList.add('hidden');
+            document.getElementById('onboarding-modal')?.remove();
+
+            if (authProfileNav) {
+                authProfileNav.innerHTML = `<i class="fas fa-user text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Profile</span>`;
+                authProfileNav.onclick = function (e) { e.stopPropagation(); window.navigateTo('profile', authProfileNav); };
+            }
+
+            const avatarEl = document.getElementById('profile-ui-avatar');
+            const nameEl   = document.getElementById('profile-ui-name');
+
+            try {
+                const { data: savedUserRow } = await supabase.from("profiles").select("avatar, institution, region").eq("id", user.id).maybeSingle();
+                const savedAvatar = savedUserRow?.avatar || metadata.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
+
+                if (!currentUserData.user_metadata) currentUserData.user_metadata = {};
+                currentUserData.user_metadata.avatar_url = savedAvatar;
+
+                if (avatarEl) avatarEl.src = savedAvatar;
+                if (nameEl)   nameEl.textContent = metadata.full_name || 'Campus Student';
+
+                window.initProfileSelects();
+
+                if (!savedUserRow || !savedUserRow.institution || !savedUserRow.region) {
+                    injectOnboardingModal();
+                } else {
+                    currentUserData.institution = savedUserRow.institution || '';
+                    currentUserData.region      = savedUserRow.region || '';
+                    applyLocationToUI(savedUserRow.institution || '', savedUserRow.region || '');
+                }
+            } catch (err) {
+                console.warn("User doc sync bypassed (using local auth state):", err);
+                if (avatarEl) avatarEl.src = metadata.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
+                if (nameEl)   nameEl.textContent = metadata.full_name || 'Campus Student';
+                window.initProfileSelects();
+            }
+
+            document.getElementById('profile-auth-gate')?.classList.add('hidden');
+            document.getElementById('profile-content')?.classList.remove('hidden');
+            document.getElementById('dms-auth-gate')?.classList.add('hidden');
+            document.getElementById('dms-content')?.classList.remove('hidden');
+
+            subscribeFeed();
+            try { loadProfileStats(); } catch (_) {}
+            _initAvatarLongPress();
+        } else {
+            unsubscribeFeed();
+            unsubscribeConversations();
+            unsubscribeActiveThread();
+            if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
+
+            if (authProfileNav) {
+                authProfileNav.innerHTML = `<i class="fas fa-sign-in-alt text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>`;
+                authProfileNav.onclick = function (e) { e.stopPropagation(); window.openLoginModal(); };
+            }
+
+            setEl('profile-ui-name',           'Campus Student');
+            setEl('profile-ui-location',       'Global Network');
+            setEl('profile-followers-count',   '0');
+            setEl('profile-following-count',   '0');
+            setEl('profile-posts-count',       '0');
+
+            const grid = document.getElementById('profile-grid');
+            if (grid) grid.innerHTML = '';
+
+            document.getElementById('profile-auth-gate')?.classList.remove('hidden');
+            document.getElementById('profile-content')?.classList.add('hidden');
+            document.getElementById('dms-auth-gate')?.classList.remove('hidden');
+            document.getElementById('dms-content')?.classList.add('hidden');
+
+            subscribeFeed();
+            // Only auto-open the login modal on a genuine signed-out state
+            // while online — never as a side-effect of connectivity loss.
+            if (typeof window.openLoginModal === 'function' && navigator.onLine) {
+                window.openLoginModal();
+            }
+        }
+
+        isAuthInitialized = true;
+        if (!document.querySelector('.bottom-nav button.nav-active, nav button.nav-active, nav a.nav-active')) {
+            document.getElementById('nav-btn-feed')?.classList.add('nav-active');
+        }
+    });
+}
+
+// ─── 22. SCROLL DIRECTION DETECTOR FOR NAVBAR ────────────────────────────────
+let lastScrollY = window.scrollY;
+window.addEventListener('scroll', () => {
+    const bottomNav = document.querySelector('.bottom-nav-container');
+    if (!bottomNav) return;
+    const currentScrollY = window.scrollY;
+
+    if (currentScrollY < 20) { bottomNav.classList.remove('bottom-nav-hidden'); return; }
+    if (currentScrollY > lastScrollY) {
+        bottomNav.classList.add('bottom-nav-hidden');
+    } else {
+        bottomNav.classList.remove('bottom-nav-hidden');
+    }
+    lastScrollY = currentScrollY;
+}, { passive: true });
+
+// ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ──────────────────────────────
+document.body.addEventListener('click', (event) => {
+    const profileClickTarget = event.target.closest('.feed-profile-trigger');
+    if (profileClickTarget) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof window.navigateTo === 'function') {
+            window.navigateTo('profile');
+        }
+    }
+});
+
+// ─── 24. NATIVE INTERNET CONNECTIVITY DETECTOR ───────────────────────────────
+// Fix: previously going offline could still leave login/signup modals open
+// or let them be triggered by the auth observer. Now we explicitly close
+// any open credential modals the moment connectivity drops, and show a
+// calm, professional toast instead — matching how other production apps
+// (WhatsApp, Instagram) handle connectivity loss.
+window.addEventListener('offline', () => {
+    isOnline = false;
+    document.getElementById('login-modal')?.classList.add('hidden');
+    document.getElementById('signup-modal')?.classList.add('hidden');
+
+    showToast("You're offline");
+    const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
+    if (submitBtn) {
+        submitBtn.dataset.originalText = submitBtn.textContent;
+        submitBtn.textContent          = 'Waiting for connection...';
+        submitBtn.disabled             = true;
+    }
+});
+
+window.addEventListener('online', () => {
+    isOnline = true;
+    showToast("Back online");
+    const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
+    if (submitBtn && submitBtn.dataset.originalText) {
+        submitBtn.textContent = submitBtn.dataset.originalText;
+        submitBtn.disabled    = false;
+    }
+    if (typeof subscribeFeed === 'function') subscribeFeed();
+});
+
+// ─── UTILITY FUNCTION: WIRE CAROUSEL COUNTERS ───────────────────────────────
+function wireCarouselCounters(postId) {
+    const carousel = document.querySelector(`.feed-carousel-${postId}`);
+    const counter = document.querySelector(`.carousel-counter-${postId}`);
+    if (!carousel || !counter) return;
+
+    carousel.addEventListener('scroll', () => {
+        const width = carousel.offsetWidth;
+        if (width <= 0) return;
+        const index = Math.round(carousel.scrollLeft / width) + 1;
+        counter.textContent = index;
+    }, { passive: true });
+}
+
+// ─── UTILITY FUNCTION: RENDER PROFILE GRID ITEM ─────────────────────────────
+function renderGridItem(id, post) {
+    const d = post.data ? post.data : post;
+
+    let mediaUrl = '';
+    if (d.media_url) {
+        if (d.media_url.startsWith('[')) {
+            try { mediaUrl = JSON.parse(d.media_url)[0]; } catch(_) { mediaUrl = d.media_url; }
+        } else {
+            mediaUrl = d.media_url;
+        }
+    }
+
+    const fallbackImage = 'https://images.unsplash.com/photo-1563013544-824ae1d704d3?w=300';
+    const isVideo = d.media_type === 'video';
+
+    return `
+    <div onclick="openDetail('${id}')" class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition">
+        ${isVideo
+            ? `<video class="w-full h-full object-cover" src="${mediaUrl}"></video>
+               <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
+            : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
+        }
+        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
+            <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
+        </div>
+    </div>`;
+}
