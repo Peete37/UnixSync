@@ -1128,6 +1128,8 @@ function renderProductGrid() {
     const feed = document.getElementById('posts-feed');
     if (!feed) return;
 
+    feed.classList.add('grid-mode');
+
     const products = allCachedPosts.filter(({ data: d }) => (d.type || 'product') === 'product');
 
     if (products.length === 0) {
@@ -1202,8 +1204,7 @@ window.toggleCartItem = async function (postId) {
         feedIcon.className = !isRemoving ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
     }
 
-    const gridIcon = document.getElementById(`grid-card-${postId}`)?.querySelector('i.fa-bookmark, i.fa-bookmark ~ i');
-    const gridBtn  = document.getElementById(`grid-card-${postId}`)?.querySelector('button i');
+    const gridBtn = document.getElementById(`grid-card-${postId}`)?.querySelector('button i');
     if (gridBtn) {
         gridBtn.className = !isRemoving ? "fas fa-bookmark text-amber-400 text-xs" : "far fa-bookmark text-white/80 text-xs";
     }
@@ -1392,6 +1393,7 @@ async function loadFollowingFeed() {
     const feed = document.getElementById('posts-feed');
     if (!feed) return;
 
+    feed.classList.remove('grid-mode');
     feed.innerHTML = '<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Loading following feed...</div>';
 
     try {
@@ -1443,6 +1445,8 @@ function renderFeedFromCache() {
         renderProductGrid();
         return;
     }
+
+    feed.classList.remove('grid-mode');
 
     if (allCachedPosts.length === 0) {
         feed.innerHTML = `
@@ -2147,21 +2151,55 @@ if (activeAuthChange) {
     });
 }
 
-// ─── 22. SCROLL DIRECTION DETECTOR FOR NAVBAR ────────────────────────────────
+// ─── 22. SCROLL DIRECTION DETECTOR FOR NAVBAR + HEADER ───────────────────────
+// Hides the top header (logo/search) and bottom nav on scroll-down, reveals
+// them on scroll-up — same pattern for both so they behave consistently.
+// #posts-feed scrolls internally (its own overflow-y), so window.scrollY
+// never changes while browsing the feed; we track that container's scroll
+// position separately from the page-level scroll used by Explore/Profile/etc.
+
+function _handleScrollDirection(currentScrollY, lastScrollY) {
+    const bottomNav = document.querySelector('.bottom-nav-container');
+    const header    = document.getElementById('site-header');
+
+    if (currentScrollY < 20) {
+        bottomNav?.classList.remove('bottom-nav-hidden');
+        header?.classList.remove('site-header-hidden');
+        return;
+    }
+    if (currentScrollY > lastScrollY) {
+        bottomNav?.classList.add('bottom-nav-hidden');
+        header?.classList.add('site-header-hidden');
+    } else {
+        bottomNav?.classList.remove('bottom-nav-hidden');
+        header?.classList.remove('site-header-hidden');
+    }
+}
+
 let lastScrollY = window.scrollY;
 window.addEventListener('scroll', () => {
-    const bottomNav = document.querySelector('.bottom-nav-container');
-    if (!bottomNav) return;
     const currentScrollY = window.scrollY;
-
-    if (currentScrollY < 20) { bottomNav.classList.remove('bottom-nav-hidden'); return; }
-    if (currentScrollY > lastScrollY) {
-        bottomNav.classList.add('bottom-nav-hidden');
-    } else {
-        bottomNav.classList.remove('bottom-nav-hidden');
-    }
+    _handleScrollDirection(currentScrollY, lastScrollY);
     lastScrollY = currentScrollY;
 }, { passive: true });
+
+let lastFeedScrollY = 0;
+function _wireFeedScrollListener() {
+    const feed = document.getElementById('posts-feed');
+    if (!feed || feed.dataset.scrollWired) return;
+    feed.dataset.scrollWired = 'true';
+    feed.addEventListener('scroll', () => {
+        const currentScrollY = feed.scrollTop;
+        _handleScrollDirection(currentScrollY, lastFeedScrollY);
+        lastFeedScrollY = currentScrollY;
+    }, { passive: true });
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _wireFeedScrollListener);
+} else {
+    _wireFeedScrollListener();
+}
 
 // ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ──────────────────────────────
 document.body.addEventListener('click', (event) => {
@@ -2244,7 +2282,4 @@ function renderGridItem(id, post) {
             : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
         }
         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
-            <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
-        </div>
-    </div>`;
-}
+            <p class="text-[10px] text-white font-black truncate w-full">GH
