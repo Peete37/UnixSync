@@ -812,7 +812,7 @@
     };
 
     // Live count of attached files for the "Create Listing" modal, and a
-    // running badge on the header/nav bookmark icons for saved-item count.
+    // running badge on the header bookmark icon for saved-item count.
     document.addEventListener('DOMContentLoaded', function() {
       _setActiveNav(document.getElementById('nav-btn-feed'));
 
@@ -837,9 +837,19 @@
       setInterval(refreshCartBadges, 1500);
     });
 
-    /* ── PROXY STUBS ── */
+    /* ── PROXY STUBS ──
+       CRITICAL FIX: _registerModuleFunction previously had no guard against
+       being called twice for the same name. If that happened, it could end
+       up doing `window[name] = window[name]` (registering the real function
+       against itself), which recurses infinitely the moment it's called —
+       this was the exact cause of "Maximum call stack size exceeded" and
+       every button breaking at once, since the failure happens inside a
+       shared function all buttons route through.
+       The guard below makes registration idempotent: once a name is marked
+       real, later registration calls are ignored instead of re-wrapping it. */
     (function() {
       const _queue = {};
+      const _registered = {};
 
       function makeStub(name) {
         _queue[name] = [];
@@ -860,6 +870,9 @@
       ].forEach(makeStub);
 
       window._registerModuleFunction = function(name, fn) {
+        if (_registered[name]) return; // already wired to a real function — never re-register
+        if (typeof fn !== 'function') return;
+        _registered[name] = true;
         window['_real_' + name] = fn;
         window[name] = fn;
         if (_queue[name] && _queue[name].length) {
@@ -883,7 +896,12 @@
       'openDM','closeDMThread','sendChatMessage'
     ];
 
+    // Guard here too: only register a name if window[name] is currently the
+    // stub (i.e. it hasn't been registered yet). This prevents this second
+    // script block from ever re-wrapping an already-real function, which is
+    // what caused the recursive self-reference in the first place.
     _moduleExports.forEach(name => {
+      if (window['_real_' + name]) return; // already registered — skip
       if (typeof window[name] === 'function' && typeof window._registerModuleFunction === 'function') {
         window._registerModuleFunction(name, window[name]);
       }
