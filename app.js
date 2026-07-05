@@ -54,6 +54,46 @@ let userCartList = JSON.parse(localStorage.getItem("campus_market_cart") || "[]"
 Object.defineProperty(window, '_currentUser',   { get: () => currentUserData });
 Object.defineProperty(window, '_userCartList',  { get: () => userCartList });
 
+// ─── 3b. MEDIA EDIT MODAL STATE (WhatsApp-style edit before upload) ──────────
+// Files staged for review in the "Edit Media" modal before they're actually
+// attached/uploaded. Each entry: { file, url (object URL), rotation, type }
+let stagedMediaFiles  = [];
+let activeStagedIndex = 0;
+let finalMediaFiles   = []; // the files the user actually confirmed via "Use These Files"
+
+// ─── 3c. HISTORY / BACK-BUTTON STATE ──────────────────────────────────────────
+// Tracks which overlays (modals, comment sheets, DM threads) are open so the
+// phone's hardware/gesture back button closes them one layer at a time
+// instead of exiting/backgrounding the app.
+const _uiStack = [];
+
+function pushUiState(id, closeFn) {
+    _uiStack.push({ id, close: closeFn });
+    try { history.pushState({ uiLayer: id }, ''); } catch (_) {}
+}
+
+function popUiState(id) {
+    const idx = _uiStack.findIndex(l => l.id === id);
+    if (idx !== -1) _uiStack.splice(idx, 1);
+}
+
+window.addEventListener('popstate', () => {
+    if (_uiStack.length > 0) {
+        const top = _uiStack.pop();
+        try { top.close(true); } catch (_) {}
+        // Re-arm a history entry so the next back-press is caught again
+        // if there's still something else open underneath.
+        if (_uiStack.length > 0) {
+            try { history.pushState({ uiLayer: _uiStack[_uiStack.length - 1].id }, ''); } catch (_) {}
+        }
+    }
+});
+
+// Seed one base history entry so the first back-press when nothing is open
+// behaves like a normal app (doesn't feel broken), while genuinely letting
+// the browser/app handle exit navigation once the stack is empty.
+try { history.replaceState({ uiLayer: 'base' }, ''); } catch (_) {}
+
 // ─── 4. UTILITIES ─────────────────────────────────────────────────────────────
 function esc(str) {
     return String(str ?? '')
@@ -366,6 +406,12 @@ function setNavHighlight(btn, viewId) {
 }
 
 window.navigateTo = function (viewId, btn = null) {
+    // Stop all reel video audio whenever we leave the feed entirely, so
+    // switching to Profile/DMs/etc never leaves background audio playing.
+    if (viewId !== 'feed') {
+        pauseAllReelVideos();
+    }
+
     ['feed-container', 'profile-container', 'explore-container', 'dms-container', 'cart-container']
         .forEach(id => document.getElementById(id)?.classList.add('hidden'));
 
@@ -440,7 +486,18 @@ window.togglePostModal = function () {
         window.openLoginModal();
         return;
     }
-    document.getElementById('post-modal')?.classList.toggle('hidden');
+    const modal = document.getElementById('post-modal');
+    if (!modal) return;
+    const willOpen = modal.classList.contains('hidden');
+    modal.classList.toggle('hidden');
+
+    if (willOpen) {
+        pushUiState('post-modal', () => {
+            document.getElementById('post-modal')?.classList.add('hidden');
+        });
+    } else {
+        popUiState('post-modal');
+    }
 };
 
 // ─── 9. DETAIL MODAL ──────────────────────────────────────────────────────────
@@ -450,6 +507,7 @@ window.openDetail = async function (postId) {
     if (!modal || !content) return;
 
     modal.classList.remove('hidden');
+    pushUiState('detail-modal', () => window.closeDetailModal(true));
     content.innerHTML = `<div class="p-20 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Syncing Details...</div>`;
 
     try {
@@ -567,8 +625,9 @@ window.openDetail = async function (postId) {
     }
 };
 
-window.closeDetailModal = function () {
+window.closeDetailModal = function (fromPop = false) {
     document.getElementById('detail-modal')?.classList.add('hidden');
+    if (!fromPop) popUiState('detail-modal');
 };
 
 // ─── 10. LOGIN MODAL ──────────────────────────────────────────────────────────
@@ -581,11 +640,13 @@ window.openLoginModal = function () {
     }
     document.getElementById('signup-modal')?.classList.add('hidden');
     document.getElementById('login-modal')?.classList.remove('hidden');
+    pushUiState('login-modal', () => window.closeLoginModal(true));
 };
 
-window.closeLoginModal = function () {
+window.closeLoginModal = function (fromPop = false) {
     document.getElementById('login-modal')?.classList.add('hidden');
     document.getElementById('signup-modal')?.classList.add('hidden');
+    if (!fromPop) popUiState('login-modal');
 };
 
 // ─── 10b. EMAIL AUTH ──────────────────────────────────────────────────────────
@@ -680,7 +741,7 @@ window.handleAvatarUpload = async function (inputEl) {
         await supabase.auth.updateUser({ data: { avatar_url: dynamicUrl } });
 
         if (!currentUserData.user_metadata) currentUserData.user_metadata = {};
-        currentUserData.user_metadata.avatar_url = publicUrl;
+        currentUserData.user_metadata.avatar_url = dynamicUrl;
 
         if (previewEl) previewEl.src = publicUrl;
         showToast('Avatar updated! ✓');
@@ -710,6 +771,11 @@ function _initAvatarLongPress() {
     function openAvatarModal(src) {
         modalAvatarImg.src = src;
         avatarModal.classList.remove('hidden');
+        pushUiState('avatar-modal', () => { avatarModal.classList.add('hidden'); });
+    }
+    function closeAvatarModalFn() {
+        avatarModal.classList.add('hidden');
+        popUiState('avatar-modal');
     }
 
     function startPress() {
@@ -726,8 +792,8 @@ function _initAvatarLongPress() {
     profileAvatar.addEventListener('mouseup',     cancelPress);
     profileAvatar.addEventListener('mouseleave',  cancelPress);
 
-    closeAvatarBtn?.addEventListener('click', () => { avatarModal.classList.add('hidden'); });
-    avatarModal.addEventListener('click', (e) => { if (e.target === avatarModal) avatarModal.classList.add('hidden'); });
+    closeAvatarBtn?.addEventListener('click', closeAvatarModalFn);
+    avatarModal.addEventListener('click', (e) => { if (e.target === avatarModal) closeAvatarModalFn(); });
 
     copyImageBtn?.addEventListener('click', async () => {
         try {
@@ -765,6 +831,147 @@ if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _initAvatarLongPress);
 } else {
     _initAvatarLongPress();
+}
+
+// ─── 11c. MEDIA EDIT MODAL (WhatsApp-style edit before upload) ──────────────
+// Opened automatically whenever files are chosen via the mediaInput file
+// picker. Lets the user preview, rotate, and remove files before they are
+// actually attached to the listing (finalMediaFiles is what gets uploaded).
+window.openEditMediaModal = function (fileList) {
+    // Revoke any previously staged object URLs to avoid leaking memory
+    stagedMediaFiles.forEach(f => { try { URL.revokeObjectURL(f.url); } catch(_) {} });
+
+    stagedMediaFiles = Array.from(fileList).map(file => ({
+        file,
+        url: URL.createObjectURL(file),
+        rotation: 0,
+        type: file.type.startsWith('video') ? 'video' : 'image'
+    }));
+    activeStagedIndex = 0;
+
+    renderEditMediaModal();
+
+    const modal = document.getElementById('editMediaModal');
+    modal?.classList.remove('hidden');
+    pushUiState('edit-media-modal', () => window.closeEditMediaModal(true));
+};
+
+function renderEditMediaModal() {
+    const mainPreview = document.getElementById('editMainPreview');
+    const thumbStrip  = document.getElementById('editThumbStrip');
+    if (!mainPreview || !thumbStrip) return;
+
+    if (stagedMediaFiles.length === 0) {
+        mainPreview.innerHTML = `<p class="text-slate-500 text-xs p-8">No files attached.</p>`;
+        thumbStrip.innerHTML = '';
+        return;
+    }
+
+    if (activeStagedIndex >= stagedMediaFiles.length) activeStagedIndex = stagedMediaFiles.length - 1;
+    const active = stagedMediaFiles[activeStagedIndex];
+
+    const rotationStyle = `transform: rotate(${active.rotation}deg);`;
+    mainPreview.innerHTML = active.type === 'video'
+        ? `<video src="${active.url}" style="${rotationStyle}" controls muted></video>
+           <button class="rotate-btn" onclick="window._rotateStagedMedia()"><i class="fas fa-rotate-right text-sm"></i></button>`
+        : `<img src="${active.url}" style="${rotationStyle}" alt="Preview">
+           <button class="rotate-btn" onclick="window._rotateStagedMedia()"><i class="fas fa-rotate-right text-sm"></i></button>`;
+
+    thumbStrip.innerHTML = stagedMediaFiles.map((f, i) => `
+        <div class="edit-thumb ${i === activeStagedIndex ? 'active-thumb' : ''}" onclick="window._selectStagedMedia(${i})">
+            ${f.type === 'video'
+                ? `<video src="${f.url}" muted></video>`
+                : `<img src="${f.url}" alt="thumb ${i+1}">`}
+            <button class="remove-thumb-btn" onclick="event.stopPropagation(); window._removeStagedMedia(${i})">✕</button>
+        </div>
+    `).join('');
+}
+
+window._selectStagedMedia = function (i) {
+    activeStagedIndex = i;
+    renderEditMediaModal();
+};
+
+window._rotateStagedMedia = function () {
+    if (!stagedMediaFiles[activeStagedIndex]) return;
+    stagedMediaFiles[activeStagedIndex].rotation = (stagedMediaFiles[activeStagedIndex].rotation + 90) % 360;
+    renderEditMediaModal();
+};
+
+window._removeStagedMedia = function (i) {
+    const removed = stagedMediaFiles.splice(i, 1)[0];
+    if (removed) { try { URL.revokeObjectURL(removed.url); } catch(_) {} }
+    if (activeStagedIndex >= stagedMediaFiles.length) activeStagedIndex = Math.max(0, stagedMediaFiles.length - 1);
+    renderEditMediaModal();
+    if (stagedMediaFiles.length === 0) {
+        const countEl = document.getElementById('mediaFileCount');
+        if (countEl) countEl.textContent = '';
+    }
+};
+
+window.closeEditMediaModal = function (fromPop = false) {
+    document.getElementById('editMediaModal')?.classList.add('hidden');
+    if (!fromPop) popUiState('edit-media-modal');
+};
+
+// Applies rotation (if any) by redrawing rotated images to canvas so the
+// final uploaded file actually reflects the edit, then stores the
+// confirmed set as finalMediaFiles for handlePostSubmission to use.
+window.confirmEditedMedia = async function () {
+    if (stagedMediaFiles.length === 0) {
+        showToast('Please attach at least one file.');
+        window.closeEditMediaModal();
+        return;
+    }
+
+    const processed = [];
+    for (const item of stagedMediaFiles) {
+        if (item.type === 'image' && item.rotation !== 0) {
+            try {
+                const rotatedFile = await rotateImageFile(item.file, item.rotation);
+                processed.push(rotatedFile);
+            } catch (e) {
+                console.warn('Rotate failed, using original file:', e);
+                processed.push(item.file);
+            }
+        } else {
+            processed.push(item.file);
+        }
+    }
+
+    finalMediaFiles = processed;
+
+    const countEl = document.getElementById('mediaFileCount');
+    if (countEl) {
+        countEl.textContent = `${processed.length} file${processed.length > 1 ? 's' : ''} ready — tap Publish to upload`;
+    }
+
+    window.closeEditMediaModal();
+    showToast('Media ready ✓');
+};
+
+function rotateImageFile(file, degrees) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        const objUrl = URL.createObjectURL(file);
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const swap = degrees === 90 || degrees === 270;
+            canvas.width  = swap ? img.height : img.width;
+            canvas.height = swap ? img.width  : img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+            ctx.rotate((degrees * Math.PI) / 180);
+            ctx.drawImage(img, -img.width / 2, -img.height / 2);
+            canvas.toBlob((blob) => {
+                URL.revokeObjectURL(objUrl);
+                if (!blob) { reject(new Error('Canvas toBlob failed')); return; }
+                resolve(new File([blob], file.name, { type: file.type || 'image/jpeg' }));
+            }, file.type || 'image/jpeg', 0.92);
+        };
+        img.onerror = reject;
+        img.src = objUrl;
+    });
 }
 
 // ─── 12. CARD RENDERERS ───────────────────────────────────────────────────────
@@ -866,6 +1073,26 @@ window.contactSeller = function (sellerId, userName, sellerAvatar, postTitle) {
     window.openDM(sellerId, userName, sellerAvatar);
 };
 
+// ─── Comment count tracking (keeps counters accurate without a full re-fetch) ──
+const commentCountCache = {}; // postId -> count
+
+function updateCommentCountUI(postId, count) {
+    commentCountCache[postId] = count;
+    document.querySelectorAll(`.comment-count-${CSS.escape(postId)}`).forEach(el => {
+        el.textContent = count;
+    });
+}
+
+async function fetchAndCacheCommentCount(postId) {
+    try {
+        const { count, error } = await supabase
+            .from('comments')
+            .select('id', { count: 'exact', head: true })
+            .eq('post_id', postId);
+        if (!error) updateCommentCountUI(postId, count || 0);
+    } catch (_) {}
+}
+
 window.postComment = async function(postId, inputEl, parentCommentId = null) {
     const text = inputEl.value.trim();
     if (!text || !currentUserData) return;
@@ -895,7 +1122,7 @@ const activeReplyTarget = {};
 
 window.startCommentReply = function (postId, commentId, commentAuthor) {
     activeReplyTarget[postId] = commentId;
-    const input = document.querySelector(`#comments-${postId} input[type="text"]`);
+    const input = document.querySelector(`#comments-${CSS.escape(postId)} input[type="text"]`);
     if (input) {
         input.placeholder = `Replying to ${commentAuthor}…`;
         input.dataset.replyTo = commentId;
@@ -907,7 +1134,7 @@ window.startCommentReply = function (postId, commentId, commentAuthor) {
 
 window.cancelCommentReply = function (postId) {
     delete activeReplyTarget[postId];
-    const input = document.querySelector(`#comments-${postId} input[type="text"]`);
+    const input = document.querySelector(`#comments-${CSS.escape(postId)} input[type="text"]`);
     if (input) {
         input.placeholder = 'Add a comment…';
         delete input.dataset.replyTo;
@@ -959,16 +1186,36 @@ window.likeComment = async function (commentId, btn) {
     }
 };
 
+// Fixed: previously scoped to .eq('user_id', ...) which silently failed
+// whenever RLS/user id mismatched in any way and gave no feedback. Now we
+// check ownership up front, surface real errors, and always refresh the
+// count after a successful delete.
 window.deleteComment = async function (commentId, postId) {
-    if (!currentUserData) return;
+    if (!currentUserData) { showToast('Please sign in.'); return; }
     const confirmed = window.confirm("Delete this comment?");
     if (!confirmed) return;
 
     try {
-        const { error } = await supabase.from('comments').delete().eq('id', commentId).eq('user_id', currentUserData.id);
+        const { data, error } = await supabase
+            .from('comments')
+            .delete()
+            .eq('id', commentId)
+            .eq('user_id', currentUserData.id)
+            .select();
+
         if (error) throw error;
-        document.getElementById(`comment-item-${commentId}`)?.remove();
+
+        if (!data || data.length === 0) {
+            showToast("You can only delete your own comments.");
+            return;
+        }
+
+        document.querySelectorAll(`[id="comment-item-${commentId}"]`).forEach(el => el.remove());
+        // also remove any replies that were nested under it (best-effort local cleanup)
         showToast("Comment deleted");
+
+        const newCount = Math.max(0, (commentCountCache[postId] ?? 1) - 1);
+        updateCommentCountUI(postId, newCount);
     } catch (err) {
         console.error("Error deleting comment:", err);
         showToast("Failed to delete comment.");
@@ -1001,33 +1248,56 @@ function renderCommentItem(c, postId) {
         </div>`;
 }
 
+// TikTok-style comment sheet: works for both the inline feed card comment
+// panel and the fixed bottom-sheet used on Reels (markup differs slightly
+// but both use #comments-{id}, #comment-list-{id}).
 window.toggleComments = async function (postId) {
     const commentSection = document.getElementById(`comments-${postId}`);
     const list           = document.getElementById(`comment-list-${postId}`);
     if (!commentSection || !list) return;
 
-    const isOpen = !commentSection.classList.contains('hidden');
+    const isReelSheet = commentSection.classList.contains('reel-comments');
+    const backdrop    = document.getElementById('comments-global-backdrop');
+
+    const isOpen = isReelSheet
+        ? commentSection.classList.contains('comments-open')
+        : !commentSection.classList.contains('hidden');
 
     if (isOpen) {
-        commentSection.classList.add('hidden');
-        openCommentIds.delete(postId);
+        window._closeCommentSheet(postId, true);
         return;
     }
 
-    commentSection.classList.remove('hidden');
+    // Close any other open reel comment sheet first
+    document.querySelectorAll('.reel-comments.comments-open').forEach(el => {
+        if (el.id !== `comments-${postId}`) el.classList.remove('comments-open');
+    });
+
+    if (isReelSheet) {
+        commentSection.classList.remove('hidden');
+        requestAnimationFrame(() => commentSection.classList.add('comments-open'));
+        backdrop?.classList.add('backdrop-open');
+        pushUiState(`comments-${postId}`, () => window._closeCommentSheet(postId, true));
+    } else {
+        commentSection.classList.remove('hidden');
+        pushUiState(`comments-${postId}`, () => window._closeCommentSheet(postId, true));
+    }
+
     openCommentIds.add(postId);
 
     list.innerHTML = `<p class="text-[10px] text-slate-500 animate-pulse py-2 pl-1">Loading comments...</p>`;
 
     const fetchAndRender = async () => {
-        const { data: comments, error = null } = await supabase
+        const { data: comments, error, count } = await supabase
             .from('comments')
-            .select('*')
+            .select('*', { count: 'exact' })
             .eq('post_id', postId)
             .order('created_at', { ascending: true });
 
         if (error) throw error;
         list.innerHTML = '';
+
+        updateCommentCountUI(postId, count ?? (comments ? comments.length : 0));
 
         if (!comments || comments.length === 0) {
             list.innerHTML = `<p class="text-[10px] text-slate-600 italic py-2 pl-1">No comments yet. Start the chat!</p>`;
@@ -1064,11 +1334,45 @@ window.toggleComments = async function (postId) {
 
     currentCommentsChan = supabase
         .channel(chanId)
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "comments", filter: `post_id=eq.${postId}` }, () => {
+        .on("postgres_changes", { event: "*", schema: "public", table: "comments", filter: `post_id=eq.${postId}` }, () => {
             fetchAndRender().catch(console.error);
         })
         .subscribe();
 };
+
+// Shared close routine for both inline and bottom-sheet comment views.
+window._closeCommentSheet = function (postId, fromPop = false) {
+    const commentSection = document.getElementById(`comments-${postId}`);
+    const backdrop = document.getElementById('comments-global-backdrop');
+    if (!commentSection) return;
+
+    if (commentSection.classList.contains('reel-comments')) {
+        commentSection.classList.remove('comments-open');
+        backdrop?.classList.remove('backdrop-open');
+        setTimeout(() => commentSection.classList.add('hidden'), 280);
+    } else {
+        commentSection.classList.add('hidden');
+    }
+    openCommentIds.delete(postId);
+    if (!fromPop) popUiState(`comments-${postId}`);
+};
+
+// Global backdrop click dismisses whichever reel comment sheet is open.
+document.addEventListener('DOMContentLoaded', () => {
+    if (!document.getElementById('comments-global-backdrop')) {
+        const backdrop = document.createElement('div');
+        backdrop.id = 'comments-global-backdrop';
+        backdrop.className = 'comments-backdrop';
+        backdrop.addEventListener('click', () => {
+            const openSheet = document.querySelector('.reel-comments.comments-open');
+            if (openSheet) {
+                const postId = openSheet.id.replace('comments-', '');
+                window._closeCommentSheet(postId);
+            }
+        });
+        document.body.appendChild(backdrop);
+    }
+});
 
 function renderFeedCard(id, d) {
     const viewer     = currentUserData;
@@ -1133,6 +1437,7 @@ function renderFeedCard(id, d) {
     // likes_count now comes straight from the DB and is kept accurate via
     // the RPC counters, so this reflects the true persisted count on load.
     const displayLikes  = parseInt(d.likes_count || 0);
+    const displayComments = commentCountCache[id] ?? parseInt(d.comments_count || 0);
 
     const isAddedToCart  = userCartList.some(item => item.id === id);
     const bookmarkClass  = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
@@ -1162,8 +1467,9 @@ function renderFeedCard(id, d) {
                     <i class="${heartClass} text-xl"></i>
                     <span class="like-count text-xs font-semibold text-slate-300">${displayLikes}</span>
                 </button>
-                <button onclick="toggleComments('${escAttr(id)}')" class="text-slate-300 hover:text-amber-400 transition active:scale-90">
+                <button onclick="toggleComments('${escAttr(id)}')" class="flex items-center gap-1 text-slate-300 hover:text-amber-400 transition active:scale-90">
                     <i class="far fa-comment text-xl"></i>
+                    <span class="comment-count-${escAttr(id)} text-xs font-semibold text-slate-300">${displayComments}</span>
                 </button>
                 <button onclick="sharePost('${escAttr(id)}', '${escAttr(d.title)}')" class="text-slate-300 hover:text-green-400 transition active:scale-90">
                     <i class="far fa-paper-plane text-xl"></i>
@@ -1272,6 +1578,56 @@ function renderProductGrid() {
 }
 
 // ─── 12d. REELS FEED (TikTok-style full-bleed vertical video) ────────────────
+// Only the reel currently in view should play with sound / play at all;
+// every other reel is paused and muted so scrolling past a video never
+// leaves its audio running in the background.
+let reelsIntersectionObserver = null;
+
+function pauseAllReelVideos() {
+    document.querySelectorAll('.reel-video').forEach(video => {
+        try {
+            video.pause();
+            video.muted = true;
+        } catch (_) {}
+    });
+    if (reelsIntersectionObserver) {
+        reelsIntersectionObserver.disconnect();
+        reelsIntersectionObserver = null;
+    }
+}
+
+function setupReelsIntersectionObserver() {
+    if (reelsIntersectionObserver) {
+        reelsIntersectionObserver.disconnect();
+        reelsIntersectionObserver = null;
+    }
+
+    const feed = document.getElementById('posts-feed');
+    if (!feed) return;
+
+    reelsIntersectionObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            const video = entry.target.querySelector('.reel-video');
+            if (!video) return;
+            if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+                // This reel is the one in view: play it, unmuted only if the
+                // user hasn't explicitly muted it before (default unmuted
+                // like TikTok, matching tap-to-mute behavior already wired).
+                document.querySelectorAll('.reel-video').forEach(v => {
+                    if (v !== video) { v.pause(); v.muted = true; v.currentTime = v.currentTime; }
+                });
+                video.muted = video.dataset.userMuted === 'true';
+                video.play().catch(() => {});
+            } else {
+                video.pause();
+                video.muted = true;
+            }
+        });
+    }, { root: feed, threshold: [0, 0.6, 1] });
+
+    document.querySelectorAll('.reel-card').forEach(card => reelsIntersectionObserver.observe(card));
+}
+
 function renderReelCard(id, d) {
     let mediaUrls = [];
     if (d.media_url) {
@@ -1286,6 +1642,7 @@ function renderReelCard(id, d) {
     const isLiked = likedPostIds.has(id);
     const heartClass = isLiked ? 'fas fa-heart text-rose-500' : 'far fa-heart text-white';
     const displayLikes = parseInt(d.likes_count || 0);
+    const displayComments = commentCountCache[id] ?? parseInt(d.comments_count || 0);
     const isAddedToCart = userCartList.some(item => item.id === id);
     const bookmarkClass = isAddedToCart ? 'fas fa-bookmark text-amber-400' : 'far fa-bookmark text-white';
     const isOwnPost = currentUserData && d.user_id === currentUserData.id;
@@ -1297,15 +1654,17 @@ function renderReelCard(id, d) {
 
     return `
     <div class="reel-card" id="reel-card-${escAttr(id)}">
-        <video class="reel-video" src="${esc(videoUrl)}" loop muted playsinline autoplay onclick="this.muted = !this.muted"></video>
+        <video class="reel-video" src="${esc(videoUrl)}" loop playsinline data-user-muted="false"
+            onclick="window._toggleReelMute(this)"></video>
 
         <div class="reel-actions">
             <button onclick="likePost('${escAttr(id)}', this)" data-liked="${isLiked ? 'true' : 'false'}" class="reel-action-btn flex flex-col items-center">
                 <i class="${heartClass} text-2xl"></i>
                 <span class="like-count text-white text-[10px] font-bold mt-1">${displayLikes}</span>
             </button>
-            <button onclick="toggleComments('${escAttr(id)}')" class="reel-action-btn">
+            <button onclick="toggleComments('${escAttr(id)}')" class="reel-action-btn flex flex-col items-center">
                 <i class="far fa-comment text-2xl text-white"></i>
+                <span class="comment-count-${escAttr(id)} text-white text-[10px] font-bold mt-1">${displayComments}</span>
             </button>
             <button onclick="window.toggleCartItem('${escAttr(id)}')" class="reel-action-btn">
                 <i class="${bookmarkClass} text-2xl"></i>
@@ -1318,27 +1677,41 @@ function renderReelCard(id, d) {
 
         <div class="reel-info">
             <div class="flex items-center gap-2 mb-1.5">
-                <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-8 h-8 rounded-full border border-white/40 object-cover" alt="">
-                <p class="text-white font-bold text-sm">${esc(d.user_name) || 'Student'}</p>
+                <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-8 h-8 rounded-full border border-white/40 object-cover shrink-0" alt="">
+                <p class="text-white font-bold text-sm leading-tight truncate">${esc(d.user_name) || 'Student'}</p>
             </div>
             <p class="text-white text-sm font-semibold leading-snug line-clamp-2">${esc(d.title)}</p>
             <p class="text-amber-400 font-black text-sm mt-1">GH₵${esc(String(d.price || 0))}</p>
         </div>
 
         <div id="comments-${escAttr(id)}" class="hidden reel-comments">
-            <div class="flex items-center gap-1.5 mb-2">
+            <div class="comments-header">
+                <div class="comments-drag-handle"></div>
+                <p class="text-white text-xs font-black uppercase tracking-wider">
+                    <span class="comment-count-${escAttr(id)}">${displayComments}</span> Comments
+                </p>
+                <button class="comments-close-btn" onclick="window._closeCommentSheet('${escAttr(id)}')"><i class="fas fa-times text-xs"></i></button>
+            </div>
+            <div id="comment-list-${escAttr(id)}" class="comments-scroll-area"></div>
+            <div class="comments-input-row flex items-center gap-1.5">
                 <input
                     type="text"
                     placeholder="Add a comment…"
-                    class="flex-1 bg-black/60 border border-white/20 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
+                    class="flex-1 bg-white/10 border border-white/20 text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none focus:border-amber-400 transition"
                     onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
                 >
                 <button id="cancel-reply-${escAttr(id)}" onclick="window.cancelCommentReply('${escAttr(id)}')" class="hidden text-[10px] text-white/60 hover:text-white px-1">✕</button>
             </div>
-            <div id="comment-list-${escAttr(id)}" class="max-h-48 overflow-y-auto space-y-1.5"></div>
         </div>
     </div>`;
 }
+
+// Tap-to-mute toggle, remembers the user's explicit choice on the element
+// so the intersection observer doesn't fight with a manual unmute/mute.
+window._toggleReelMute = function (video) {
+    video.muted = !video.muted;
+    video.dataset.userMuted = video.muted ? 'true' : 'false';
+};
 
 function renderReelsFeed() {
     const feed = document.getElementById('posts-feed');
@@ -1362,6 +1735,7 @@ function renderReelsFeed() {
     }
 
     feed.innerHTML = reels.map(({ id, data: d }) => renderReelCard(id, d)).join('');
+    setupReelsIntersectionObserver();
 }
 
 // ─── 12b. CHART / CART LIST LOGIC (NOW BACKEND POWERED!) ──────────────────────
@@ -1610,7 +1984,8 @@ async function loadFollowingFeed() {
     const feed = document.getElementById('posts-feed');
     if (!feed) return;
 
-    feed.classList.remove('grid-mode');
+    feed.classList.remove('grid-mode', 'reels-mode');
+    pauseAllReelVideos();
     feed.innerHTML = '<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Loading following feed...</div>';
 
     try {
@@ -1646,7 +2021,7 @@ async function loadFollowingFeed() {
         }
 
         feed.innerHTML = '';
-        posts.forEach(d => { feed.innerHTML += renderFeedCard(d.id, d); wireCarouselCounters(d.id); });
+        posts.forEach(d => { feed.innerHTML += renderFeedCard(d.id, d); wireCarouselCounters(d.id); fetchAndCacheCommentCount(d.id); });
         refreshFollowButtonStates();
     } catch (err) {
         console.error("Following feed error:", err);
@@ -1660,8 +2035,13 @@ function renderFeedFromCache() {
     // Reels tab: full-bleed vertical video feed, TikTok-style
     if (currentFeedType === 'reels') {
         renderReelsFeed();
+        allCachedPosts.filter(({ data: d }) => d.media_type === 'video').forEach(({ id }) => fetchAndCacheCommentCount(id));
         return;
     }
+
+    // Any time we're NOT rendering reels, make sure no reel video is still
+    // playing audio in the background (e.g. switching All -> Products).
+    pauseAllReelVideos();
 
     // Products tab renders as a 4-square grid instead of the snap-scroll feed
     if (currentFeedType === 'product') {
@@ -1685,6 +2065,7 @@ function renderFeedFromCache() {
     allCachedPosts.forEach(({ id, data: d }) => {
         feed.innerHTML += renderFeedCard(id, d);
         wireCarouselCounters(id);
+        fetchAndCacheCommentCount(id);
     });
 
     openCommentIds.forEach(postId => {
@@ -1717,7 +2098,13 @@ function renderFeedFromCache() {
 window.filterFeed = function (type, clickedBtn = null) {
     if (!isAuthInitialized) return;
 
+    const previousType = currentFeedType;
     currentFeedType = type;
+
+    // Leaving Reels: stop any playing video audio immediately.
+    if (previousType === 'reels' && type !== 'reels') {
+        pauseAllReelVideos();
+    }
 
     if (clickedBtn) {
         document.querySelectorAll('.feed-tab-btn').forEach(btn => {
@@ -1828,15 +2215,25 @@ window.runSearch = async function (term) {
         const d  = item.data ? item.data : item;
         resultsEl.innerHTML += renderFeedCard(id, d);
         wireCarouselCounters(id);
+        fetchAndCacheCommentCount(id);
     });
 
     refreshFollowButtonStates();
 };
 
 // ─── 17. POST SUBMISSION ─────────────────────────────────────────────────────
+// Guard flag + visible button state so a double-tap (or slow network retry)
+// can never fire two uploads of the same files.
+let isSubmittingPost = false;
+
 window.handlePostSubmission = async function () {
     if (!currentUserData) {
         window.openLoginModal();
+        return;
+    }
+
+    if (isSubmittingPost) {
+        showToast("Already uploading — please wait...");
         return;
     }
 
@@ -1844,13 +2241,29 @@ window.handlePostSubmission = async function () {
     const description = document.getElementById('postDescription')?.value.trim();
     const type        = document.getElementById('postType')?.value;
     const price       = document.getElementById('postPrice')?.value;
-    const mediaFiles  = document.getElementById('mediaInput')?.files;
-    const submitBtn   = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
+
+    // Prefer the reviewed/edited files from the WhatsApp-style edit modal;
+    // fall back to the raw file input if the user somehow skipped it.
+    const rawInputFiles = document.getElementById('mediaInput')?.files;
+    const mediaFiles = (finalMediaFiles && finalMediaFiles.length > 0)
+        ? finalMediaFiles
+        : (rawInputFiles ? Array.from(rawInputFiles) : []);
+
+    const submitBtn      = document.getElementById('publishPostBtn');
+    const submitBtnLabel = document.getElementById('publishPostBtnLabel');
+    const attachBtn       = document.getElementById('attachMediaBtn');
 
     if (!title) { showToast('Please enter a title.'); return; }
     if (!mediaFiles || mediaFiles.length === 0) { showToast('Please attach at least one image or video.'); return; }
 
-    if (submitBtn) { submitBtn.textContent = 'Uploading entries...'; submitBtn.disabled = true; }
+    // Lock the UI immediately: disable Publish AND the attach button, add a
+    // spinner, so there is a clear, visible sign the upload is in progress
+    // and it's impossible to trigger a second submission of the same files.
+    isSubmittingPost = true;
+    if (submitBtn) submitBtn.disabled = true;
+    if (attachBtn) attachBtn.disabled = true;
+    if (submitBtn) submitBtn.classList.add('opacity-70', 'cursor-not-allowed');
+    if (submitBtnLabel) submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Uploading 0/${mediaFiles.length}...`;
 
     try {
         const publicUrls      = [];
@@ -1861,8 +2274,10 @@ window.handlePostSubmission = async function () {
         // and detail-view carousel already render as a swipeable gallery.
         for (let i = 0; i < mediaFiles.length; i++) {
             const file        = mediaFiles[i];
-            const ext         = file.name.split('.').pop();
+            const ext         = (file.name || 'file').split('.').pop();
             const storagePath = `${currentUserData.id}/${Date.now()}-${i}.${ext}`;
+
+            if (submitBtnLabel) submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Uploading ${i + 1}/${mediaFiles.length}...`;
 
             const { error: uploadError } = await supabase.storage
                 .from("posts")
@@ -1878,611 +2293,6 @@ window.handlePostSubmission = async function () {
             }
         }
 
-        const institution = currentUserData.institution || document.getElementById('profileInstitution')?.value || 'Global';
-        const region      = currentUserData.region      || document.getElementById('profileRegion')?.value      || 'Global';
-        const metadata    = currentUserData.user_metadata || {};
+        if (submitBtnLabel) submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Publishing...`;
 
-        const { error: insertError } = await supabase.from("posts").insert({
-            title,
-            description,
-            type,
-            price:       parseFloat(price) || 0,
-            media_url:   JSON.stringify(publicUrls),
-            media_type:  primaryMediaType,
-            institution,
-            region,
-            user_name:   metadata.full_name  || 'Anonymous Student',
-            user_avatar: metadata.avatar_url || '',
-            user_id:     currentUserData.id,
-            likes_count: 0,
-            created_at:  new Date().toISOString()
-        });
-
-        if (insertError) throw insertError;
-
-        document.getElementById('postTitle').value       = '';
-        document.getElementById('postDescription').value = '';
-        document.getElementById('postPrice').value       = '';
-        document.getElementById('mediaInput').value      = '';
-
-        window.togglePostModal();
-        showToast(`Post published with ${publicUrls.length} file${publicUrls.length > 1 ? 's' : ''}! 🎉`);
-    } catch (err) {
-        console.error("Post submission error:", err);
-        showToast('Failed to publish. Please try again.');
-    } finally {
-        if (submitBtn) {
-            submitBtn.textContent = 'Publish Instantly';
-            submitBtn.disabled    = false;
-        }
-    }
-};
-
-// ─── 18. PROFILE STATS ───────────────────────────────────────────────────────
-async function loadProfileStats() {
-    if (!currentUserData) return;
-    try {
-        const [followersRes, followingRes, postsRes] = await Promise.all([
-            supabase.from("follows").select("", { count: "exact", head: true }).eq("following_id", currentUserData.id),
-            supabase.from("follows").select("", { count: "exact", head: true }).eq("follower_id",  currentUserData.id),
-            supabase.from("posts").select("id, title, media_url, media_type, price").eq("user_id", currentUserData.id).order("created_at", { ascending: false })
-        ]);
-
-        const postsCount = postsRes.data ? postsRes.data.length : 0;
-        setEl('profile-followers-count', followersRes.count || 0);
-        setEl('profile-following-count', followingRes.count || 0);
-        setEl('profile-posts-count', postsCount);
-
-        const grid = document.getElementById('profile-grid');
-        if (grid) {
-            grid.innerHTML = '';
-            postsRes.data?.forEach(d => { grid.innerHTML += renderGridItem(d.id, d); });
-        }
-    } catch (err) { console.warn("Profile stats error:", err); }
-}
-
-// ─── 19. SETTINGS PERSISTENCE ────────────────────────────────────────────────
-window.initProfileSelects = function () {
-    const regEl  = document.getElementById('profileRegion');
-    const instEl = document.getElementById('profileInstitution');
-
-    if (regEl && !regEl.dataset.populated) {
-        regEl.innerHTML = buildOptions(ALL_REGIONS);
-        regEl.dataset.populated = 'true';
-        regEl.addEventListener('change', () => {
-            if (instEl) instEl.innerHTML = buildInstitutionOptions(regEl.value, instEl.value);
-        });
-    }
-    if (instEl && !instEl.dataset.populated) {
-        instEl.innerHTML = buildOptions(ALL_INSTITUTIONS);
-        instEl.dataset.populated = 'true';
-    }
-};
-
-document.getElementById('saveLocationBtn')?.addEventListener('click', async () => {
-    if (!currentUserData) return;
-    const institution = document.getElementById('profileInstitution')?.value;
-    const region      = document.getElementById('profileRegion')?.value;
-
-    if (!institution || !region) { showToast('Please select both a region and institution.'); return; }
-
-    try {
-        const { error } = await supabase.from("profiles").update({ institution, region }).eq("id", currentUserData.id);
-        if (error) throw error;
-
-        currentUserData.institution = institution;
-        currentUserData.region      = region;
-
-        const locationEl = document.getElementById('profile-ui-location');
-        if (locationEl) locationEl.textContent = `${institution} · ${region}`;
-        showToast('Settings updated ✓');
-    } catch (err) {
-        console.error("Save settings error:", err);
-        showToast('Failed to save. Please try again.');
-    }
-});
-
-// ─── 20. DMs — WHATSAPP-STYLE INBOX + CHAT THREAD ────────────────────────────
-// Requires migration.sql to have been run (conversations + messages tables,
-// get_or_create_conversation RPC). See that file for schema/RLS.
-
-function unsubscribeConversations() {
-    if (currentConversationsChan) {
-        supabase.removeChannel(currentConversationsChan);
-        currentConversationsChan = null;
-    }
-}
-
-function unsubscribeActiveThread() {
-    if (currentMessagesChan) {
-        supabase.removeChannel(currentMessagesChan);
-        currentMessagesChan = null;
-    }
-    activeConversationId = null;
-    activeConversationPeer = null;
-}
-
-function dmPeerInfo(conv) {
-    // conversations store user_a/user_b symmetrically; figure out which
-    // side is "me" and return the other person's display info.
-    const isA = conv.user_a === currentUserData.id;
-    return {
-        id:     isA ? conv.user_b : conv.user_a,
-        name:   (isA ? conv.user_b_name   : conv.user_a_name)   || 'Student',
-        avatar: (isA ? conv.user_b_avatar : conv.user_a_avatar) || 'https://ui-avatars.com/api/?name=Student'
-    };
-}
-
-async function openInboxView() {
-    const content = document.getElementById('dms-content');
-    if (!content || !currentUserData) return;
-
-    content.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Loading chats...</div>`;
-
-    try {
-        const { data, error } = await supabase
-            .from('conversations')
-            .select('*')
-            .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
-            .order('last_message_at', { ascending: false });
-
-        if (error) throw error;
-        conversationsCache = data || [];
-        renderInboxList();
-        subscribeConversationsList();
-    } catch (err) {
-        console.error("Inbox load error:", err);
-        content.innerHTML = `<div class="p-12 text-center text-red-400 text-xs">Couldn't load your chats. Pull to refresh.</div>`;
-    }
-}
-
-function renderInboxList() {
-    const content = document.getElementById('dms-content');
-    if (!content) return;
-
-    if (conversationsCache.length === 0) {
-        content.innerHTML = `
-            <div class="text-center py-16 space-y-3 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
-                <p class="text-3xl">💬</p>
-                <p class="font-black text-white uppercase tracking-tight text-sm">No chats yet</p>
-                <p class="text-slate-500 text-xs max-w-xs mx-auto">Tap "Contact Seller" on any listing to start a conversation.</p>
-            </div>`;
-        return;
-    }
-
-    content.innerHTML = `<div class="divide-y divide-slate-800/60 bg-slate-900 border border-slate-800/60 rounded-3xl overflow-hidden">${
-        conversationsCache.map(conv => {
-            const peer = dmPeerInfo(conv);
-            const isUnread = conv.last_sender && conv.last_sender !== currentUserData.id && !conv.last_read_by_me;
-            return `
-            <button
-                onclick="window.openDM('${escAttr(peer.id)}','${escAttr(peer.name)}','${escAttr(peer.avatar)}')"
-                class="w-full flex items-center gap-3 p-3.5 text-left active:bg-slate-800/60 transition">
-                <img src="${esc(peer.avatar)}" class="w-12 h-12 rounded-full object-cover border border-slate-700 shrink-0" alt="">
-                <div class="min-w-0 flex-1">
-                    <div class="flex items-center justify-between gap-2">
-                        <p class="text-white font-bold text-sm truncate">${esc(peer.name)}</p>
-                        <span class="text-[10px] text-slate-500 shrink-0">${esc(timeAgo(conv.last_message_at))}</span>
-                    </div>
-                    <p class="text-xs ${isUnread ? 'text-slate-200 font-semibold' : 'text-slate-500'} truncate mt-0.5">${esc(conv.last_message) || 'Say hello 👋'}</p>
-                </div>
-                ${isUnread ? '<div class="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0"></div>' : ''}
-            </button>`;
-        }).join('')
-    }</div>`;
-}
-
-function subscribeConversationsList() {
-    unsubscribeConversations();
-    if (!currentUserData) return;
-
-    currentConversationsChan = supabase
-        .channel(`conversations-live-${currentUserData.id}`)
-        .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, async () => {
-            try {
-                const { data } = await supabase
-                    .from('conversations')
-                    .select('*')
-                    .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
-                    .order('last_message_at', { ascending: false });
-                conversationsCache = data || [];
-                // Only re-render the list if we're actually looking at it
-                if (!activeConversationId) renderInboxList();
-            } catch (_) {}
-        })
-        .subscribe();
-}
-
-// Opens (or creates) a conversation and renders the WhatsApp-style thread view.
-window.openDM = async function (otherUserId, otherUserName, otherUserAvatar) {
-    if (!currentUserData) { window.openLoginModal(); return; }
-    if (!otherUserId) { window.navigateTo('dms'); return; }
-    if (otherUserId === currentUserData.id) return;
-
-    window.navigateTo('dms');
-    const content = document.getElementById('dms-content');
-    if (!content) return;
-
-    unsubscribeActiveThread();
-    content.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Opening chat...</div>`;
-
-    try {
-        const metadata = currentUserData.user_metadata || {};
-        const { data: convId, error } = await supabase.rpc('get_or_create_conversation', {
-            other_user_id:     otherUserId,
-            other_user_name:   otherUserName || 'Student',
-            other_user_avatar: otherUserAvatar || '',
-            my_name:            metadata.full_name  || 'Student',
-            my_avatar:           metadata.avatar_url || ''
-        });
-
-        if (error) throw error;
-
-        activeConversationId   = convId;
-        activeConversationPeer = { id: otherUserId, name: otherUserName || 'Student', avatar: otherUserAvatar || 'https://ui-avatars.com/api/?name=Student' };
-
-        renderChatThreadShell();
-        await loadAndRenderMessages();
-        subscribeActiveThreadMessages();
-    } catch (err) {
-        console.error("Open DM error:", err);
-        content.innerHTML = `<div class="p-12 text-center text-red-400 text-xs">Couldn't open this chat. Try again.</div>`;
-    }
-};
-
-function renderChatThreadShell() {
-    const content = document.getElementById('dms-content');
-    if (!content || !activeConversationPeer) return;
-
-    content.innerHTML = `
-        <div class="flex flex-col" style="height: calc(100vh - 220px);">
-            <div class="flex items-center gap-3 pb-3 border-b border-slate-800/60 mb-3">
-                <button onclick="window.closeDMThread()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 text-slate-300 active:scale-90 transition shrink-0">
-                    <i class="fas fa-arrow-left text-xs"></i>
-                </button>
-                <img src="${esc(activeConversationPeer.avatar)}" class="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0" alt="">
-                <p class="text-white font-bold text-sm truncate">${esc(activeConversationPeer.name)}</p>
-            </div>
-            <div id="chat-messages" class="flex-1 overflow-y-auto space-y-2 px-1 pb-2"></div>
-            <div class="flex items-center gap-2 pt-2 border-t border-slate-800/60">
-                <input
-                    type="text"
-                    id="chat-input"
-                    placeholder="Message..."
-                    class="flex-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-full px-4 py-2.5 focus:outline-none focus:border-amber-400 transition"
-                    onkeydown="if(event.key==='Enter') window.sendChatMessage()"
-                >
-                <button onclick="window.sendChatMessage()" class="w-10 h-10 flex items-center justify-center bg-amber-400 text-black rounded-full active:scale-90 transition shrink-0">
-                    <i class="fas fa-paper-plane text-xs"></i>
-                </button>
-            </div>
-        </div>`;
-}
-
-function renderChatBubble(msg) {
-    const isMe = msg.sender_id === currentUserData.id;
-    return `
-        <div class="flex ${isMe ? 'justify-end' : 'justify-start'}">
-            <div class="max-w-[75%] ${isMe ? 'bg-amber-400 text-black' : 'bg-slate-800 text-white'} rounded-2xl ${isMe ? 'rounded-br-sm' : 'rounded-bl-sm'} px-3.5 py-2">
-                <p class="text-sm break-words">${esc(msg.text)}</p>
-                <p class="text-[9px] ${isMe ? 'text-black/50' : 'text-slate-400'} mt-1 text-right">${esc(formatClockTime(msg.created_at))}</p>
-            </div>
-        </div>`;
-}
-
-async function loadAndRenderMessages() {
-    const container = document.getElementById('chat-messages');
-    if (!container || !activeConversationId) return;
-
-    container.innerHTML = `<p class="text-center text-[10px] text-slate-500 animate-pulse py-4">Loading messages...</p>`;
-
-    try {
-        const { data: messages, error } = await supabase
-            .from('messages')
-            .select('*')
-            .eq('conversation_id', activeConversationId)
-            .order('created_at', { ascending: true });
-
-        if (error) throw error;
-
-        if (!messages || messages.length === 0) {
-            container.innerHTML = `<p class="text-center text-[11px] text-slate-500 py-6">No messages yet. Say hello 👋</p>`;
-        } else {
-            container.innerHTML = messages.map(renderChatBubble).join('');
-            container.scrollTop = container.scrollHeight;
-        }
-
-        // Mark incoming messages as read
-        supabase.from('messages')
-            .update({ read: true })
-            .eq('conversation_id', activeConversationId)
-            .neq('sender_id', currentUserData.id)
-            .eq('read', false)
-            .then(() => {}).catch(() => {});
-    } catch (err) {
-        console.error("Load messages error:", err);
-        container.innerHTML = `<p class="text-center text-[11px] text-red-400 py-6">Couldn't load messages.</p>`;
-    }
-}
-
-function subscribeActiveThreadMessages() {
-    if (currentMessagesChan) {
-        supabase.removeChannel(currentMessagesChan);
-        currentMessagesChan = null;
-    }
-    if (!activeConversationId) return;
-
-    currentMessagesChan = supabase
-        .channel(`messages-live-${activeConversationId}`)
-        .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `conversation_id=eq.${activeConversationId}` }, (payload) => {
-            const container = document.getElementById('chat-messages');
-            if (!container) return;
-            // Avoid duplicating our own optimistically-rendered bubble
-            if (container.dataset.lastOptimisticId === String(payload.new.id)) return;
-            const emptyState = container.querySelector('p');
-            if (emptyState && container.children.length === 1) container.innerHTML = '';
-            container.innerHTML += renderChatBubble(payload.new);
-            container.scrollTop = container.scrollHeight;
-        })
-        .subscribe();
-}
-
-window.sendChatMessage = async function () {
-    const input = document.getElementById('chat-input');
-    const text  = input?.value.trim();
-    if (!text || !activeConversationId || !currentUserData) return;
-
-    input.value = '';
-
-    const optimisticMsg = {
-        id: `local-${Date.now()}`,
-        sender_id: currentUserData.id,
-        text,
-        created_at: new Date().toISOString()
-    };
-
-    const container = document.getElementById('chat-messages');
-    if (container) {
-        const emptyState = container.querySelector('p');
-        if (emptyState && container.children.length === 1) container.innerHTML = '';
-        container.innerHTML += renderChatBubble(optimisticMsg);
-        container.scrollTop = container.scrollHeight;
-    }
-
-    try {
-        const { error: msgErr } = await supabase.from('messages').insert({
-            conversation_id: activeConversationId,
-            sender_id: currentUserData.id,
-            text
-        });
-        if (msgErr) throw msgErr;
-
-        await supabase.from('conversations').update({
-            last_message: text,
-            last_message_at: new Date().toISOString(),
-            last_sender: currentUserData.id
-        }).eq('id', activeConversationId);
-    } catch (err) {
-        console.error("Send message error:", err);
-        showToast('Message failed to send.');
-    }
-};
-
-window.closeDMThread = function () {
-    unsubscribeActiveThread();
-    openInboxView();
-};
-
-// Legacy stub kept for any old call sites that don't pass full peer info.
-window.openDM_legacy = function (targetUserId, targetName) {
-    console.warn(`[DMs] openDM called with incomplete info for ${targetUserId} (${targetName}).`);
-};
-
-// ─── 21. AUTH OBSERVER ───────────────────────────────────────────────────────
-if (activeAuthChange) {
-    activeAuthChange(async (user) => {
-        // Bug fix: previously any auth-null event (including ones triggered
-        // by a network drop) would force the login modal open. Now we only
-        // treat this as a "signed out" transition when we're actually online,
-        // so losing connectivity never dumps credential fields on screen.
-        if (!navigator.onLine) {
-            console.warn("[Auth Observer] Network is offline. Ignoring auth state evaluation.");
-            return;
-        }
-
-        currentUserData          = user;
-        const authProfileNav     = document.getElementById('auth-profile-nav');
-
-        if (typeof window.updateAuthButton === 'function') {
-            window.updateAuthButton(user);
-        }
-
-        if (user) {
-            const metadata = user.user_metadata || {};
-            document.getElementById('login-modal')?.classList.add('hidden');
-            document.getElementById('signup-modal')?.classList.add('hidden');
-            document.getElementById('onboarding-modal')?.remove();
-
-            if (authProfileNav) {
-                authProfileNav.innerHTML = `<i class="fas fa-user text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Profile</span>`;
-                authProfileNav.onclick = function (e) { e.stopPropagation(); window.navigateTo('profile', authProfileNav); };
-            }
-
-            const avatarEl = document.getElementById('profile-ui-avatar');
-            const nameEl   = document.getElementById('profile-ui-name');
-
-            try {
-                const { data: savedUserRow } = await supabase.from("profiles").select("avatar, institution, region").eq("id", user.id).maybeSingle();
-                const savedAvatar = savedUserRow?.avatar || metadata.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
-
-                if (!currentUserData.user_metadata) currentUserData.user_metadata = {};
-                currentUserData.user_metadata.avatar_url = savedAvatar;
-
-                if (avatarEl) avatarEl.src = savedAvatar;
-                if (nameEl)   nameEl.textContent = metadata.full_name || 'Campus Student';
-
-                window.initProfileSelects();
-
-                if (!savedUserRow || !savedUserRow.institution || !savedUserRow.region) {
-                    injectOnboardingModal();
-                } else {
-                    currentUserData.institution = savedUserRow.institution || '';
-                    currentUserData.region      = savedUserRow.region || '';
-                    applyLocationToUI(savedUserRow.institution || '', savedUserRow.region || '');
-                }
-            } catch (err) {
-                console.warn("User doc sync bypassed (using local auth state):", err);
-                if (avatarEl) avatarEl.src = metadata.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(metadata.full_name || 'User')}`;
-                if (nameEl)   nameEl.textContent = metadata.full_name || 'Campus Student';
-                window.initProfileSelects();
-            }
-
-            document.getElementById('profile-auth-gate')?.classList.add('hidden');
-            document.getElementById('profile-content')?.classList.remove('hidden');
-            document.getElementById('dms-auth-gate')?.classList.add('hidden');
-            document.getElementById('dms-content')?.classList.remove('hidden');
-
-            subscribeFeed();
-            try { loadProfileStats(); } catch (_) {}
-            _initAvatarLongPress();
-        } else {
-            unsubscribeFeed();
-            unsubscribeConversations();
-            unsubscribeActiveThread();
-            if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
-
-            if (authProfileNav) {
-                authProfileNav.innerHTML = `<i class="fas fa-sign-in-alt text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>`;
-                authProfileNav.onclick = function (e) { e.stopPropagation(); window.openLoginModal(); };
-            }
-
-            setEl('profile-ui-name',           'Campus Student');
-            setEl('profile-ui-location',       'Global Network');
-            setEl('profile-followers-count',   '0');
-            setEl('profile-following-count',   '0');
-            setEl('profile-posts-count',       '0');
-
-            const grid = document.getElementById('profile-grid');
-            if (grid) grid.innerHTML = '';
-
-            document.getElementById('profile-auth-gate')?.classList.remove('hidden');
-            document.getElementById('profile-content')?.classList.add('hidden');
-            document.getElementById('dms-auth-gate')?.classList.remove('hidden');
-            document.getElementById('dms-content')?.classList.add('hidden');
-
-            subscribeFeed();
-            // Only auto-open the login modal on a genuine signed-out state
-            // while online — never as a side-effect of connectivity loss.
-            if (typeof window.openLoginModal === 'function' && navigator.onLine) {
-                window.openLoginModal();
-            }
-        }
-
-        isAuthInitialized = true;
-        if (!document.querySelector('.bottom-nav button.nav-active, nav button.nav-active, nav a.nav-active')) {
-            document.getElementById('nav-btn-feed')?.classList.add('nav-active');
-        }
-    });
-}
-
-// ─── 22. SCROLL DIRECTION DETECTOR FOR NAVBAR ────────────────────────────────
-let lastScrollY = window.scrollY;
-window.addEventListener('scroll', () => {
-    const bottomNav = document.querySelector('.bottom-nav-container');
-    if (!bottomNav) return;
-    const currentScrollY = window.scrollY;
-
-    if (currentScrollY < 20) { bottomNav.classList.remove('bottom-nav-hidden'); return; }
-    if (currentScrollY > lastScrollY) {
-        bottomNav.classList.add('bottom-nav-hidden');
-    } else {
-        bottomNav.classList.remove('bottom-nav-hidden');
-    }
-    lastScrollY = currentScrollY;
-}, { passive: true });
-
-// ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ──────────────────────────────
-document.body.addEventListener('click', (event) => {
-    const profileClickTarget = event.target.closest('.feed-profile-trigger');
-    if (profileClickTarget) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (typeof window.navigateTo === 'function') {
-            window.navigateTo('profile');
-        }
-    }
-});
-
-// ─── 24. NATIVE INTERNET CONNECTIVITY DETECTOR ───────────────────────────────
-// Fix: previously going offline could still leave login/signup modals open
-// or let them be triggered by the auth observer. Now we explicitly close
-// any open credential modals the moment connectivity drops, and show a
-// calm, professional toast instead — matching how other production apps
-// (WhatsApp, Instagram) handle connectivity loss.
-window.addEventListener('offline', () => {
-    isOnline = false;
-    document.getElementById('login-modal')?.classList.add('hidden');
-    document.getElementById('signup-modal')?.classList.add('hidden');
-
-    showToast("You're offline");
-    const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
-    if (submitBtn) {
-        submitBtn.dataset.originalText = submitBtn.textContent;
-        submitBtn.textContent          = 'Waiting for connection...';
-        submitBtn.disabled             = true;
-    }
-});
-
-window.addEventListener('online', () => {
-    isOnline = true;
-    showToast("Back online");
-    const submitBtn = document.querySelector('#post-modal button[onclick="handlePostSubmission()"]');
-    if (submitBtn && submitBtn.dataset.originalText) {
-        submitBtn.textContent = submitBtn.dataset.originalText;
-        submitBtn.disabled    = false;
-    }
-    if (typeof subscribeFeed === 'function') subscribeFeed();
-});
-
-// ─── UTILITY FUNCTION: WIRE CAROUSEL COUNTERS ───────────────────────────────
-function wireCarouselCounters(postId) {
-    const carousel = document.querySelector(`.feed-carousel-${postId}`);
-    const counter = document.querySelector(`.carousel-counter-${postId}`);
-    if (!carousel || !counter) return;
-
-    carousel.addEventListener('scroll', () => {
-        const width = carousel.offsetWidth;
-        if (width <= 0) return;
-        const index = Math.round(carousel.scrollLeft / width) + 1;
-        counter.textContent = index;
-    }, { passive: true });
-}
-
-// ─── UTILITY FUNCTION: RENDER PROFILE GRID ITEM ─────────────────────────────
-function renderGridItem(id, post) {
-    const d = post.data ? post.data : post;
-
-    let mediaUrl = '';
-    if (d.media_url) {
-        if (d.media_url.startsWith('[')) {
-            try { mediaUrl = JSON.parse(d.media_url)[0]; } catch(_) { mediaUrl = d.media_url; }
-        } else {
-            mediaUrl = d.media_url;
-        }
-    }
-
-    const fallbackImage = 'https://images.unsplash.com/photo-1563013544-824ae1d704d3?w=300';
-    const isVideo = d.media_type === 'video';
-
-    return `
-    <div onclick="openDetail('${id}')" class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition">
-        ${isVideo
-            ? `<video class="w-full h-full object-cover" src="${mediaUrl}"></video>
-               <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
-            : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
-        }
-        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
-            <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
-        </div>
-    </div>`;
-}
+        const institution = currentUserData.institution || document.getElementById('profileIns

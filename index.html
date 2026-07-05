@@ -186,6 +186,7 @@
       flex-direction: column;
       align-items: center;
       gap: 18px;
+      z-index: 5;
     }
 
     .reel-action-btn {
@@ -204,21 +205,86 @@
       right: 80px;
       bottom: 24px;
       text-shadow: 0 1px 6px rgba(0,0,0,0.8);
+      z-index: 4;
     }
 
+    /* TikTok-style bottom sheet comment panel: slides up from the bottom,
+       fixed to viewport (not clipped by the reel card), sits above
+       everything else in the reel. */
     .reel-comments {
-      position: absolute;
+      position: fixed;
       left: 0;
       right: 0;
       bottom: 0;
-      max-height: 55vh;
-      background: rgba(0,0,0,0.75);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      padding: 12px;
+      max-height: 60vh;
+      background: #1c1c1e;
+      padding: 0;
       border-top-left-radius: 20px;
       border-top-right-radius: 20px;
+      overflow: hidden;
+      z-index: 60;
+      display: flex;
+      flex-direction: column;
+      transform: translateY(100%);
+      transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+      box-shadow: 0 -8px 40px rgba(0,0,0,0.5);
+    }
+    .reel-comments.comments-open {
+      transform: translateY(0);
+    }
+    .reel-comments .comments-header {
+      flex-shrink: 0;
+      text-align: center;
+      padding: 10px 14px 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      position: relative;
+    }
+    .reel-comments .comments-drag-handle {
+      width: 36px;
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.25);
+      margin: 0 auto 8px;
+    }
+    .reel-comments .comments-close-btn {
+      position: absolute;
+      right: 10px;
+      top: 8px;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #94a3b8;
+    }
+    .reel-comments .comments-scroll-area {
+      flex: 1;
       overflow-y: auto;
+      padding: 10px 14px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .reel-comments .comments-input-row {
+      flex-shrink: 0;
+      padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+      border-top: 1px solid rgba(255,255,255,0.08);
+      background: #1c1c1e;
+    }
+
+    /* Backdrop behind the comment sheet — click to dismiss */
+    .comments-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 59;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+    }
+    .comments-backdrop.backdrop-open {
+      opacity: 1;
+      pointer-events: auto;
     }
 
     .tiktok-card {
@@ -409,7 +475,8 @@
     /* ── MODALS ── */
     #post-modal .modal-inner,
     #detail-modal .modal-inner,
-    #avatarModal .modal-inner {
+    #avatarModal .modal-inner,
+    #editMediaModal .modal-inner {
       background: #0f172a;
       border: 1px solid rgba(255,255,255,0.08);
       border-radius: 24px;
@@ -474,6 +541,64 @@
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
       overflow: hidden;
+    }
+
+    /* ── MEDIA EDIT PREVIEW GRID (WhatsApp-style) ── */
+    #editMediaModal .edit-thumb-strip {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 4px 2px;
+    }
+    #editMediaModal .edit-thumb {
+      position: relative;
+      width: 56px;
+      height: 56px;
+      border-radius: 10px;
+      overflow: hidden;
+      flex-shrink: 0;
+      border: 2px solid transparent;
+      cursor: pointer;
+    }
+    #editMediaModal .edit-thumb.active-thumb { border-color: #fbbf24; }
+    #editMediaModal .edit-thumb img,
+    #editMediaModal .edit-thumb video {
+      width: 100%; height: 100%; object-fit: cover;
+    }
+    #editMediaModal .edit-thumb .remove-thumb-btn {
+      position: absolute;
+      top: 1px; right: 1px;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 8px;
+    }
+    #editMediaModal .edit-main-preview {
+      width: 100%;
+      aspect-square: 1/1;
+      aspect-ratio: 1/1;
+      background: #000;
+      border-radius: 16px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    #editMediaModal .edit-main-preview img,
+    #editMediaModal .edit-main-preview video {
+      width: 100%; height: 100%; object-fit: contain;
+    }
+    #editMediaModal .rotate-btn {
+      position: absolute;
+      top: 10px; right: 10px;
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      display: flex; align-items: center; justify-content: center;
     }
   </style>
 </head>
@@ -691,15 +816,34 @@
         </div>
         <div>
           <span class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Media Showcase</span>
-          <button onclick="document.getElementById('mediaInput').click()" type="button" class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-2">
+          <button id="attachMediaBtn" onclick="document.getElementById('mediaInput').click()" type="button" class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-2">
             <i class="fas fa-cloud-upload-alt text-amber-400"></i> Attach Images / Videos
           </button>
           <p id="mediaFileCount" class="text-[10px] text-slate-500 mt-1.5 text-center"></p>
         </div>
-        <button onclick="window.handlePostSubmission()" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-2 transition active:scale-95 shadow-lg shadow-amber-400/20">
-          Publish Instantly
+        <button id="publishPostBtn" onclick="window.handlePostSubmission()" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-2 transition active:scale-95 shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2">
+          <span id="publishPostBtnLabel">Publish Instantly</span>
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- WhatsApp-style pre-upload media edit modal: shows attached files with
+       a thumbnail strip + main preview, allows rotate/remove before the
+       listing is actually published. -->
+  <div id="editMediaModal" class="hidden fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/85 backdrop-blur-sm p-4">
+    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-4 w-full max-w-sm space-y-3 shadow-2xl modal-inner">
+      <div class="flex justify-between items-center px-1">
+        <h2 class="text-white font-black text-sm uppercase tracking-tight">Edit Media</h2>
+        <button onclick="window.closeEditMediaModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm" aria-label="Close">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="edit-main-preview" id="editMainPreview"></div>
+      <div class="edit-thumb-strip no-scrollbar" id="editThumbStrip"></div>
+      <button onclick="window.confirmEditedMedia()" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-1 transition active:scale-95 shadow-lg shadow-amber-400/20">
+        Use These Files
+      </button>
     </div>
   </div>
 
@@ -916,10 +1060,12 @@
 
       const mediaInput = document.getElementById('mediaInput');
       mediaInput?.addEventListener('change', function() {
-        const countEl = document.getElementById('mediaFileCount');
-        if (!countEl) return;
-        const n = mediaInput.files?.length || 0;
-        countEl.textContent = n > 0 ? `${n} file${n > 1 ? 's' : ''} attached — swipe to view after posting` : '';
+        // Instead of immediately just showing a count, open the WhatsApp-style
+        // edit-before-upload modal so files can be reviewed/removed/rotated
+        // before they're attached to the listing.
+        if (mediaInput.files && mediaInput.files.length > 0 && typeof window.openEditMediaModal === 'function') {
+          window.openEditMediaModal(mediaInput.files);
+        }
       });
 
       function refreshCartBadges() {
@@ -954,7 +1100,8 @@
         'postComment','toggleFollow','handlePostSubmission','handleAvatarUpload',
         'login','logout','runSearch','saveOnboarding','onboardRegionChange',
         'initProfileSelects','signOutUser','toggleSavePost','toggleCartItem',
-        'openDM','closeDMThread','sendChatMessage'
+        'openDM','closeDMThread','sendChatMessage','openEditMediaModal',
+        'closeEditMediaModal','confirmEditedMedia'
       ].forEach(makeStub);
 
       window._registerModuleFunction = function(name, fn) {
@@ -978,7 +1125,8 @@
       'postComment','toggleFollow','handlePostSubmission','handleAvatarUpload',
       'login','logout','runSearch','saveOnboarding','onboardRegionChange',
       'initProfileSelects','signOutUser','toggleSavePost','toggleCartItem',
-      'openDM','closeDMThread','sendChatMessage'
+      'openDM','closeDMThread','sendChatMessage','openEditMediaModal',
+      'closeEditMediaModal','confirmEditedMedia'
     ];
 
     _moduleExports.forEach(name => {
