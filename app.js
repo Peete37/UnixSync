@@ -2221,9 +2221,9 @@ window.runSearch = async function (term) {
     refreshFollowButtonStates();
 };
 
-// ─── 17. POST SUBMISSION ─────────────────────────────────────────────────────
-// Guard flag + visible button state so a double-tap (or slow network retry)
-// can never fire two uploads of the same files.
+// ─── 17. POST SUBMISSION ───
+// Guard flag + visible button state so a double-tap (or slow
+// network retry) can never fire two uploads of the same files.
 let isSubmittingPost = false;
 
 window.handlePostSubmission = async function () {
@@ -2237,55 +2237,88 @@ window.handlePostSubmission = async function () {
         return;
     }
 
-    const title       = document.getElementById('postTitle')?.value.trim();
-    const description = document.getElementById('postDescription')?.value.trim();
-    const type        = document.getElementById('postType')?.value;
-    const price       = document.getElementById('postPrice')?.value;
+    const title = document
+        .getElementById('postTitle')?.value.trim();
+    const description = document
+        .getElementById('postDescription')?.value.trim();
+    const type = document
+        .getElementById('postType')?.value;
+    const price = document
+        .getElementById('postPrice')?.value;
 
-    // Prefer the reviewed/edited files from the WhatsApp-style edit modal;
-    // fall back to the raw file input if the user somehow skipped it.
-    const rawInputFiles = document.getElementById('mediaInput')?.files;
-    const mediaFiles = (finalMediaFiles && finalMediaFiles.length > 0)
-        ? finalMediaFiles
-        : (rawInputFiles ? Array.from(rawInputFiles) : []);
+    // Prefer the reviewed/edited files from the WhatsApp-style
+    // edit modal; fall back to the raw file input if the user
+    // somehow skipped it.
+    const rawInputFiles = document
+        .getElementById('mediaInput')?.files;
+    const mediaFiles =
+        (finalMediaFiles && finalMediaFiles.length > 0)
+            ? finalMediaFiles
+            : (rawInputFiles ? Array.from(rawInputFiles) : []);
 
-    const submitBtn      = document.getElementById('publishPostBtn');
-    const submitBtnLabel = document.getElementById('publishPostBtnLabel');
-    const attachBtn       = document.getElementById('attachMediaBtn');
+    const submitBtn = document
+        .getElementById('publishPostBtn');
+    const submitBtnLabel = document
+        .getElementById('publishPostBtnLabel');
+    const attachBtn = document
+        .getElementById('attachMediaBtn');
 
-    if (!title) { showToast('Please enter a title.'); return; }
-    if (!mediaFiles || mediaFiles.length === 0) { showToast('Please attach at least one image or video.'); return; }
+    if (!title) {
+        showToast('Please enter a title.');
+        return;
+    }
+    if (!mediaFiles || mediaFiles.length === 0) {
+        showToast('Please attach at least one image or video.');
+        return;
+    }
 
-    // Lock the UI immediately: disable Publish AND the attach button, add a
-    // spinner, so there is a clear, visible sign the upload is in progress
-    // and it's impossible to trigger a second submission of the same files.
+    // Lock the UI immediately: disable Publish AND the attach
+    // button, add a spinner, so there is a clear, visible sign
+    // the upload is in progress and it's impossible to trigger
+    // a second submission of the same files.
     isSubmittingPost = true;
     if (submitBtn) submitBtn.disabled = true;
     if (attachBtn) attachBtn.disabled = true;
-    if (submitBtn) submitBtn.classList.add('opacity-70', 'cursor-not-allowed');
-    if (submitBtnLabel) submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Uploading 0/${mediaFiles.length}...`;
+    if (submitBtn) {
+        submitBtn.classList.add('opacity-70', 'cursor-not-allowed');
+    }
+    if (submitBtnLabel) {
+        submitBtnLabel.innerHTML =
+            `<i class="fas fa-spinner fa-spin mr-1.5"></i>` +
+            ` Uploading 0/${mediaFiles.length}...`;
+    }
 
     try {
-        const publicUrls      = [];
-        let primaryMediaType  = 'image';
+        const publicUrls = [];
+        let primaryMediaType = 'image';
 
-        // Multi-file upload: every file the user attached is uploaded and
-        // stored as a JSON array in media_url, which both the feed carousel
-        // and detail-view carousel already render as a swipeable gallery.
+        // Multi-file upload: every file the user attached is
+        // uploaded and stored as a JSON array in media_url,
+        // which both the feed carousel and detail-view carousel
+        // already render as a swipeable gallery.
         for (let i = 0; i < mediaFiles.length; i++) {
-            const file        = mediaFiles[i];
-            const ext         = (file.name || 'file').split('.').pop();
-            const storagePath = `${currentUserData.id}/${Date.now()}-${i}.${ext}`;
+            const file = mediaFiles[i];
+            const ext = (file.name || 'file').split('.').pop();
+            const storagePath =
+                `${currentUserData.id}/${Date.now()}-${i}.${ext}`;
 
-            if (submitBtnLabel) submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Uploading ${i + 1}/${mediaFiles.length}...`;
+            if (submitBtnLabel) {
+                submitBtnLabel.innerHTML =
+                    `<i class="fas fa-spinner fa-spin mr-1.5">` +
+                    `</i> Uploading ${i + 1}/${mediaFiles.length}...`;
+            }
 
             const { error: uploadError } = await supabase.storage
                 .from("posts")
-                .upload(storagePath, file, { contentType: file.type });
+                .upload(storagePath, file, {
+                    contentType: file.type
+                });
 
             if (uploadError) throw uploadError;
 
-            const { data: { publicUrl } } = supabase.storage.from("posts").getPublicUrl(storagePath);
+            const { data: { publicUrl } } = supabase.storage
+                .from("posts")
+                .getPublicUrl(storagePath);
             publicUrls.push(publicUrl);
 
             if (i === 0 && file.type.startsWith('video')) {
@@ -2293,6 +2326,1057 @@ window.handlePostSubmission = async function () {
             }
         }
 
-        if (submitBtnLabel) submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Publishing...`;
+        if (submitBtnLabel) {
+            submitBtnLabel.innerHTML =
+                `<i class="fas fa-spinner fa-spin mr-1.5"></i>` +
+                ` Publishing...`;
+        }
 
-        const institution = currentUserData.institution || document.getElementById('profileIns
+        const institution = currentUserData.institution
+            || document.getElementById('profileInstitution')?.value
+            || 'Global';
+        const region = currentUserData.region
+            || document.getElementById('profileRegion')?.value
+            || 'Global';
+        const metadata = currentUserData.user_metadata || {};
+
+        const { error: insertError } = await supabase
+            .from("posts")
+            .insert({
+                title,
+                description,
+                type,
+                price: parseFloat(price) || 0,
+                media_url: JSON.stringify(publicUrls),
+                media_type: primaryMediaType,
+                institution,
+                region,
+                user_name: metadata.full_name
+                    || 'Anonymous Student',
+                user_avatar: metadata.avatar_url || '',
+                user_id: currentUserData.id,
+                likes_count: 0,
+                created_at: new Date().toISOString()
+            });
+
+        if (insertError) throw insertError;
+
+        document.getElementById('postTitle').value = '';
+        document.getElementById('postDescription').value = '';
+        document.getElementById('postPrice').value = '';
+        document.getElementById('mediaInput').value = '';
+        document.getElementById('mediaFileCount').textContent = '';
+
+        // Clear staged/final media state so re-opening the modal
+        // never silently reuses a previous upload's files.
+        stagedMediaFiles.forEach(f => {
+            try { URL.revokeObjectURL(f.url); } catch (_) {}
+        });
+        stagedMediaFiles = [];
+        finalMediaFiles = [];
+
+        window.togglePostModal();
+        showToast(
+            `Post published with ${publicUrls.length} ` +
+            `file${publicUrls.length > 1 ? 's' : ''}! 🎉`
+        );
+    } catch (err) {
+        console.error("Post submission error:", err);
+        showToast('Failed to publish. Please try again.');
+    } finally {
+        isSubmittingPost = false;
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.classList.remove(
+                'opacity-70', 'cursor-not-allowed'
+            );
+        }
+        if (attachBtn) attachBtn.disabled = false;
+        if (submitBtnLabel) {
+            submitBtnLabel.textContent = 'Publish Instantly';
+        }
+    }
+};
+
+// ─── 18. PROFILE STATS ───
+async function loadProfileStats() {
+    if (!currentUserData) return;
+    try {
+        const [followersRes, followingRes, postsRes] =
+            await Promise.all([
+                supabase
+                    .from("follows")
+                    .select("", { count: "exact", head: true })
+                    .eq("following_id", currentUserData.id),
+                supabase
+                    .from("follows")
+                    .select("", { count: "exact", head: true })
+                    .eq("follower_id", currentUserData.id),
+                supabase
+                    .from("posts")
+                    .select(
+                        "id, title, media_url, media_type, price"
+                    )
+                    .eq("user_id", currentUserData.id)
+                    .order("created_at", { ascending: false })
+            ]);
+
+        const postsCount = postsRes.data
+            ? postsRes.data.length
+            : 0;
+
+        setEl('profile-followers-count', followersRes.count || 0);
+        setEl('profile-following-count', followingRes.count || 0);
+        setEl('profile-posts-count', postsCount);
+
+        const grid = document.getElementById('profile-grid');
+        if (grid) {
+            grid.innerHTML = '';
+            postsRes.data?.forEach(d => {
+                grid.innerHTML += renderGridItem(d.id, d);
+            });
+        }
+    } catch (err) {
+        console.warn("Profile stats error:", err);
+    }
+}
+
+// ─── 19. SETTINGS PERSISTENCE ───
+window.initProfileSelects = function () {
+    const regEl = document.getElementById('profileRegion');
+    const instEl = document.getElementById('profileInstitution');
+
+    if (regEl && !regEl.dataset.populated) {
+        regEl.innerHTML = buildOptions(ALL_REGIONS);
+        regEl.dataset.populated = 'true';
+        regEl.addEventListener('change', () => {
+            if (instEl) {
+                instEl.innerHTML = buildInstitutionOptions(
+                    regEl.value,
+                    instEl.value
+                );
+            }
+        });
+    }
+    if (instEl && !instEl.dataset.populated) {
+        instEl.innerHTML = buildOptions(ALL_INSTITUTIONS);
+        instEl.dataset.populated = 'true';
+    }
+};
+
+document
+    .getElementById('saveLocationBtn')
+    ?.addEventListener('click', async () => {
+        if (!currentUserData) return;
+
+        const institution = document
+            .getElementById('profileInstitution')?.value;
+        const region = document
+            .getElementById('profileRegion')?.value;
+
+        if (!institution || !region) {
+            showToast(
+                'Please select both a region and institution.'
+            );
+            return;
+        }
+
+        try {
+            const { error } = await supabase
+                .from("profiles")
+                .update({ institution, region })
+                .eq("id", currentUserData.id);
+
+            if (error) throw error;
+
+            currentUserData.institution = institution;
+            currentUserData.region = region;
+
+            const locationEl = document
+                .getElementById('profile-ui-location');
+            if (locationEl) {
+                locationEl.textContent =
+                    `${institution} · ${region}`;
+            }
+            showToast('Settings updated ✓');
+        } catch (err) {
+            console.error("Save settings error:", err);
+            showToast('Failed to save. Please try again.');
+        }
+    });
+
+// ─── 20. DMs — WHATSAPP-STYLE INBOX + CHAT THREAD ───
+// Requires migration.sql to have been run (conversations +
+// messages tables, get_or_create_conversation RPC). See that
+// file for schema/RLS.
+
+function unsubscribeConversations() {
+    if (currentConversationsChan) {
+        supabase.removeChannel(currentConversationsChan);
+        currentConversationsChan = null;
+    }
+}
+
+function unsubscribeActiveThread() {
+    if (currentMessagesChan) {
+        supabase.removeChannel(currentMessagesChan);
+        currentMessagesChan = null;
+    }
+    activeConversationId = null;
+    activeConversationPeer = null;
+}
+
+function dmPeerInfo(conv) {
+    // conversations store user_a/user_b symmetrically; figure
+    // out which side is "me" and return the other person's
+    // display info.
+    const isA = conv.user_a === currentUserData.id;
+    return {
+        id: isA ? conv.user_b : conv.user_a,
+        name: (isA ? conv.user_b_name : conv.user_a_name)
+            || 'Student',
+        avatar: (isA ? conv.user_b_avatar : conv.user_a_avatar)
+            || 'https://ui-avatars.com/api/?name=Student'
+    };
+}
+
+async function openInboxView() {
+    const content = document.getElementById('dms-content');
+    if (!content || !currentUserData) return;
+
+    content.innerHTML = `
+        <div class="p-12 text-center animate-pulse
+                    text-slate-500 text-xs uppercase
+                    tracking-widest">
+            Loading chats...
+        </div>`;
+
+    try {
+        const { data, error } = await supabase
+            .from('conversations')
+            .select('*')
+            .or(
+                `user_a.eq.${currentUserData.id},` +
+                `user_b.eq.${currentUserData.id}`
+            )
+            .order('last_message_at', { ascending: false });
+
+        if (error) throw error;
+        conversationsCache = data || [];
+        renderInboxList();
+        subscribeConversationsList();
+    } catch (err) {
+        console.error("Inbox load error:", err);
+        content.innerHTML = `
+            <div class="p-12 text-center text-red-400 text-xs">
+                Couldn't load your chats. Pull to refresh.
+            </div>`;
+    }
+}
+
+function renderInboxList() {
+    const content = document.getElementById('dms-content');
+    if (!content) return;
+
+    if (conversationsCache.length === 0) {
+        content.innerHTML = `
+            <div class="text-center py-16 space-y-3 bg-slate-900
+                        border border-slate-800/60 rounded-3xl
+                        p-6">
+                <p class="text-3xl">💬</p>
+                <p class="font-black text-white uppercase
+                          tracking-tight text-sm">
+                    No chats yet
+                </p>
+                <p class="text-slate-500 text-xs max-w-xs
+                          mx-auto">
+                    Tap "Contact Seller" on any listing to start
+                    a conversation.
+                </p>
+            </div>`;
+        return;
+    }
+
+    const rows = conversationsCache.map(conv => {
+        const peer = dmPeerInfo(conv);
+        const isUnread = conv.last_sender
+            && conv.last_sender !== currentUserData.id
+            && !conv.last_read_by_me;
+
+        return `
+            <button
+                onclick="window.openDM(
+                    '${escAttr(peer.id)}',
+                    '${escAttr(peer.name)}',
+                    '${escAttr(peer.avatar)}'
+                )"
+                class="w-full flex items-center gap-3 p-3.5
+                       text-left active:bg-slate-800/60
+                       transition">
+                <img
+                    src="${esc(peer.avatar)}"
+                    class="w-12 h-12 rounded-full object-cover
+                           border border-slate-700 shrink-0"
+                    alt="">
+                <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between
+                                gap-2">
+                        <p class="text-white font-bold text-sm
+                                  truncate">
+                            ${esc(peer.name)}
+                        </p>
+                        <span class="text-[10px] text-slate-500
+                                     shrink-0">
+                            ${esc(timeAgo(conv.last_message_at))}
+                        </span>
+                    </div>
+                    <p class="text-xs ${
+                        isUnread
+                            ? 'text-slate-200 font-semibold'
+                            : 'text-slate-500'
+                    } truncate mt-0.5">
+                        ${esc(conv.last_message) || 'Say hello 👋'}
+                    </p>
+                </div>
+                ${
+                    isUnread
+                        ? '<div class="w-2.5 h-2.5 rounded-full ' +
+                          'bg-amber-400 shrink-0"></div>'
+                        : ''
+                }
+            </button>`;
+    }).join('');
+
+    content.innerHTML = `
+        <div class="divide-y divide-slate-800/60 bg-slate-900
+                    border border-slate-800/60 rounded-3xl
+                    overflow-hidden">
+            ${rows}
+        </div>`;
+}
+
+function subscribeConversationsList() {
+    unsubscribeConversations();
+    if (!currentUserData) return;
+
+    currentConversationsChan = supabase
+        .channel(`conversations-live-${currentUserData.id}`)
+        .on(
+            "postgres_changes",
+            {
+                event: "*",
+                schema: "public",
+                table: "conversations"
+            },
+            async () => {
+                try {
+                    const { data } = await supabase
+                        .from('conversations')
+                        .select('*')
+                        .or(
+                            `user_a.eq.${currentUserData.id},` +
+                            `user_b.eq.${currentUserData.id}`
+                        )
+                        .order(
+                            'last_message_at',
+                            { ascending: false }
+                        );
+                    conversationsCache = data || [];
+                    // Only re-render the list if we're actually
+                    // looking at it.
+                    if (!activeConversationId) renderInboxList();
+                } catch (_) {}
+            }
+        )
+        .subscribe();
+}
+
+// Opens (or creates) a conversation and renders the
+// WhatsApp-style thread view.
+window.openDM = async function (
+    otherUserId,
+    otherUserName,
+    otherUserAvatar
+) {
+    if (!currentUserData) {
+        window.openLoginModal();
+        return;
+    }
+    if (!otherUserId) {
+        window.navigateTo('dms');
+        return;
+    }
+    if (otherUserId === currentUserData.id) return;
+
+    window.navigateTo('dms');
+    const content = document.getElementById('dms-content');
+    if (!content) return;
+
+    unsubscribeActiveThread();
+    content.innerHTML = `
+        <div class="p-12 text-center animate-pulse
+                    text-slate-500 text-xs uppercase
+                    tracking-widest">
+            Opening chat...
+        </div>`;
+
+    try {
+        const metadata = currentUserData.user_metadata || {};
+        const { data: convId, error } = await supabase.rpc(
+            'get_or_create_conversation',
+            {
+                other_user_id: otherUserId,
+                other_user_name: otherUserName || 'Student',
+                other_user_avatar: otherUserAvatar || '',
+                my_name: metadata.full_name || 'Student',
+                my_avatar: metadata.avatar_url || ''
+            }
+        );
+
+        if (error) throw error;
+
+        activeConversationId = convId;
+        activeConversationPeer = {
+            id: otherUserId,
+            name: otherUserName || 'Student',
+            avatar: otherUserAvatar
+                || 'https://ui-avatars.com/api/?name=Student'
+        };
+
+        renderChatThreadShell();
+        await loadAndRenderMessages();
+        subscribeActiveThreadMessages();
+
+        // Register this thread as a back-nav layer:
+        // hardware/gesture back while inside a chat thread
+        // returns to the inbox list instead of leaving the DMs
+        // tab (or the app).
+        pushUiState('dm-thread', () => {
+            window.closeDMThread(true);
+        });
+    } catch (err) {
+        console.error("Open DM error:", err);
+        content.innerHTML = `
+            <div class="p-12 text-center text-red-400 text-xs">
+                Couldn't open this chat. Try again.
+            </div>`;
+    }
+};
+
+function renderChatThreadShell() {
+    const content = document.getElementById('dms-content');
+    if (!content || !activeConversationPeer) return;
+
+    content.innerHTML = `
+        <div class="flex flex-col"
+             style="height: calc(100vh - 220px);">
+            <div class="flex items-center gap-3 pb-3 border-b
+                        border-slate-800/60 mb-3">
+                <button
+                    onclick="window.closeDMThread()"
+                    class="w-8 h-8 flex items-center
+                           justify-center rounded-full
+                           bg-slate-800 text-slate-300
+                           active:scale-90 transition
+                           shrink-0">
+                    <i class="fas fa-arrow-left text-xs"></i>
+                </button>
+                <img
+                    src="${esc(activeConversationPeer.avatar)}"
+                    class="w-9 h-9 rounded-full object-cover
+                           border border-slate-700 shrink-0"
+                    alt="">
+                <p class="text-white font-bold text-sm
+                          truncate">
+                    ${esc(activeConversationPeer.name)}
+                </p>
+            </div>
+            <div id="chat-messages"
+                 class="flex-1 overflow-y-auto space-y-2 px-1
+                        pb-2"></div>
+            <div class="flex items-center gap-2 pt-2 border-t
+                        border-slate-800/60">
+                <input
+                    type="text"
+                    id="chat-input"
+                    placeholder="Message..."
+                    class="flex-1 bg-slate-800 border
+                           border-slate-700 text-white text-sm
+                           rounded-full px-4 py-2.5
+                           focus:outline-none
+                           focus:border-amber-400 transition"
+                    onkeydown="if(event.key==='Enter')
+                        window.sendChatMessage()"
+                >
+                <button
+                    onclick="window.sendChatMessage()"
+                    class="w-10 h-10 flex items-center
+                           justify-center bg-amber-400
+                           text-black rounded-full
+                           active:scale-90 transition
+                           shrink-0">
+                    <i class="fas fa-paper-plane text-xs"></i>
+                </button>
+            </div>
+        </div>`;
+}
+
+function renderChatBubble(msg) {
+    const isMe = msg.sender_id === currentUserData.id;
+    return `
+        <div class="flex ${
+            isMe ? 'justify-end' : 'justify-start'
+        }">
+            <div class="max-w-[75%] ${
+                isMe
+                    ? 'bg-amber-400 text-black'
+                    : 'bg-slate-800 text-white'
+            } rounded-2xl ${
+                isMe ? 'rounded-br-sm' : 'rounded-bl-sm'
+            } px-3.5 py-2">
+                <p class="text-sm break-words">
+                    ${esc(msg.text)}
+                </p>
+                <p class="text-[9px] ${
+                    isMe ? 'text-black/50' : 'text-slate-400'
+                } mt-1 text-right">
+                    ${esc(formatClockTime(msg.created_at))}
+                </p>
+            </div>
+        </div>`;
+}
+
+async function loadAndRenderMessages() {
+    const container = document.getElementById('chat-messages');
+    if (!container || !activeConversationId) return;
+
+    container.innerHTML = `
+        <p class="text-center text-[10px] text-slate-500
+                  animate-pulse py-4">
+            Loading messages...
+        </p>`;
+
+    try {
+        const { data: messages, error } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('conversation_id', activeConversationId)
+            .order('created_at', { ascending: true });
+
+        if (error) throw error;
+
+        if (!messages || messages.length === 0) {
+            container.innerHTML = `
+                <p class="text-center text-[11px]
+                          text-slate-500 py-6">
+                    No messages yet. Say hello 👋
+                </p>`;
+        } else {
+            container.innerHTML = messages
+                .map(renderChatBubble)
+                .join('');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Mark incoming messages as read.
+        supabase
+            .from('messages')
+            .update({ read: true })
+            .eq('conversation_id', activeConversationId)
+            .neq('sender_id', currentUserData.id)
+            .eq('read', false)
+            .then(() => {})
+            .catch(() => {});
+    } catch (err) {
+        console.error("Load messages error:", err);
+        container.innerHTML = `
+            <p class="text-center text-[11px] text-red-400
+                      py-6">
+                Couldn't load messages.
+            </p>`;
+    }
+}
+
+function subscribeActiveThreadMessages() {
+    if (currentMessagesChan) {
+        supabase.removeChannel(currentMessagesChan);
+        currentMessagesChan = null;
+    }
+    if (!activeConversationId) return;
+
+    currentMessagesChan = supabase
+        .channel(`messages-live-${activeConversationId}`)
+        .on(
+            "postgres_changes",
+            {
+                event: "INSERT",
+                schema: "public",
+                table: "messages",
+                filter:
+                    `conversation_id=eq.${activeConversationId}`
+            },
+            (payload) => {
+                const container = document
+                    .getElementById('chat-messages');
+                if (!container) return;
+
+                // Avoid duplicating our own optimistically
+                // rendered bubble.
+                if (
+                    container.dataset.lastOptimisticId
+                    === String(payload.new.id)
+                ) return;
+
+                const emptyState = container.querySelector('p');
+                if (
+                    emptyState
+                    && container.children.length === 1
+                ) container.innerHTML = '';
+
+                container.innerHTML += renderChatBubble(
+                    payload.new
+                );
+                container.scrollTop = container.scrollHeight;
+            }
+        )
+        .subscribe();
+}
+
+window.sendChatMessage = async function () {
+    const input = document.getElementById('chat-input');
+    const text = input?.value.trim();
+    if (!text || !activeConversationId || !currentUserData) {
+        return;
+    }
+
+    input.value = '';
+
+    const optimisticMsg = {
+        id: `local-${Date.now()}`,
+        sender_id: currentUserData.id,
+        text,
+        created_at: new Date().toISOString()
+    };
+
+    const container = document.getElementById('chat-messages');
+    if (container) {
+        const emptyState = container.querySelector('p');
+        if (emptyState && container.children.length === 1) {
+            container.innerHTML = '';
+        }
+        container.innerHTML += renderChatBubble(optimisticMsg);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    try {
+        const { error: msgErr } = await supabase
+            .from('messages')
+            .insert({
+                conversation_id: activeConversationId,
+                sender_id: currentUserData.id,
+                text
+            });
+        if (msgErr) throw msgErr;
+
+        await supabase
+            .from('conversations')
+            .update({
+                last_message: text,
+                last_message_at: new Date().toISOString(),
+                last_sender: currentUserData.id
+            })
+            .eq('id', activeConversationId);
+    } catch (err) {
+        console.error("Send message error:", err);
+        showToast('Message failed to send.');
+    }
+};
+
+window.closeDMThread = function (fromPop = false) {
+    unsubscribeActiveThread();
+    openInboxView();
+    if (!fromPop) popUiState('dm-thread');
+};
+
+// Legacy stub kept for any old call sites that don't pass full
+// peer info.
+window.openDM_legacy = function (targetUserId, targetName) {
+    console.warn(
+        `[DMs] openDM called with incomplete info for ` +
+        `${targetUserId} (${targetName}).`
+    );
+};
+
+// ─── 21. AUTH OBSERVER ───
+if (activeAuthChange) {
+    activeAuthChange(async (user) => {
+        // Bug fix: previously any auth-null event (including
+        // ones triggered by a network drop) would force the
+        // login modal open. Now we only treat this as a
+        // "signed out" transition when we're actually online,
+        // so losing connectivity never dumps credential fields
+        // on screen.
+        if (!navigator.onLine) {
+            console.warn(
+                "[Auth Observer] Network is offline. " +
+                "Ignoring auth state evaluation."
+            );
+            return;
+        }
+
+        currentUserData = user;
+        const authProfileNav = document
+            .getElementById('auth-profile-nav');
+
+        if (typeof window.updateAuthButton === 'function') {
+            window.updateAuthButton(user);
+        }
+
+        if (user) {
+            const metadata = user.user_metadata || {};
+            document
+                .getElementById('login-modal')
+                ?.classList.add('hidden');
+            document
+                .getElementById('signup-modal')
+                ?.classList.add('hidden');
+            document
+                .getElementById('onboarding-modal')
+                ?.remove();
+
+            if (authProfileNav) {
+                authProfileNav.innerHTML = `
+                    <i class="fas fa-user text-lg"></i>
+                    <span class="text-[10px] uppercase
+                                 font-bold tracking-wider">
+                        Profile
+                    </span>`;
+                authProfileNav.onclick = function (e) {
+                    e.stopPropagation();
+                    window.navigateTo('profile', authProfileNav);
+                };
+            }
+
+            const avatarEl = document
+                .getElementById('profile-ui-avatar');
+            const nameEl = document
+                .getElementById('profile-ui-name');
+
+            try {
+                const { data: savedUserRow } = await supabase
+                    .from("profiles")
+                    .select("avatar, institution, region")
+                    .eq("id", user.id)
+                    .maybeSingle();
+
+                const savedAvatar =
+                    savedUserRow?.avatar
+                    || metadata.avatar_url
+                    || `https://ui-avatars.com/api/?name=` +
+                       `${encodeURIComponent(
+                           metadata.full_name || 'User'
+                       )}`;
+
+                if (!currentUserData.user_metadata) {
+                    currentUserData.user_metadata = {};
+                }
+                currentUserData.user_metadata.avatar_url =
+                    savedAvatar;
+
+                if (avatarEl) avatarEl.src = savedAvatar;
+                if (nameEl) {
+                    nameEl.textContent =
+                        metadata.full_name || 'Campus Student';
+                }
+
+                window.initProfileSelects();
+
+                if (
+                    !savedUserRow
+                    || !savedUserRow.institution
+                    || !savedUserRow.region
+                ) {
+                    injectOnboardingModal();
+                } else {
+                    currentUserData.institution =
+                        savedUserRow.institution || '';
+                    currentUserData.region =
+                        savedUserRow.region || '';
+                    applyLocationToUI(
+                        savedUserRow.institution || '',
+                        savedUserRow.region || ''
+                    );
+                }
+            } catch (err) {
+                console.warn(
+                    "User doc sync bypassed " +
+                    "(using local auth state):",
+                    err
+                );
+                if (avatarEl) {
+                    avatarEl.src =
+                        metadata.avatar_url
+                        || `https://ui-avatars.com/api/?name=` +
+                           `${encodeURIComponent(
+                               metadata.full_name || 'User'
+                           )}`;
+                }
+                if (nameEl) {
+                    nameEl.textContent =
+                        metadata.full_name || 'Campus Student';
+                }
+                window.initProfileSelects();
+            }
+
+            document
+                .getElementById('profile-auth-gate')
+                ?.classList.add('hidden');
+            document
+                .getElementById('profile-content')
+                ?.classList.remove('hidden');
+            document
+                .getElementById('dms-auth-gate')
+                ?.classList.add('hidden');
+            document
+                .getElementById('dms-content')
+                ?.classList.remove('hidden');
+
+            subscribeFeed();
+            try { loadProfileStats(); } catch (_) {}
+            _initAvatarLongPress();
+        } else {
+            unsubscribeFeed();
+            unsubscribeConversations();
+            unsubscribeActiveThread();
+            if (currentCommentsChan) {
+                supabase.removeChannel(currentCommentsChan);
+            }
+
+            if (authProfileNav) {
+                authProfileNav.innerHTML = `
+                    <i class="fas fa-sign-in-alt text-lg">
+                    </i>
+                    <span class="text-[10px] uppercase
+                                 font-bold tracking-wider">
+                        Sign In
+                    </span>`;
+                authProfileNav.onclick = function (e) {
+                    e.stopPropagation();
+                    window.openLoginModal();
+                };
+            }
+
+            setEl('profile-ui-name', 'Campus Student');
+            setEl('profile-ui-location', 'Global Network');
+            setEl('profile-followers-count', '0');
+            setEl('profile-following-count', '0');
+            setEl('profile-posts-count', '0');
+
+            const grid = document
+                .getElementById('profile-grid');
+            if (grid) grid.innerHTML = '';
+
+            document
+                .getElementById('profile-auth-gate')
+                ?.classList.remove('hidden');
+            document
+                .getElementById('profile-content')
+                ?.classList.add('hidden');
+            document
+                .getElementById('dms-auth-gate')
+                ?.classList.remove('hidden');
+            document
+                .getElementById('dms-content')
+                ?.classList.add('hidden');
+
+            subscribeFeed();
+            // Only auto-open the login modal on a genuine
+            // signed-out state while online — never as a
+            // side-effect of connectivity loss.
+            if (
+                typeof window.openLoginModal === 'function'
+                && navigator.onLine
+            ) {
+                window.openLoginModal();
+            }
+        }
+
+        isAuthInitialized = true;
+        if (!document.querySelector(
+            '.bottom-nav button.nav-active, ' +
+            'nav button.nav-active, nav a.nav-active'
+        )) {
+            document
+                .getElementById('nav-btn-feed')
+                ?.classList.add('nav-active');
+        }
+    });
+}
+
+// ─── 22. SCROLL DIRECTION DETECTOR FOR NAVBAR ───
+let lastScrollY = window.scrollY;
+
+window.addEventListener('scroll', () => {
+    const bottomNav = document
+        .querySelector('.bottom-nav-container');
+    if (!bottomNav) return;
+
+    const currentScrollY = window.scrollY;
+
+    if (currentScrollY < 20) {
+        bottomNav.classList.remove('bottom-nav-hidden');
+        return;
+    }
+    if (currentScrollY > lastScrollY) {
+        bottomNav.classList.add('bottom-nav-hidden');
+    } else {
+        bottomNav.classList.remove('bottom-nav-hidden');
+    }
+    lastScrollY = currentScrollY;
+}, { passive: true });
+
+// ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ───
+document.body.addEventListener('click', (event) => {
+    const profileClickTarget = event.target.closest(
+        '.feed-profile-trigger'
+    );
+    if (profileClickTarget) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof window.navigateTo === 'function') {
+            window.navigateTo('profile');
+        }
+    }
+});
+
+// ─── 24. NATIVE INTERNET CONNECTIVITY DETECTOR ───
+// Fix: previously going offline could still leave login/signup
+// modals open or let them be triggered by the auth observer.
+// Now we explicitly close any open credential modals the
+// moment connectivity drops, and show a calm, professional
+// toast instead — matching how other production apps
+// (WhatsApp, Instagram) handle connectivity loss.
+window.addEventListener('offline', () => {
+    isOnline = false;
+    document
+        .getElementById('login-modal')
+        ?.classList.add('hidden');
+    document
+        .getElementById('signup-modal')
+        ?.classList.add('hidden');
+
+    showToast("You're offline");
+
+    const submitBtn = document
+        .getElementById('publishPostBtn');
+    const submitBtnLabel = document
+        .getElementById('publishPostBtnLabel');
+
+    if (submitBtn && !isSubmittingPost) {
+        submitBtn.dataset.originalText =
+            submitBtnLabel ? submitBtnLabel.textContent : '';
+        if (submitBtnLabel) {
+            submitBtnLabel.textContent =
+                'Waiting for connection...';
+        }
+        submitBtn.disabled = true;
+    }
+});
+
+window.addEventListener('online', () => {
+    isOnline = true;
+    showToast("Back online");
+
+    const submitBtn = document
+        .getElementById('publishPostBtn');
+    const submitBtnLabel = document
+        .getElementById('publishPostBtnLabel');
+
+    if (
+        submitBtn
+        && submitBtn.dataset.originalText
+        && !isSubmittingPost
+    ) {
+        if (submitBtnLabel) {
+            submitBtnLabel.textContent =
+                submitBtn.dataset.originalText;
+        }
+        submitBtn.disabled = false;
+    }
+    if (typeof subscribeFeed === 'function') subscribeFeed();
+});
+
+// ─── UTILITY: WIRE CAROUSEL COUNTERS ───
+function wireCarouselCounters(postId) {
+    const carousel = document.querySelector(
+        `.feed-carousel-${CSS.escape(postId)}`
+    );
+    const counter = document.querySelector(
+        `.carousel-counter-${CSS.escape(postId)}`
+    );
+    if (!carousel || !counter) return;
+
+    carousel.addEventListener('scroll', () => {
+        const width = carousel.offsetWidth;
+        if (width <= 0) return;
+        const index =
+            Math.round(carousel.scrollLeft / width) + 1;
+        counter.textContent = index;
+    }, { passive: true });
+}
+
+// ─── UTILITY: RENDER PROFILE GRID ITEM ───
+function renderGridItem(id, post) {
+    const d = post.data ? post.data : post;
+
+    let mediaUrl = '';
+    if (d.media_url) {
+        if (d.media_url.startsWith('[')) {
+            try {
+                mediaUrl = JSON.parse(d.media_url)[0];
+            } catch (_) {
+                mediaUrl = d.media_url;
+            }
+        } else {
+            mediaUrl = d.media_url;
+        }
+    }
+
+    const fallbackImage =
+        'https://images.unsplash.com/' +
+        'photo-1563013544-824ae1d704d3?w=300';
+    const isVideo = d.media_type === 'video';
+
+    const mediaBlock = isVideo
+        ? `<video class="w-full h-full object-cover"
+                  src="${mediaUrl}"></video>
+           <div class="absolute top-1.5 right-1.5 text-white
+                       drop-shadow text-[10px]">
+               <i class="fas fa-video"></i>
+           </div>`
+        : `<img class="w-full h-full object-cover
+                       group-hover:scale-105 transition
+                       duration-300"
+                src="${mediaUrl || fallbackImage}"
+                alt="" loading="lazy">`;
+
+    return `
+        <div
+            onclick="openDetail('${id}')"
+            class="relative aspect-square w-full bg-slate-950
+                   border border-slate-800 rounded-xl
+                   overflow-hidden cursor-pointer group
+                   hover:border-amber-400/50 transition">
+            ${mediaBlock}
+            <div class="absolute inset-0 bg-gradient-to-t
+                        from-black/80 via-transparent
+                        to-transparent opacity-0
+                        group-hover:opacity-100 transition
+                        flex items-end p-2">
+                <p class="text-[10px] text-white font-black
+                          truncate w-full">
+                    GH₵${d.price || 0}
+                </p>
+            </div>
+        </div>`;
+}
