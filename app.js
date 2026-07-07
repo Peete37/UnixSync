@@ -3,7 +3,8 @@ import { supabase } from "./supabase-config.js";
 import { onAuthChange, signInWithGoogle, signOutUser as authSignOut } from "./auth.service.js";
 
 // ─── 2. CONSTANTS ─────────────────────────────────────────────────────────────
-const FEED_LIMIT         = 30;
+const FEED_PAGE_SIZE     = 15; // posts per page for infinite scroll (was a single hard cap of 30 with no way to see more)
+const FEED_LIMIT         = FEED_PAGE_SIZE; // kept for any code that still references the old name
 const SEARCH_LIMIT       = 100;
 const SEARCH_RESULTS_CAP = 20;
 
@@ -38,12 +39,73 @@ let isAuthInitialized   = false;
 let isOnline            = navigator.onLine;
 let currentFeedType     = 'all'; // tracks active tab: all | following | product | skill
 
+// ─── CAMPUS SCOPE STATE ────────────────────────────────────────────────────────
+// Previously institution/region were pure display metadata — every tab
+// showed every post from every campus mixed together nationwide, which
+// defeats the point of a *campus* marketplace (a Legon student browsing
+// past a fridge for sale in Tamale they can't realistically go pick up).
+// Now the All/Products/Services tabs default to "mine" — the signed-in
+// person's own institution — with an easy one-tap switch to "everywhere"
+// for anyone who wants the full nationwide feed. Persisted so the choice
+// survives a reload rather than resetting every visit.
+let currentCampusScope = localStorage.getItem('campus_market_scope') || 'mine'; // 'mine' | 'everywhere'
+
+// ─── PAGINATION STATE ─────────────────────────────────────────────────────────
+// Fix: the feed previously had a single hard cap (FEED_LIMIT posts) with
+// no way to see anything older — once a tab had more than 30 listings,
+// the rest were simply invisible forever. Now each tab tracks its own
+// "base filter" (the type condition, independent of how many posts are
+// currently loaded) plus how many pages have been loaded and whether more
+// exist, so scrolling to the bottom can fetch the next page instead of
+// just... stopping.
+let currentFeedBaseFilter = null; // function(query) -> query, applies only the tab's type condition
+let feedLoadedCount        = 0;
+let feedHasMore            = true;
+let isFeedLoadingMore       = false;
+let feedLoadMoreObserver    = null;
+
 // DM state
 let currentConversationsChan = null;
 let currentMessagesChan      = null;
 let activeConversationId     = null;
 let activeConversationPeer   = null; // { id, name, avatar }
 let conversationsCache       = [];
+
+// Fix: `last_read_by_me` was referenced when computing unread state but
+// never actually written anywhere (a single boolean column can't
+// correctly represent "read by ME" for a two-person conversation
+// anyway), so unread detection was effectively broken. Tracked here
+// client-side instead: conversationId -> ISO timestamp of the last time
+// THIS user viewed that thread. A conversation is unread if its
+// last_message_at is newer than the stored read timestamp AND the last
+// message wasn't sent by this user.
+const conversationLastRead = JSON.parse(localStorage.getItem('campus_market_dm_last_read') || '{}');
+
+function markConversationRead(conversationId) {
+    conversationLastRead[conversationId] = new Date().toISOString();
+    localStorage.setItem('campus_market_dm_last_read', JSON.stringify(conversationLastRead));
+    updateDmUnreadBadge();
+}
+
+function isConversationUnread(conv) {
+    if (!currentUserData) return false;
+    if (!conv.last_sender || conv.last_sender === currentUserData.id) return false;
+    const lastRead = conversationLastRead[conv.id];
+    if (!lastRead) return true;
+    return new Date(conv.last_message_at) > new Date(lastRead);
+}
+
+function updateDmUnreadBadge() {
+    const badge = document.getElementById('dms-unread-badge');
+    if (!badge) return;
+    const unreadCount = conversationsCache.filter(isConversationUnread).length;
+    if (unreadCount > 0) {
+        badge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+        badge.classList.remove('hidden');
+    } else {
+        badge.classList.add('hidden');
+    }
+}
 
 // Persistent state maps that survive feed re-renders
 const likedPostIds      = new Set(JSON.parse(localStorage.getItem('campus_market_likes') || '[]'));
@@ -113,6 +175,23 @@ function setEl(id, val) {
     if (el) el.textContent = val;
 }
 
+// Lightweight registry mapping postId -> { id, title, price, image, type }.
+// Populated whenever a card/detail view is rendered, so the "Contact" /
+// "Contact Seller" buttons can look up full post context by ID instead of
+// trying to smuggle a JSON blob through an inline onclick HTML attribute
+// (which is fragile with quotes/backticks and easy to break on escaping).
+const postContextRegistry = {};
+
+function registerPostContext(id, d, firstMediaUrl) {
+    postContextRegistry[id] = {
+        id,
+        title: d.title || 'Listing',
+        price: d.price || 0,
+        image: firstMediaUrl || '',
+        type: d.type || 'product'
+    };
+}
+
 function buildOptions(arr, selectedVal = '') {
     return arr.map(v =>
         `<option value="${esc(v)}" ${v === selectedVal ? 'selected' : ''}>${esc(v)}</option>`
@@ -131,6 +210,7 @@ function showToast(msg) {
     document.body.appendChild(t);
     setTimeout(() => t.remove(), 2800);
 }
+window.showToast = showToast;
 
 function timeAgo(dateStr) {
     if (!dateStr) return '';
@@ -238,6 +318,17 @@ window.saveOnboarding = async function () {
 
         applyLocationToUI(institution, region);
         document.getElementById('onboarding-modal')?.remove();
+
+        // The person just set their institution for the first time —
+        // refresh the campus scope banner (previously hidden since there
+        // was nothing to scope by) and re-run the current feed so it
+        // picks up campus scoping immediately, instead of waiting for
+        // the next tab click or reload.
+        updateCampusScopeBanner();
+        if (['all', 'product', 'skill'].includes(currentFeedType)) {
+            const clickedBtn = document.querySelector('.feed-tab-btn.text-amber-400');
+            window.filterFeed(currentFeedType, clickedBtn);
+        }
     } catch (err) {
         console.error("Onboarding save error:", err);
         alert('Could not save your details. Please try again.');
@@ -304,7 +395,17 @@ function defaultFeedQuery() {
         .from("posts")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(FEED_LIMIT);
+        .limit(FEED_PAGE_SIZE);
+}
+
+// Fetches posts using the tab's base filter (type condition only) plus an
+// explicit range, so pagination and "refresh what's currently loaded"
+// (used by the realtime handler) are both just different calls to the
+// same underlying query builder instead of two divergent code paths.
+function buildFeedQuery(baseFilter, rangeStart, rangeEnd) {
+    let q = supabase.from("posts").select("*");
+    if (baseFilter) q = baseFilter(q);
+    return q.order("created_at", { ascending: false }).range(rangeStart, rangeEnd);
 }
 
 async function fetchFeedSnapshot(queryFactory = null) {
@@ -314,12 +415,17 @@ async function fetchFeedSnapshot(queryFactory = null) {
     return data || [];
 }
 
-async function subscribeFeed(queryFactory = null) {
+async function subscribeFeed(baseFilter = null) {
     unsubscribeFeed();
+    currentFeedBaseFilter = baseFilter;
+    feedLoadedCount = 0;
+    feedHasMore = true;
 
     try {
-        const data = await fetchFeedSnapshot(queryFactory);
+        const data = await fetchFeedSnapshot(() => buildFeedQuery(baseFilter, 0, FEED_PAGE_SIZE - 1));
         allCachedPosts = data.map(item => ({ id: item.id, data: item }));
+        feedLoadedCount = data.length;
+        feedHasMore = data.length === FEED_PAGE_SIZE;
 
         // Sync local bookmark view mapping if authenticated
         if (currentUserData) {
@@ -376,22 +482,105 @@ async function subscribeFeed(queryFactory = null) {
         console.error("Feed poll error:", err);
     }
 
+    let _feedRefreshDebounceTimer = null;
     currentFeedChan = supabase
         .channel(`posts-live-feed-${Date.now()}`)
-        .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, async () => {
-            try {
-                const data = await fetchFeedSnapshot(queryFactory);
-                allCachedPosts = data.map(item => ({ id: item.id, data: item }));
-                renderFeedFromCache();
+        .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, () => {
+            // Debounced: multiple realtime events arriving in quick
+            // succession (e.g. several people liking/commenting around
+            // the same time) previously each triggered their own full
+            // feed re-fetch + re-render, tearing down and rebuilding
+            // every card and restarting every video repeatedly. Now
+            // rapid bursts coalesce into a single refresh shortly after
+            // things settle.
+            //
+            // Fix: this used to always re-fetch just the first
+            // FEED_LIMIT posts, silently discarding anything the person
+            // had already scrolled/loaded further down via "load more" —
+            // a live update partway through browsing would snap the
+            // feed back to page 1. Now it re-fetches exactly however
+            // many posts are currently loaded, preserving pagination
+            // progress.
+            clearTimeout(_feedRefreshDebounceTimer);
+            _feedRefreshDebounceTimer = setTimeout(async () => {
+                try {
+                    const currentCount = Math.max(feedLoadedCount, FEED_PAGE_SIZE);
+                    const data = await fetchFeedSnapshot(() => buildFeedQuery(baseFilter, 0, currentCount - 1));
+                    allCachedPosts = data.map(item => ({ id: item.id, data: item }));
+                    feedLoadedCount = data.length;
+                    feedHasMore = data.length >= currentCount;
+                    renderFeedFromCache();
 
-                if (!document.getElementById('profile-container')?.classList.contains('hidden')) {
-                    loadProfileStats();
+                    if (!document.getElementById('profile-container')?.classList.contains('hidden')) {
+                        loadProfileStats();
+                    }
+                } catch (err) {
+                    console.error("Feed live refresh error:", err);
                 }
-            } catch (err) {
-                console.error("Feed live refresh error:", err);
-            }
+            }, 400);
         })
         .subscribe();
+}
+
+// Fetches the next page of posts for the currently active tab and appends
+// them to allCachedPosts, then re-renders. Triggered by scrolling near
+// the bottom of the feed (see setupFeedLoadMoreObserver).
+async function loadNextFeedPage() {
+    if (isFeedLoadingMore || !feedHasMore) return;
+    isFeedLoadingMore = true;
+
+    const sentinel = document.getElementById('feed-load-more-sentinel');
+    if (sentinel) {
+        sentinel.innerHTML = `<div class="py-6 text-center text-slate-500 text-[10px] uppercase tracking-widest animate-pulse">Loading more...</div>`;
+    }
+
+    try {
+        const rangeStart = feedLoadedCount;
+        const rangeEnd = feedLoadedCount + FEED_PAGE_SIZE - 1;
+        const data = await fetchFeedSnapshot(() => buildFeedQuery(currentFeedBaseFilter, rangeStart, rangeEnd));
+
+        const existingIds = new Set(allCachedPosts.map(p => p.id));
+        const newItems = data
+            .filter(item => !existingIds.has(item.id))
+            .map(item => ({ id: item.id, data: item }));
+
+        allCachedPosts = allCachedPosts.concat(newItems);
+        feedLoadedCount += data.length;
+        feedHasMore = data.length === FEED_PAGE_SIZE;
+
+        renderFeedFromCache();
+    } catch (err) {
+        console.error("Load more posts error:", err);
+        showToast("Couldn't load more posts. Try scrolling again.");
+    } finally {
+        isFeedLoadingMore = false;
+    }
+}
+
+// Watches a sentinel element placed after the last rendered card; once it
+// scrolls into view, fetches the next page. Using an observer instead of
+// a scroll listener avoids firing on every scroll pixel.
+function setupFeedLoadMoreObserver() {
+    if (feedLoadMoreObserver) {
+        feedLoadMoreObserver.disconnect();
+        feedLoadMoreObserver = null;
+    }
+
+    const sentinel = document.getElementById('feed-load-more-sentinel');
+    if (!sentinel) return;
+
+    feedLoadMoreObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            if (currentFeedType === 'following') {
+                loadNextFollowingPage();
+            } else {
+                loadNextFeedPage();
+            }
+        });
+    }, { root: null, rootMargin: '400px 0px' });
+
+    feedLoadMoreObserver.observe(sentinel);
 }
 
 // ─── 8. NAVIGATION CONTROL ────────────────────────────────────────────────────
@@ -593,6 +782,8 @@ window.openDetail = async function (postId) {
 
         const ctaLabel = d.type === 'skill' ? 'Contact' : 'Contact Seller';
 
+        registerPostContext(d.id, d, mediaUrls[0] || '');
+
         content.innerHTML = `
             <div class="w-full bg-slate-950 relative">${mediaBlock}</div>
             <div class="p-6 space-y-4">
@@ -607,7 +798,7 @@ window.openDetail = async function (postId) {
                 </div>
                 <div class="flex items-center justify-between gap-3 p-3 bg-slate-900 rounded-xl border border-slate-800">
                     <div class="flex items-center gap-3 min-w-0">
-                        <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-10 h-10 rounded-full border border-amber-400 object-cover" alt="Avatar">
+                        <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" data-avatar-for="${escAttr(d.user_id)}" class="w-10 h-10 rounded-full border border-amber-400 object-cover" alt="Avatar">
                         <div class="min-w-0">
                             <p class="text-xs text-slate-500 uppercase">Provider</p>
                             <p class="text-sm font-bold truncate">${esc(d.user_name) || 'Anonymous Student'}</p>
@@ -623,7 +814,7 @@ window.openDetail = async function (postId) {
                         class="w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs ${cartColorClass}">
                         <i class="fas fa-shopping-basket mr-1.5 text-[11px]"></i><span class="cart-btn-label">${cartText}</span>
                     </button>
-                    <button onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}')" class="w-full bg-amber-400 text-black font-black py-4 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
+                    <button onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}', '${escAttr(d.id)}')" class="w-full bg-amber-400 text-black font-black py-4 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
                         ${esc(ctaLabel)}
                     </button>
                 </div>
@@ -766,11 +957,18 @@ window.handleAvatarUpload = async function (inputEl) {
 
         const storagePath = `${currentUserData.id}/avatar.jpg`;
 
-        const { error: uploadErr } = await supabase.storage
-            .from('avatars')
-            .upload(storagePath, compressed, { contentType: 'image/jpeg', upsert: true });
-
-        if (uploadErr) throw uploadErr;
+        await withUploadRetry(
+            async () => {
+                const { error: uploadErr } = await supabase.storage
+                    .from('avatars')
+                    .upload(storagePath, compressed, { contentType: 'image/jpeg', upsert: true });
+                if (uploadErr) throw uploadErr;
+            },
+            {
+                retries: 3,
+                onRetry: (attempt) => showToast(`Connection lost — retrying (${attempt}/3)...`)
+            }
+        );
 
         const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(storagePath);
         // Cache-bust with a fresh timestamp every time, and — critically —
@@ -793,16 +991,36 @@ window.handleAvatarUpload = async function (inputEl) {
         if (!currentUserData.user_metadata) currentUserData.user_metadata = {};
         currentUserData.user_metadata.avatar_url = dynamicUrl;
 
-        // Update every place the avatar is currently rendered on screen —
-        // not just the profile page preview — so a stale copy never
-        // lingers in the feed header, existing feed cards, or reel cards
-        // until the next full reload.
+        // Fix: previously a new avatar only ever applied going forward —
+        // every post you'd already published had its `user_avatar` value
+        // frozen at upload time (posts store a denormalized snapshot of
+        // the poster's avatar rather than looking it up live), so old
+        // posts kept showing your old photo forever. Now we backfill
+        // user_avatar across ALL of the person's existing posts whenever
+        // they change their avatar, so past and future posts both show
+        // the current photo.
+        try {
+            await supabase
+                .from('posts')
+                .update({ user_avatar: dynamicUrl })
+                .eq('user_id', currentUserData.id);
+        } catch (backfillErr) {
+            console.warn('Avatar backfill onto existing posts failed (non-fatal):', backfillErr);
+        }
+
+        // Instantly reflect the new avatar on anything already rendered
+        // in this session — the in-memory allCachedPosts snapshot, plus
+        // every avatar <img> tagged as belonging to this user — instead
+        // of waiting for the next full feed refresh.
+        allCachedPosts.forEach(({ data: d }) => {
+            if (d.user_id === currentUserData.id) d.user_avatar = dynamicUrl;
+        });
         if (previewEl) previewEl.src = dynamicUrl;
         document.querySelectorAll(`img[data-avatar-for="${CSS.escape(currentUserData.id)}"]`).forEach(img => {
             img.src = dynamicUrl;
         });
 
-        showToast('Avatar updated! ✓');
+        showToast('Avatar updated everywhere! ✓');
     } catch (err) {
         console.error('Avatar upload error:', err);
         if (previewEl) {
@@ -850,6 +1068,13 @@ function _initAvatarLongPress() {
     profileAvatar.addEventListener('mouseup',     cancelPress);
     profileAvatar.addEventListener('mouseleave',  cancelPress);
 
+    // Belt-and-suspenders: some Android WebViews still surface their own
+    // native "Open in browser / Share / Download" long-press menu on an
+    // <img> even with -webkit-touch-callout: none set in CSS. Explicitly
+    // blocking the contextmenu event here guarantees our in-app modal
+    // wins instead of the OS-level share sheet from your screenshot.
+    profileAvatar.addEventListener('contextmenu', (e) => { e.preventDefault(); return false; });
+
     closeAvatarBtn?.addEventListener('click', closeAvatarModalFn);
     avatarModal.addEventListener('click', (e) => { if (e.target === avatarModal) closeAvatarModalFn(); });
 
@@ -895,11 +1120,52 @@ if (document.readyState === 'loading') {
 // Opened automatically whenever files are chosen via the mediaInput file
 // picker. Lets the user preview, rotate, and remove files before they are
 // actually attached to the listing (finalMediaFiles is what gets uploaded).
+// Limits enforced when attaching media to a post — previously there was
+// no validation at all, so someone could attach a 50-file batch or a
+// huge multi-hundred-MB video and the app would just try (and likely
+// fail slowly, or hammer the data usage fixes made elsewhere) instead of
+// telling them up front what's allowed.
+const MAX_MEDIA_FILES = 10;
+const MAX_IMAGE_SIZE_MB = 15;
+const MAX_VIDEO_SIZE_MB = 50;
+
 window.openEditMediaModal = function (fileList) {
+    const incoming = Array.from(fileList);
+
+    const accepted = [];
+    const rejectedReasons = [];
+
+    for (const file of incoming) {
+        if (accepted.length >= MAX_MEDIA_FILES) {
+            rejectedReasons.push(`${file.name}: only ${MAX_MEDIA_FILES} files allowed per post`);
+            continue;
+        }
+        const isVideo = file.type.startsWith('video');
+        const maxBytes = (isVideo ? MAX_VIDEO_SIZE_MB : MAX_IMAGE_SIZE_MB) * 1024 * 1024;
+        if (file.size > maxBytes) {
+            rejectedReasons.push(`${file.name}: over ${isVideo ? MAX_VIDEO_SIZE_MB : MAX_IMAGE_SIZE_MB}MB limit`);
+            continue;
+        }
+        accepted.push(file);
+    }
+
+    if (rejectedReasons.length > 0) {
+        showToast(
+            rejectedReasons.length === 1
+                ? `Skipped 1 file — ${rejectedReasons[0]}`
+                : `Skipped ${rejectedReasons.length} files that were too large or over the limit`
+        );
+    }
+
+    if (accepted.length === 0) {
+        if (rejectedReasons.length === 0) showToast('No files selected.');
+        return;
+    }
+
     // Revoke any previously staged object URLs to avoid leaking memory
     stagedMediaFiles.forEach(f => { try { URL.revokeObjectURL(f.url); } catch(_) {} });
 
-    stagedMediaFiles = Array.from(fileList).map(file => ({
+    stagedMediaFiles = accepted.map(file => ({
         file,
         url: URL.createObjectURL(file),
         rotation: 0,
@@ -990,6 +1256,15 @@ window.confirmEditedMedia = async function () {
 
     showToast('Preparing media…');
 
+    // Data Saver toggle (Settings) makes compression noticeably more
+    // aggressive — smaller max dimension and lower quality — for people
+    // who've explicitly said they want to minimize data usage over a
+    // slightly sharper image.
+    const dataSaverOn = (typeof window.getAppSettings === 'function') && window.getAppSettings().dataSaver;
+    const compressionOptions = dataSaverOn
+        ? { maxDimension: 900, quality: 0.6 }
+        : { maxDimension: 1280, quality: 0.75 };
+
     const processed = [];
     for (const item of stagedMediaFiles) {
         if (item.type === 'image') {
@@ -998,10 +1273,7 @@ window.confirmEditedMedia = async function () {
                 if (item.rotation !== 0) {
                     workingFile = await rotateImageFile(workingFile, item.rotation);
                 }
-                const compressedFile = await compressImageFile(workingFile, {
-                    maxDimension: 1280,
-                    quality: 0.75
-                });
+                const compressedFile = await compressImageFile(workingFile, compressionOptions);
                 processed.push(compressedFile);
             } catch (e) {
                 console.warn('Rotate/compress failed, using original file:', e);
@@ -1103,7 +1375,72 @@ function compressImageFile(file, { maxDimension = 1280, quality = 0.75 } = {}) {
     });
 }
 
+// ─── UPLOAD RETRY HELPER ──────────────────────────────────────────────────────
+// Wraps a network operation (storage upload, DB write) with a short wait
+// and a few retries before truly giving up. Without this, a brief
+// connectivity blip mid-upload (a couple of seconds of no signal, a wifi
+// handoff, walking through a dead zone on campus) immediately surfaced as
+// "failed to upload" even though the connection came right back. Now we
+// wait, try again, and only report a genuine failure after several
+// attempts — and if the device is offline at the moment of failure, wait
+// specifically for the 'online' event (up to a timeout) before retrying,
+// rather than retrying blindly into a still-dead connection.
+async function withUploadRetry(operation, { retries = 3, baseDelayMs = 1500, onRetry = null } = {}) {
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        if (attempt > 0) {
+            if (onRetry) onRetry(attempt, retries);
+
+            if (!navigator.onLine) {
+                // Wait specifically for connectivity to return (capped so
+                // we don't hang forever), rather than immediately retrying
+                // into a connection we already know is down.
+                await waitForOnline(15000);
+            } else {
+                await sleep(baseDelayMs * attempt);
+            }
+        }
+        try {
+            return await operation();
+        } catch (err) {
+            lastErr = err;
+            // Only worth retrying on what looks like a network-level
+            // failure, not on things like a validation or auth error that
+            // will just fail identically every time.
+            const isNetworkish = !navigator.onLine
+                || err?.message?.toLowerCase().includes('network')
+                || err?.message?.toLowerCase().includes('fetch')
+                || err?.name === 'TypeError';
+            if (!isNetworkish) throw err;
+        }
+    }
+    throw lastErr;
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function waitForOnline(timeoutMs) {
+    return new Promise(resolve => {
+        if (navigator.onLine) { resolve(); return; }
+        const cleanup = () => {
+            window.removeEventListener('online', handler);
+            clearTimeout(timer);
+            resolve();
+        };
+        const handler = () => cleanup();
+        const timer = setTimeout(cleanup, timeoutMs);
+        window.addEventListener('online', handler);
+    });
+}
+
 // ─── 12. CARD RENDERERS ───────────────────────────────────────────────────────
+// Tracks posts currently mid-like-toggle so a rapid double-tap can't fire
+// two overlapping insert/delete calls racing each other against the same
+// row (which could otherwise leave the DB counter and the UI disagreeing).
+const likeInFlight = new Set();
+
 window.likePost = async function (postId, btn) {
     if (!currentUserData) {
         showToast("Please sign in to like posts.");
@@ -1113,6 +1450,8 @@ window.likePost = async function (postId, btn) {
         showToast("Error: Missing Post Identifier");
         return;
     }
+    if (likeInFlight.has(postId)) return;
+    likeInFlight.add(postId);
 
     const liked   = likedPostIds.has(postId);
     const countEl = btn.querySelector('.like-count');
@@ -1143,13 +1482,23 @@ window.likePost = async function (postId, btn) {
     // 2. Execute Backend sync — this is what makes likes survive reload.
     // Uses atomic RPC counters (increment_post_likes / decrement_post_likes)
     // defined in migration.sql so concurrent likes never clobber each other.
+    //
+    // Fix: previously an insert/delete failure into the `likes` table was
+    // swallowed silently (error checked but never surfaced or acted on),
+    // so the heart stayed optimistically "liked" in the UI while nothing
+    // was actually saved server-side — the exact cause of likes vanishing
+    // on refresh. Now any real failure rolls the UI back to its prior
+    // state and tells the person, instead of drifting out of sync with
+    // the database until the next reload silently corrects it.
     try {
         if (liked) {
-            await supabase
+            const { error: deleteErr } = await supabase
                 .from("likes")
                 .delete()
                 .eq("post_id", postId)
                 .eq("user_id", currentUserData.id);
+
+            if (deleteErr) throw deleteErr;
             await supabase.rpc('decrement_post_likes', { post_id_input: postId });
         } else {
             const { error: insertErr } = await supabase
@@ -1158,14 +1507,40 @@ window.likePost = async function (postId, btn) {
                     post_id: postId,
                     user_id: currentUserData.id
                 });
-            // Unique constraint means a duplicate like just fails silently —
-            // don't double-increment the counter in that case.
+
+            // A unique-constraint violation just means this like already
+            // existed (e.g. a duplicate tap) — treat that as a harmless
+            // no-op, not a failure. Any OTHER error means the like truly
+            // didn't save, so we must roll back.
+            const isDuplicate = insertErr && insertErr.code === '23505';
+            if (insertErr && !isDuplicate) throw insertErr;
             if (!insertErr) {
                 await supabase.rpc('increment_post_likes', { post_id_input: postId });
             }
         }
-    } catch(e) {
-        console.warn("Like sync delayed or rejected:", e);
+    } catch (e) {
+        console.error("Like sync failed — reverting UI to match database:", e);
+
+        // Roll back the optimistic UI exactly, since the write did not
+        // actually persist.
+        if (liked) {
+            likedPostIds.add(postId);
+            icon.className = 'fas fa-heart text-rose-500';
+            btn.classList.add('text-rose-500');
+            currentCount = currentCount + 1;
+        } else {
+            likedPostIds.delete(postId);
+            icon.className = 'far fa-heart text-slate-300';
+            btn.classList.remove('text-rose-500');
+            currentCount = Math.max(0, currentCount - 1);
+        }
+        if (countEl) countEl.textContent = currentCount;
+        localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
+        if (cachedEntry?.data) cachedEntry.data.likes_count = currentCount;
+
+        showToast("Couldn't save your like — please try again.");
+    } finally {
+        likeInFlight.delete(postId);
     }
 };
 
@@ -1188,9 +1563,11 @@ window.downloadMedia = function (mediaUrl, title) {
     a.click();
 };
 
-// Now opens a real DM thread with the seller instead of just landing on
-// an empty inbox. Falls back gracefully if seller info is incomplete.
-window.contactSeller = function (sellerId, userName, sellerAvatar, postTitle) {
+// Opens a real DM thread with the seller AND shares a small preview of the
+// exact listing the person tapped "Contact" on, so the seller immediately
+// sees which item/service the conversation is about instead of a blank
+// chat with no context.
+window.contactSeller = function (sellerId, userName, sellerAvatar, postTitle, postId = null) {
     if (!currentUserData) {
         showToast('Please sign in to contact the seller.');
         return;
@@ -1199,7 +1576,8 @@ window.contactSeller = function (sellerId, userName, sellerAvatar, postTitle) {
         window.navigateTo('dms');
         return;
     }
-    window.openDM(sellerId, userName, sellerAvatar);
+    const postContext = postId ? postContextRegistry[postId] : null;
+    window.openDM(sellerId, userName, sellerAvatar, postContext);
 };
 
 // ─── Comment count tracking (keeps counters accurate without a full re-fetch) ──
@@ -1222,9 +1600,26 @@ async function fetchAndCacheCommentCount(postId) {
     } catch (_) {}
 }
 
+// Simple client-side cooldown against accidental rapid-fire comment
+// spam (e.g. holding Enter, a stuck keypress, an eager double-tap).
+// IMPORTANT: this is a UX safeguard only, not real security — anyone
+// bypassing the UI and calling the API directly isn't affected by this.
+// Real abuse prevention belongs at the database/RLS or Supabase project
+// level (e.g. rate-limited RPC, or Supabase's own abuse protections).
+let lastCommentPostedAt = 0;
+const COMMENT_COOLDOWN_MS = 2000;
+
 window.postComment = async function(postId, inputEl, parentCommentId = null) {
     const text = inputEl.value.trim();
     if (!text || !currentUserData) return;
+
+    const now = Date.now();
+    if (now - lastCommentPostedAt < COMMENT_COOLDOWN_MS) {
+        showToast("You're commenting a bit fast — give it a second.");
+        return;
+    }
+    lastCommentPostedAt = now;
+
     inputEl.value = '';
 
     try {
@@ -1319,36 +1714,41 @@ window.likeComment = async function (commentId, btn) {
 // whenever RLS/user id mismatched in any way and gave no feedback. Now we
 // check ownership up front, surface real errors, and always refresh the
 // count after a successful delete.
-window.deleteComment = async function (commentId, postId) {
+window.deleteComment = function (commentId, postId) {
     if (!currentUserData) { showToast('Please sign in.'); return; }
-    const confirmed = window.confirm("Delete this comment?");
-    if (!confirmed) return;
 
-    try {
-        const { data, error } = await supabase
-            .from('comments')
-            .delete()
-            .eq('id', commentId)
-            .eq('user_id', currentUserData.id)
-            .select();
+    showConfirmDialog({
+        title: 'Delete this comment?',
+        message: "This can't be undone.",
+        confirmLabel: 'Delete',
+        danger: true,
+        onConfirm: async () => {
+            try {
+                const { data, error } = await supabase
+                    .from('comments')
+                    .delete()
+                    .eq('id', commentId)
+                    .eq('user_id', currentUserData.id)
+                    .select();
 
-        if (error) throw error;
+                if (error) throw error;
 
-        if (!data || data.length === 0) {
-            showToast("You can only delete your own comments.");
-            return;
+                if (!data || data.length === 0) {
+                    showToast("You can only delete your own comments.");
+                    return;
+                }
+
+                document.querySelectorAll(`[id="comment-item-${commentId}"]`).forEach(el => el.remove());
+                showToast("Comment deleted");
+
+                const newCount = Math.max(0, (commentCountCache[postId] ?? 1) - 1);
+                updateCommentCountUI(postId, newCount);
+            } catch (err) {
+                console.error("Error deleting comment:", err);
+                showToast("Failed to delete comment.");
+            }
         }
-
-        document.querySelectorAll(`[id="comment-item-${commentId}"]`).forEach(el => el.remove());
-        // also remove any replies that were nested under it (best-effort local cleanup)
-        showToast("Comment deleted");
-
-        const newCount = Math.max(0, (commentCountCache[postId] ?? 1) - 1);
-        updateCommentCountUI(postId, newCount);
-    } catch (err) {
-        console.error("Error deleting comment:", err);
-        showToast("Failed to delete comment.");
-    }
+    });
 };
 
 function renderCommentItem(c, postId) {
@@ -1361,7 +1761,12 @@ function renderCommentItem(c, postId) {
         <div class="flex gap-2 items-start text-left mt-2 ${indentClass}" id="comment-item-${escAttr(c.id)}">
             <img src="${esc(c.user_avatar) || 'https://ui-avatars.com/api/?name=U'}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
             <div class="bg-slate-800 rounded-2xl px-3 py-2 flex-1 border border-slate-700/20">
-                <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(c.user_name)}</p>
+                <div class="flex items-start justify-between gap-2">
+                    <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(c.user_name)}</p>
+                    <button onclick="window.openCommentOptionsMenu('${escAttr(c.id)}', '${escAttr(postId)}', ${isOwn ? 'true' : 'false'})" class="text-slate-500 hover:text-white transition shrink-0 -mt-0.5 -mr-1 px-1.5 py-0.5" aria-label="More options">
+                        <i class="fas fa-ellipsis-vertical text-[11px]"></i>
+                    </button>
+                </div>
                 <p class="text-xs text-slate-200 mt-0.5">${esc(c.text)}</p>
                 <div class="flex items-center gap-3 mt-1.5">
                     <button onclick="window.likeComment('${escAttr(c.id)}', this)" class="flex items-center gap-1">
@@ -1371,7 +1776,6 @@ function renderCommentItem(c, postId) {
                     <button onclick="window.startCommentReply('${escAttr(postId)}', '${escAttr(c.id)}', '${escAttr(c.user_name)}')" class="text-[10px] text-slate-400 font-semibold hover:text-amber-400 transition">
                         Reply
                     </button>
-                    ${isOwn ? `<button onclick="window.deleteComment('${escAttr(c.id)}', '${escAttr(postId)}')" class="text-[10px] text-red-400 font-semibold hover:text-red-300 transition">Delete</button>` : ''}
                 </div>
             </div>
         </div>`;
@@ -1387,6 +1791,19 @@ window.toggleComments = async function (postId) {
 
     const isReelSheet = commentSection.classList.contains('reel-comments');
     const backdrop    = document.getElementById('comments-global-backdrop');
+
+    // Fix: on some mobile WebKit browsers, a `position: fixed` element
+    // nested inside an `overflow: hidden` ancestor that also sits in a
+    // CSS scroll-snap container (exactly what .reel-card is) gets
+    // silently clipped/never actually renders on screen, even though the
+    // element's "hidden" class was correctly removed and its open-state
+    // class correctly added — the panel opens logically but never
+    // becomes visible. Moving the sheet to be a direct child of <body>
+    // the first time it opens sidesteps that clipping entirely, since it
+    // no longer has any scroll-snap/overflow ancestor to be clipped by.
+    if (isReelSheet && commentSection.parentElement !== document.body) {
+        document.body.appendChild(commentSection);
+    }
 
     const isOpen = isReelSheet
         ? commentSection.classList.contains('comments-open')
@@ -1503,6 +1920,175 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+// ─── OPTIONS MENU (3-dot action sheet) ───────────────────────────────────────
+// Replaces the old always-visible trash-bin delete icon on posts and the
+// bare "Delete" text link on comments with a single "..." entry point that
+// opens a small bottom-sheet menu — the same pattern Instagram, TikTok, and
+// WhatsApp use so a destructive action isn't sitting exposed at a glance.
+// ─── IN-APP CONFIRM DIALOG ────────────────────────────────────────────────────
+// Replaces the browser's native window.confirm() for destructive actions
+// with a dialog styled to match the rest of the app, consistent with how
+// the options menu above also avoids native browser chrome.
+function showConfirmDialog({ title, message, confirmLabel = 'Delete', danger = true, onConfirm }) {
+    let modal = document.getElementById('confirm-dialog-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'confirm-dialog-modal';
+        modal.className = 'hidden fixed inset-0 z-[95] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4';
+        document.body.appendChild(modal);
+    }
+
+    modal.innerHTML = `
+        <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-5 w-full max-w-xs space-y-4 shadow-2xl">
+            <div class="text-center space-y-1.5">
+                <p class="text-white font-black text-sm">${esc(title)}</p>
+                <p class="text-slate-400 text-xs leading-relaxed">${esc(message)}</p>
+            </div>
+            <div class="flex gap-2">
+                <button id="confirm-dialog-cancel" class="flex-1 bg-slate-800 text-slate-300 font-bold py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
+                    Cancel
+                </button>
+                <button id="confirm-dialog-confirm" class="flex-1 ${danger ? 'bg-red-500 text-white' : 'bg-amber-400 text-black'} font-black py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
+                    ${esc(confirmLabel)}
+                </button>
+            </div>
+        </div>`;
+
+    modal.classList.remove('hidden');
+    pushUiState('confirm-dialog', () => closeConfirmDialog(true));
+
+    document.getElementById('confirm-dialog-cancel').onclick = () => closeConfirmDialog();
+    document.getElementById('confirm-dialog-confirm').onclick = () => {
+        closeConfirmDialog();
+        onConfirm();
+    };
+}
+
+function closeConfirmDialog(fromPop = false) {
+    document.getElementById('confirm-dialog-modal')?.classList.add('hidden');
+    if (!fromPop) popUiState('confirm-dialog');
+}
+
+function ensureOptionsMenuDom() {
+    if (document.getElementById('options-menu-backdrop')) return;
+
+    const backdrop = document.createElement('div');
+    backdrop.id = 'options-menu-backdrop';
+    backdrop.className = 'options-menu-backdrop';
+    backdrop.addEventListener('click', closeOptionsMenu);
+
+    const sheet = document.createElement('div');
+    sheet.id = 'options-menu-sheet';
+    sheet.className = 'options-menu-sheet';
+    sheet.innerHTML = `<div class="options-menu-handle"></div><div id="options-menu-items"></div>`;
+
+    document.body.appendChild(backdrop);
+    document.body.appendChild(sheet);
+}
+
+function openOptionsMenu(items) {
+    ensureOptionsMenuDom();
+    const backdrop = document.getElementById('options-menu-backdrop');
+    const sheet    = document.getElementById('options-menu-sheet');
+    const itemsEl  = document.getElementById('options-menu-items');
+    if (!backdrop || !sheet || !itemsEl) return;
+
+    itemsEl.innerHTML = items.map((item, i) => {
+        if (item.divider) return `<div class="options-menu-divider"></div>`;
+        return `
+            <button onclick="window._runOptionsMenuAction(${i})" class="${item.danger ? 'danger' : ''}">
+                <i class="${item.icon}"></i> ${esc(item.label)}
+            </button>`;
+    }).join('');
+
+    window._optionsMenuActions = items.map(item => item.action || null);
+
+    backdrop.classList.add('menu-open');
+    requestAnimationFrame(() => sheet.classList.add('menu-open'));
+    pushUiState('options-menu', () => closeOptionsMenu(true));
+}
+
+function closeOptionsMenu(fromPop = false) {
+    document.getElementById('options-menu-backdrop')?.classList.remove('menu-open');
+    document.getElementById('options-menu-sheet')?.classList.remove('menu-open');
+    if (!fromPop) popUiState('options-menu');
+}
+
+window._runOptionsMenuAction = function (index) {
+    const action = window._optionsMenuActions?.[index];
+    closeOptionsMenu();
+    if (typeof action === 'function') {
+        // Small delay so the sheet's close animation isn't interrupted by
+        // whatever the action does next (e.g. an immediate confirm dialog).
+        setTimeout(action, 200);
+    }
+};
+
+// ─── REPORTING ────────────────────────────────────────────────────────────────
+// Previously "Report" just showed a toast and did nothing at all — no
+// record was kept anywhere, so it was a dead end dressed up as a real
+// feature. This writes to a `reports` table if one exists in your
+// Supabase project (target_type/target_id/reporter_id/reason/created_at).
+// If that table doesn't exist yet, reports are queued in localStorage
+// instead of silently vanishing, and the person is told plainly that
+// their report was saved locally pending a moderation table — rather
+// than pretending it was received by a backend that isn't there.
+async function submitReport(targetType, targetId, reason = 'unspecified') {
+    if (!currentUserData) {
+        showToast('Please sign in to report content.');
+        return;
+    }
+
+    const payload = {
+        target_type: targetType, // 'post' | 'comment'
+        target_id: targetId,
+        reporter_id: currentUserData.id,
+        reason,
+        created_at: new Date().toISOString()
+    };
+
+    try {
+        const { error } = await supabase.from('reports').insert(payload);
+        if (error) throw error;
+        showToast('Report submitted — thank you for flagging this.');
+    } catch (err) {
+        // Table likely doesn't exist yet (or an RLS policy blocks it) —
+        // queue locally so the report isn't just lost, and be upfront
+        // that it hasn't reached a real moderation backend yet.
+        console.warn('Report insert failed, queuing locally:', err);
+        const queued = JSON.parse(localStorage.getItem('campus_market_pending_reports') || '[]');
+        queued.push(payload);
+        localStorage.setItem('campus_market_pending_reports', JSON.stringify(queued));
+        showToast('Report saved on this device — add a `reports` table to receive these centrally.');
+    }
+}
+
+// Post options: only the owner gets a real "Delete listing"; everyone
+// else gets a "Report" action that now actually persists (see
+// submitReport above) instead of being a dead-end toast.
+window.openPostOptionsMenu = function (postId, isOwn) {
+    const items = isOwn
+        ? [
+            { label: 'Delete listing', icon: 'fas fa-trash-can', danger: true, action: () => window.deletePost(postId) }
+          ]
+        : [
+            { label: 'Report listing', icon: 'fas fa-flag', action: () => submitReport('post', postId) }
+          ];
+    openOptionsMenu(items);
+};
+
+// Comment options: owner gets Delete; everyone else gets Report.
+window.openCommentOptionsMenu = function (commentId, postId, isOwn) {
+    const items = isOwn
+        ? [
+            { label: 'Delete comment', icon: 'fas fa-trash-can', danger: true, action: () => window.deleteComment(commentId, postId) }
+          ]
+        : [
+            { label: 'Report comment', icon: 'fas fa-flag', action: () => submitReport('comment', commentId) }
+          ];
+    openOptionsMenu(items);
+};
+
 function renderFeedCard(id, d) {
     const viewer     = currentUserData;
     const showFollow = viewer && d.user_id !== viewer.id;
@@ -1559,12 +2145,13 @@ function renderFeedCard(id, d) {
             + Follow
         </button>` : '';
 
-    const deleteBlock = isOwnPost ? `
+    const deleteBlock = `
         <button
-            onclick="event.stopPropagation(); window.deletePost('${escAttr(id)}')"
-            class="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-red-950/40 text-red-400 border border-red-900/50">
-            <i class="fas fa-trash-can"></i>
-        </button>` : '';
+            onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? 'true' : 'false'})"
+            class="post-options-trigger"
+            aria-label="More options">
+            <i class="fas fa-ellipsis-vertical"></i>
+        </button>`;
 
     const isLiked       = likedPostIds.has(id);
     const heartClass    = isLiked ? 'fas fa-heart text-rose-500' : 'far fa-heart text-slate-300';
@@ -1578,12 +2165,14 @@ function renderFeedCard(id, d) {
     const isAddedToCart  = userCartList.some(item => item.id === id);
     const bookmarkClass  = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
 
+    registerPostContext(id, d, mediaUrls[0] || '');
+
     return `
     <div class="bg-slate-900 border-b border-slate-800/60 w-full" id="feed-card-${escAttr(id)}">
 
         <div class="flex items-center justify-between px-3 py-2.5">
             <div class="feed-profile-trigger flex items-center gap-2.5 min-w-0 cursor-pointer">
-                <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-8 h-8 rounded-full border border-slate-700 object-cover shrink-0" alt="">
+                <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" data-avatar-for="${escAttr(d.user_id)}" class="w-8 h-8 rounded-full border border-slate-700 object-cover shrink-0" alt="">
                 <div class="min-w-0">
                     <p class="text-[12px] font-bold text-white leading-tight truncate">${esc(d.user_name) || 'Student'}</p>
                     <p class="text-[10px] text-slate-500 leading-tight truncate">${esc(d.institution) || ''}</p>
@@ -1631,7 +2220,7 @@ function renderFeedCard(id, d) {
 
         <div class="px-3 pb-3">
             <button
-                onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}')"
+                onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}', '${escAttr(id)}')"
                 class="w-full flex items-center justify-center gap-1.5 bg-amber-400 text-black font-extrabold py-2.5 rounded-xl text-[11px] uppercase tracking-wider transition active:scale-[0.98]">
                 <i class="fas fa-bolt text-[10px]"></i> ${d.type === 'skill' ? 'Contact' : 'Contact Seller'}
             </button>
@@ -1699,7 +2288,18 @@ function renderProductGrid() {
     const products = allCachedPosts.filter(({ data: d }) => (d.type || 'product') === 'product');
 
     if (products.length === 0) {
-        feed.innerHTML = `
+        const isScopedEmpty = currentCampusScope === 'mine' && currentUserData?.institution;
+        feed.innerHTML = isScopedEmpty
+            ? `
+            <div class="text-center py-16 space-y-3 px-6">
+                <p class="text-4xl">📦</p>
+                <p class="font-bold text-white">No products from ${esc(currentUserData.institution)} yet</p>
+                <p class="text-slate-500 text-xs">Be the first to list one, or check other campuses.</p>
+                <button onclick="window.toggleCampusScope()" class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
+                    Show Everywhere
+                </button>
+            </div>`
+            : `
             <div class="text-center py-16 space-y-3">
                 <p class="text-4xl">📦</p>
                 <p class="font-bold text-white">No products yet</p>
@@ -1711,6 +2311,12 @@ function renderProductGrid() {
     feed.innerHTML = `<div class="grid grid-cols-2 gap-2.5 py-2">${
         products.map(({ id, data: d }) => renderProductGridCard(id, d)).join('')
     }</div>`;
+
+    feed.innerHTML += `
+        <div id="feed-load-more-sentinel" class="py-6">
+            ${feedHasMore ? '' : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`}
+        </div>`;
+    setupFeedLoadMoreObserver();
 }
 
 // ─── 12d. REELS FEED (TikTok-style full-bleed vertical video) ────────────────
@@ -1748,6 +2354,12 @@ function pauseAllReelVideos() {
         feedVideoIntersectionObserver.disconnect();
         feedVideoIntersectionObserver = null;
     }
+    // Close and remove any reel comment sheets that were relocated to
+    // document.body (see toggleComments) — leaving them around after
+    // navigating away from Reels would keep a dangling, invisible
+    // full-width fixed element sitting in the DOM.
+    document.querySelectorAll('body > .reel-comments').forEach(el => el.remove());
+    document.getElementById('comments-global-backdrop')?.classList.remove('backdrop-open');
 }
 
 // Lazy-loads and lazy-plays videos inside regular feed cards (All /
@@ -1766,6 +2378,7 @@ function setupFeedVideoObserver() {
     if (!feed) return;
 
     feedVideoIntersectionObserver = new IntersectionObserver((entries) => {
+        const autoplayEnabled = (typeof window.getAppSettings !== 'function') || window.getAppSettings().autoplay;
         entries.forEach(entry => {
             const video = entry.target;
             if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
@@ -1773,7 +2386,9 @@ function setupFeedVideoObserver() {
                     video.src = video.dataset.src;
                     video.dataset.loaded = 'true';
                 }
-                video.play().catch(() => {});
+                if (autoplayEnabled) {
+                    video.play().catch(() => {});
+                }
             } else {
                 video.pause();
             }
@@ -1782,6 +2397,41 @@ function setupFeedVideoObserver() {
 
     document.querySelectorAll('.feed-lazy-video').forEach(video => {
         feedVideoIntersectionObserver.observe(video);
+    });
+}
+
+let feedCommentAutoCloseObserver = null;
+
+// Auto-closes an open inline comment panel (All / Services / Following /
+// search feed cards — NOT the Reels bottom sheet, which has its own
+// dismiss behavior) once its parent card has scrolled mostly out of
+// view. Without this, an open comment panel stayed expanded underneath
+// whatever the person scrolled to next, which read as broken/stuck UI.
+function setupFeedCommentAutoClose() {
+    if (feedCommentAutoCloseObserver) {
+        feedCommentAutoCloseObserver.disconnect();
+        feedCommentAutoCloseObserver = null;
+    }
+
+    feedCommentAutoCloseObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) return;
+
+            const card = entry.target;
+            const postId = card.id.replace('feed-card-', '');
+            const commentSection = document.getElementById(`comments-${postId}`);
+            if (
+                commentSection
+                && !commentSection.classList.contains('reel-comments')
+                && !commentSection.classList.contains('hidden')
+            ) {
+                window._closeCommentSheet(postId);
+            }
+        });
+    }, { root: null, threshold: 0, rootMargin: '-20% 0px -20% 0px' });
+
+    document.querySelectorAll('[id^="feed-card-"]').forEach(card => {
+        feedCommentAutoCloseObserver.observe(card);
     });
 }
 
@@ -1836,10 +2486,12 @@ function renderReelCard(id, d) {
     const bookmarkClass = isAddedToCart ? 'fas fa-bookmark text-amber-400' : 'far fa-bookmark text-white';
     const isOwnPost = currentUserData && d.user_id === currentUserData.id;
 
-    const deleteBlock = isOwnPost ? `
-        <button onclick="event.stopPropagation(); window.deletePost('${escAttr(id)}')" class="reel-action-btn">
-            <i class="fas fa-trash-can text-red-400 text-lg"></i>
-        </button>` : '';
+    const deleteBlock = `
+        <button onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? 'true' : 'false'})" class="reel-action-btn">
+            <i class="fas fa-ellipsis-vertical text-white text-lg"></i>
+        </button>`;
+
+    registerPostContext(id, d, videoUrl ? '' : (mediaUrls[0] || ''));
 
     return `
     <div class="reel-card" id="reel-card-${escAttr(id)}">
@@ -1866,13 +2518,13 @@ function renderReelCard(id, d) {
 
         <div class="reel-info">
             <div class="flex items-center gap-2 mb-1.5">
-                <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" class="w-8 h-8 rounded-full border border-white/40 object-cover shrink-0" alt="">
+                <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" data-avatar-for="${escAttr(d.user_id)}" class="w-8 h-8 rounded-full border border-white/40 object-cover shrink-0" alt="">
                 <p class="text-white font-bold text-sm leading-tight truncate">${esc(d.user_name) || 'Student'}</p>
             </div>
             <p class="text-white text-sm font-semibold leading-snug line-clamp-2">${esc(d.title)}</p>
             <p class="text-amber-400 font-black text-sm mt-1">GH₵${esc(String(d.price || 0))}</p>
             <button
-                onclick="event.stopPropagation(); contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}')"
+                onclick="event.stopPropagation(); contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}', '${escAttr(id)}')"
                 class="mt-2 flex items-center gap-1.5 bg-amber-400 text-black font-extrabold py-2 px-4 rounded-xl text-[11px] uppercase tracking-wider active:scale-[0.97] transition w-fit">
                 <i class="fas fa-bolt text-[10px]"></i> ${d.type === 'skill' ? 'Contact' : 'Contact Seller'}
             </button>
@@ -1913,6 +2565,14 @@ function renderReelsFeed() {
 
     feed.classList.remove('grid-mode');
     feed.classList.add('reels-mode');
+
+    // Comment sheets get relocated to document.body when opened (see
+    // toggleComments) to escape a mobile WebKit clipping bug. Before
+    // regenerating the reel cards below, remove any such relocated
+    // sheets from body — otherwise the fresh markup would create new
+    // elements with the same #comments-{id}, leaving stale duplicates
+    // behind with the same ID.
+    document.querySelectorAll('body > .reel-comments').forEach(el => el.remove());
 
     const reels = allCachedPosts.filter(({ data: d }) => d.media_type === 'video');
 
@@ -2125,53 +2785,61 @@ async function refreshFollowButtonStates() {
     }
 }
 
-window.deletePost = async function (postId) {
+window.deletePost = function (postId) {
     if (!currentUserData) return;
-    const confirmDelete = window.confirm("Are you sure you want to delete this listing permanently?");
-    if (!confirmDelete) return;
 
-    try {
-        const { data: currentPost, error: fetchErr } = await supabase
-            .from("posts")
-            .select("media_url")
-            .eq("id", postId)
-            .single();
+    showConfirmDialog({
+        title: 'Delete this listing?',
+        message: "This will permanently remove the listing and its media. This can't be undone.",
+        confirmLabel: 'Delete',
+        danger: true,
+        onConfirm: async () => {
+            try {
+                const { data: currentPost, error: fetchErr } = await supabase
+                    .from("posts")
+                    .select("media_url")
+                    .eq("id", postId)
+                    .single();
 
-        if (fetchErr) throw fetchErr;
+                if (fetchErr) throw fetchErr;
 
-        if (currentPost?.media_url) {
-            const targets = currentPost.media_url.startsWith('[') ? JSON.parse(currentPost.media_url) : [currentPost.media_url];
-            for (const url of targets) {
-                const pathParts   = url.split('/storage/v1/object/public/posts/');
-                const storagePath = pathParts[1];
-                if (storagePath) await supabase.storage.from("posts").remove([storagePath]);
+                if (currentPost?.media_url) {
+                    const targets = currentPost.media_url.startsWith('[') ? JSON.parse(currentPost.media_url) : [currentPost.media_url];
+                    for (const url of targets) {
+                        const pathParts   = url.split('/storage/v1/object/public/posts/');
+                        const storagePath = pathParts[1];
+                        if (storagePath) await supabase.storage.from("posts").remove([storagePath]);
+                    }
+                }
+
+                const { error: dbDeleteErr } = await supabase
+                    .from("posts")
+                    .delete()
+                    .eq("id", postId)
+                    .eq("user_id", currentUserData.id);
+
+                if (dbDeleteErr) throw dbDeleteErr;
+
+                const cartIndex = userCartList.findIndex(item => item.id === postId);
+                if (cartIndex > -1) {
+                    userCartList.splice(cartIndex, 1);
+                    localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
+                }
+
+                showToast("Post deleted successfully! ✓");
+                allCachedPosts = allCachedPosts.filter(item => item.id !== postId);
+                renderFeedFromCache();
+            } catch (err) {
+                console.error("Error deleting post from database:", err);
+                showToast("Failed to delete post.");
             }
         }
-
-        const { error: dbDeleteErr } = await supabase
-            .from("posts")
-            .delete()
-            .eq("id", postId)
-            .eq("user_id", currentUserData.id);
-
-        if (dbDeleteErr) throw dbDeleteErr;
-
-        const cartIndex = userCartList.findIndex(item => item.id === postId);
-        if (cartIndex > -1) {
-            userCartList.splice(cartIndex, 1);
-            localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
-        }
-
-        showToast("Post deleted successfully! ✓");
-        allCachedPosts = allCachedPosts.filter(item => item.id !== postId);
-        renderFeedFromCache();
-    } catch (err) {
-        console.error("Error deleting post from database:", err);
-        showToast("Failed to delete post.");
-    }
+    });
 };
 
 // ─── 14. FEED VIEWS ──────────────────────────────────────────────────────────
+let followingFeedIds = []; // cached so loadMore doesn't need to re-fetch the follows list every page
+
 async function loadFollowingFeed() {
     if (!currentUserData) return;
 
@@ -2182,15 +2850,18 @@ async function loadFollowingFeed() {
     pauseAllReelVideos();
     feed.innerHTML = '<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Loading following feed...</div>';
 
+    feedLoadedCount = 0;
+    feedHasMore = true;
+
     try {
         const { data: followingData } = await supabase
             .from("follows")
             .select("following_id")
             .eq("follower_id", currentUserData.id);
 
-        const followingIds = followingData?.map(s => s.following_id) || [];
+        followingFeedIds = followingData?.map(s => s.following_id) || [];
 
-        if (followingIds.length === 0) {
+        if (followingFeedIds.length === 0) {
             feed.innerHTML = `
                 <div class="text-center py-16 space-y-3">
                     <p class="text-4xl">👥</p>
@@ -2203,9 +2874,9 @@ async function loadFollowingFeed() {
         const { data: posts, error } = await supabase
             .from("posts")
             .select("*")
-            .in("user_id", followingIds)
+            .in("user_id", followingFeedIds)
             .order("created_at", { ascending: false })
-            .limit(FEED_LIMIT);
+            .range(0, FEED_PAGE_SIZE - 1);
 
         if (error) throw error;
 
@@ -2214,12 +2885,65 @@ async function loadFollowingFeed() {
             return;
         }
 
+        allCachedPosts = posts.map(item => ({ id: item.id, data: item }));
+        feedLoadedCount = posts.length;
+        feedHasMore = posts.length === FEED_PAGE_SIZE;
+
         feed.innerHTML = '';
         posts.forEach(d => { feed.innerHTML += renderFeedCard(d.id, d); wireCarouselCounters(d.id); fetchAndCacheCommentCount(d.id); });
+
+        feed.innerHTML += `
+            <div id="feed-load-more-sentinel" class="py-6">
+                ${feedHasMore ? '' : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`}
+            </div>`;
+
         setupFeedVideoObserver();
+        setupFeedCommentAutoClose();
+        setupFeedLoadMoreObserver();
         refreshFollowButtonStates();
     } catch (err) {
         console.error("Following feed error:", err);
+    }
+}
+
+// Following tab's own "load more", since it filters by followingFeedIds
+// rather than the type-based baseFilter used everywhere else.
+async function loadNextFollowingPage() {
+    if (isFeedLoadingMore || !feedHasMore || followingFeedIds.length === 0) return;
+    isFeedLoadingMore = true;
+
+    const sentinel = document.getElementById('feed-load-more-sentinel');
+    if (sentinel) {
+        sentinel.innerHTML = `<div class="py-6 text-center text-slate-500 text-[10px] uppercase tracking-widest animate-pulse">Loading more...</div>`;
+    }
+
+    try {
+        const rangeStart = feedLoadedCount;
+        const rangeEnd = feedLoadedCount + FEED_PAGE_SIZE - 1;
+        const { data: posts, error } = await supabase
+            .from("posts")
+            .select("*")
+            .in("user_id", followingFeedIds)
+            .order("created_at", { ascending: false })
+            .range(rangeStart, rangeEnd);
+
+        if (error) throw error;
+
+        const existingIds = new Set(allCachedPosts.map(p => p.id));
+        const newItems = (posts || [])
+            .filter(item => !existingIds.has(item.id))
+            .map(item => ({ id: item.id, data: item }));
+
+        allCachedPosts = allCachedPosts.concat(newItems);
+        feedLoadedCount += (posts || []).length;
+        feedHasMore = (posts || []).length === FEED_PAGE_SIZE;
+
+        renderFeedFromCache();
+    } catch (err) {
+        console.error("Load more (following) error:", err);
+        showToast("Couldn't load more posts. Try scrolling again.");
+    } finally {
+        isFeedLoadingMore = false;
     }
 }
 
@@ -2247,7 +2971,18 @@ function renderFeedFromCache() {
     feed.classList.remove('grid-mode', 'reels-mode');
 
     if (allCachedPosts.length === 0) {
-        feed.innerHTML = `
+        const isScopedEmpty = currentCampusScope === 'mine' && currentUserData?.institution && currentFeedType !== 'following';
+        feed.innerHTML = isScopedEmpty
+            ? `
+            <div class="text-center py-16 space-y-3 px-6">
+                <p class="text-4xl">📭</p>
+                <p class="font-bold text-white">No posts from ${esc(currentUserData.institution)} yet</p>
+                <p class="text-slate-500 text-xs">Be the first to post, or check what's happening at other campuses.</p>
+                <button onclick="window.toggleCampusScope()" class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
+                    Show Everywhere
+                </button>
+            </div>`
+            : `
             <div class="text-center py-16 space-y-3">
                 <p class="text-4xl">📭</p>
                 <p class="font-bold text-white">No posts yet</p>
@@ -2263,7 +2998,21 @@ function renderFeedFromCache() {
         fetchAndCacheCommentCount(id);
     });
 
+    // Infinite scroll: a sentinel div at the end of the list triggers
+    // loading the next page once it scrolls into view. Shows a small
+    // "you're all caught up" message once there's genuinely nothing left,
+    // instead of just silently stopping with no feedback.
+    feed.innerHTML += `
+        <div id="feed-load-more-sentinel" class="py-6">
+            ${feedHasMore
+                ? ''
+                : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
+            }
+        </div>`;
+
     setupFeedVideoObserver();
+    setupFeedCommentAutoClose();
+    setupFeedLoadMoreObserver();
 
     openCommentIds.forEach(postId => {
         const section = document.getElementById(`comments-${postId}`);
@@ -2335,21 +3084,109 @@ window.filterFeed = function (type, clickedBtn = null) {
 
     // Product tab still fetches ALL posts (so grid + other tabs share cache)
     // but renderFeedFromCache() switches to grid layout based on currentFeedType.
-    const queryFactory = () => {
-        let q = supabase.from("posts").select("*");
+    //
+    // This is now just the TYPE condition — no .limit()/.range() baked in
+    // here, since subscribeFeed applies pagination on top of whatever
+    // this returns. Products/Reels/Skills tabs still page normally; the
+    // grid view just renders everything currently loaded as a grid
+    // instead of a snap-scroll list.
+    //
+    // Campus scope layers on top of the type condition: when scoped to
+    // "mine" and the person has a saved institution, results are
+    // restricted to posts from that same institution. Reels is
+    // deliberately left unscoped (the banner is hidden there too) since
+    // reels tend to be browsed more broadly, not as a literal pickup-item
+    // search.
+    const baseFilter = (q) => {
         if (type === 'reels') {
-            q = q.eq("media_type", "video");
-        } else if (type !== 'all' && type !== 'product') {
+            return q.eq("media_type", "video");
+        }
+
+        if (type !== 'all' && type !== 'product') {
             q = q.eq("type", type);
         }
-        return q.order("created_at", { ascending: false }).limit(FEED_LIMIT);
+
+        if (currentCampusScope === 'mine' && currentUserData?.institution) {
+            q = q.eq("institution", currentUserData.institution);
+        }
+
+        return q;
     };
 
-    subscribeFeed(queryFactory);
+    updateCampusScopeBanner();
+    subscribeFeed(baseFilter);
+};
+
+// Shows/hides and updates the text of the campus-scope banner above the
+// feed. Hidden entirely on Reels/Following (scope doesn't apply there)
+// and for anyone without a saved institution yet (nothing to scope by —
+// they'd just see an empty toggle that does nothing).
+function updateCampusScopeBanner() {
+    const banner = document.getElementById('campus-scope-banner');
+    const label  = document.getElementById('campus-scope-label');
+    if (!banner || !label) return;
+
+    const hasInstitution = !!currentUserData?.institution;
+    const applicableTab = ['all', 'product', 'skill'].includes(currentFeedType);
+
+    if (!hasInstitution || !applicableTab) {
+        banner.classList.add('hidden');
+        return;
+    }
+
+    banner.classList.remove('hidden');
+    label.textContent = currentCampusScope === 'mine'
+        ? currentUserData.institution
+        : 'Everywhere';
+}
+
+// Toggles between "mine" (the person's own institution) and "everywhere"
+// (the full nationwide feed), persists the choice, and re-runs the
+// current tab's query with the new scope applied.
+window.toggleCampusScope = function () {
+    if (!currentUserData?.institution) return;
+
+    currentCampusScope = currentCampusScope === 'mine' ? 'everywhere' : 'mine';
+    localStorage.setItem('campus_market_scope', currentCampusScope);
+
+    showToast(
+        currentCampusScope === 'mine'
+            ? `Showing posts from ${currentUserData.institution}`
+            : 'Showing posts from everywhere'
+    );
+
+    // Re-apply the current tab with the new scope. Reels/Following
+    // aren't affected by scope, so nothing to re-run there — but this
+    // button is hidden on those tabs anyway.
+    if (['all', 'product', 'skill'].includes(currentFeedType)) {
+        const clickedBtn = document.querySelector('.feed-tab-btn.text-amber-400');
+        window.filterFeed(currentFeedType, clickedBtn);
+    }
 };
 
 // ─── 16. SEARCH ──────────────────────────────────────────────────────────────
-window.runSearch = async function (term) {
+// Debounced entry point: the actual search/filter/render work only runs
+// after typing pauses briefly, instead of on every keystroke. Previously
+// each keystroke triggered a full array filter plus a full re-render of
+// every matching card (including re-wiring video observers), which is
+// wasted work mid-typing and made the UI feel less responsive than it
+// should on a phone.
+let _searchDebounceTimer = null;
+window.runSearch = function (term) {
+    clearTimeout(_searchDebounceTimer);
+
+    // Clearing the field should still feel instant — no need to wait.
+    if (!term.trim()) {
+        _runSearchImmediate(term);
+        return;
+    }
+
+    _searchDebounceTimer = setTimeout(() => {
+        _runSearchImmediate(term);
+    }, 300);
+};
+
+async function _runSearchImmediate(term) {
     const resultsEl = document.getElementById('search-results');
     if (!resultsEl) return;
 
@@ -2416,8 +3253,9 @@ window.runSearch = async function (term) {
     });
 
     setupFeedVideoObserver();
+    setupFeedCommentAutoClose();
     refreshFollowButtonStates();
-};
+}
 
 // ─── 17. POST SUBMISSION ─────────────────────────────────────────────────────
 // Guard flag + visible button state so a double-tap (or slow network retry)
@@ -2469,6 +3307,24 @@ window.handlePostSubmission = async function () {
     if (!title) { showToast('Please enter a title.'); return; }
     if (!mediaFiles || mediaFiles.length === 0) { showToast('Please attach at least one image or video.'); return; }
 
+    // Final safety-net validation — normally already enforced when files
+    // were first attached (see openEditMediaModal), but this covers the
+    // raw fallback path too in case the edit modal was somehow bypassed.
+    if (mediaFiles.length > MAX_MEDIA_FILES) {
+        showToast(`Please attach no more than ${MAX_MEDIA_FILES} files.`);
+        return;
+    }
+    const oversizedFile = mediaFiles.find(f => {
+        const isVideo = f.type && f.type.startsWith('video');
+        const maxBytes = (isVideo ? MAX_VIDEO_SIZE_MB : MAX_IMAGE_SIZE_MB) * 1024 * 1024;
+        return f.size > maxBytes;
+    });
+    if (oversizedFile) {
+        const isVideo = oversizedFile.type && oversizedFile.type.startsWith('video');
+        showToast(`One file is over the ${isVideo ? MAX_VIDEO_SIZE_MB : MAX_IMAGE_SIZE_MB}MB limit. Please remove it and try again.`);
+        return;
+    }
+
     // Lock the UI immediately: disable Publish AND the attach button, add a
     // spinner, so there is a clear, visible sign the upload is in progress
     // and it's impossible to trigger a second submission of the same files.
@@ -2492,11 +3348,22 @@ window.handlePostSubmission = async function () {
 
             if (submitBtnLabel) submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Uploading ${i + 1}/${mediaFiles.length}...`;
 
-            const { error: uploadError } = await supabase.storage
-                .from("posts")
-                .upload(storagePath, file, { contentType: file.type });
-
-            if (uploadError) throw uploadError;
+            await withUploadRetry(
+                async () => {
+                    const { error: uploadError } = await supabase.storage
+                        .from("posts")
+                        .upload(storagePath, file, { contentType: file.type });
+                    if (uploadError) throw uploadError;
+                },
+                {
+                    retries: 3,
+                    onRetry: (attempt) => {
+                        if (submitBtnLabel) {
+                            submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Connection lost — retrying (${attempt}/3)...`;
+                        }
+                    }
+                }
+            );
 
             const { data: { publicUrl } } = supabase.storage.from("posts").getPublicUrl(storagePath);
             publicUrls.push(publicUrl);
@@ -2546,7 +3413,10 @@ window.handlePostSubmission = async function () {
         showToast(`Post published with ${publicUrls.length} file${publicUrls.length > 1 ? 's' : ''}! 🎉`);
     } catch (err) {
         console.error("Post submission error:", err);
-        showToast('Failed to publish. Please try again.');
+        const message = !navigator.onLine
+            ? "Failed to upload — no internet connection. Please try again once you're back online."
+            : "Failed to upload. Please check your connection and try again.";
+        showToast(message);
     } finally {
         isSubmittingPost = false;
         if (submitBtn) { submitBtn.disabled = false; submitBtn.classList.remove('opacity-70', 'cursor-not-allowed'); }
@@ -2594,6 +3464,195 @@ window.initProfileSelects = function () {
         instEl.innerHTML = buildOptions(ALL_INSTITUTIONS);
         instEl.dataset.populated = 'true';
     }
+
+    populateAccountSettings();
+    initSettingsToggles();
+};
+
+// ─── ACCOUNT SETTINGS ─────────────────────────────────────────────────────────
+function populateAccountSettings() {
+    if (!currentUserData) return;
+    const nameInput  = document.getElementById('settingsDisplayName');
+    const emailInput = document.getElementById('settingsEmail');
+    const metadata = currentUserData.user_metadata || {};
+
+    if (nameInput && !nameInput.dataset.userEdited) {
+        nameInput.value = metadata.full_name || '';
+    }
+    if (emailInput) {
+        emailInput.value = currentUserData.email || '';
+    }
+}
+
+document.getElementById('settingsDisplayName')?.addEventListener('input', function () {
+    this.dataset.userEdited = 'true';
+});
+
+document.getElementById('saveAccountBtn')?.addEventListener('click', async () => {
+    if (!currentUserData) return;
+    const nameInput = document.getElementById('settingsDisplayName');
+    const newName = nameInput?.value.trim();
+
+    if (!newName) { showToast('Please enter a display name.'); return; }
+
+    try {
+        await supabase.auth.updateUser({ data: { full_name: newName } });
+
+        const { error } = await supabase
+            .from('profiles')
+            .update({ name: newName })
+            .eq('id', currentUserData.id);
+        if (error) throw error;
+
+        // Same staleness problem as avatars: posts store a denormalized
+        // snapshot of the poster's name, so backfill it across existing
+        // posts too, otherwise a name change would only apply going
+        // forward.
+        await supabase
+            .from('posts')
+            .update({ user_name: newName })
+            .eq('user_id', currentUserData.id);
+
+        if (!currentUserData.user_metadata) currentUserData.user_metadata = {};
+        currentUserData.user_metadata.full_name = newName;
+
+        allCachedPosts.forEach(({ data: d }) => {
+            if (d.user_id === currentUserData.id) d.user_name = newName;
+        });
+
+        const nameEl = document.getElementById('profile-ui-name');
+        if (nameEl) nameEl.textContent = newName;
+
+        if (nameInput) delete nameInput.dataset.userEdited;
+        showToast('Name updated everywhere! ✓');
+    } catch (err) {
+        console.error('Save name error:', err);
+        showToast('Failed to update name. Please try again.');
+    }
+});
+
+// ─── DATA / AUTOPLAY / NOTIFICATION TOGGLES (persisted locally) ──────────────
+const APP_SETTINGS_KEY = 'campus_market_app_settings';
+
+function getAppSettings() {
+    return {
+        dataSaver: false,
+        autoplay: true,
+        notifyMessages: true,
+        notifyEngagement: true,
+        notifyFollows: true,
+        ...JSON.parse(localStorage.getItem(APP_SETTINGS_KEY) || '{}')
+    };
+}
+
+function saveAppSettings(partial) {
+    const merged = { ...getAppSettings(), ...partial };
+    localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(merged));
+    return merged;
+}
+
+// Exposed so other parts of the app (media pipeline, video observers) can
+// check the current preference without re-reading localStorage directly.
+window.getAppSettings = getAppSettings;
+
+function initSettingsToggles() {
+    const settings = getAppSettings();
+    const map = {
+        settingsDataSaver: 'dataSaver',
+        settingsAutoplay: 'autoplay',
+        settingsNotifyMessages: 'notifyMessages',
+        settingsNotifyEngagement: 'notifyEngagement',
+        settingsNotifyFollows: 'notifyFollows'
+    };
+
+    Object.entries(map).forEach(([elId, key]) => {
+        const el = document.getElementById(elId);
+        if (!el || el.dataset.wired) return;
+        el.checked = settings[key];
+        el.dataset.wired = 'true';
+        el.addEventListener('change', () => {
+            saveAppSettings({ [key]: el.checked });
+            if (key === 'dataSaver') {
+                showToast(el.checked ? 'Data Saver on — lower quality media' : 'Data Saver off');
+            } else if (key === 'autoplay') {
+                showToast(el.checked ? 'Autoplay enabled' : 'Autoplay disabled');
+                if (!el.checked) pauseAllReelVideos();
+            } else {
+                showToast('Preference saved');
+            }
+        });
+    });
+}
+
+// ─── ACCOUNT DELETION ─────────────────────────────────────────────────────────
+// Full account deletion (auth user + all data) generally needs a
+// privileged server-side call (service role key), which a browser client
+// can't safely hold. What we CAN safely do client-side is scrub the
+// person's own content and sign them out, then direct them to contact
+// support to finish removing the underlying auth account — being upfront
+// about that limitation rather than silently doing nothing or pretending
+// to fully delete the account.
+window.confirmDeleteAccount = function () {
+    if (!currentUserData) return;
+
+    showConfirmDialog({
+        title: 'Delete your account?',
+        message: "This removes your posts, comments, profile info, and your account itself from CampusMarket. This can't be undone.",
+        confirmLabel: 'Delete Account',
+        danger: true,
+        onConfirm: async () => {
+            try {
+                showToast('Deleting your data…');
+
+                const { data: myPosts } = await supabase
+                    .from('posts')
+                    .select('id, media_url')
+                    .eq('user_id', currentUserData.id);
+
+                for (const post of (myPosts || [])) {
+                    if (post.media_url) {
+                        const targets = post.media_url.startsWith('[') ? JSON.parse(post.media_url) : [post.media_url];
+                        for (const url of targets) {
+                            const storagePath = url.split('/storage/v1/object/public/posts/')[1];
+                            if (storagePath) await supabase.storage.from('posts').remove([storagePath]);
+                        }
+                    }
+                }
+
+                await supabase.from('posts').delete().eq('user_id', currentUserData.id);
+                await supabase.from('comments').delete().eq('user_id', currentUserData.id);
+                await supabase.from('follows').delete().eq('follower_id', currentUserData.id);
+                await supabase.from('follows').delete().eq('following_id', currentUserData.id);
+                await supabase.from('saves').delete().eq('user_id', currentUserData.id);
+                await supabase.from('likes').delete().eq('user_id', currentUserData.id);
+                await supabase.from('profiles').delete().eq('id', currentUserData.id);
+
+                // A browser client can never safely hold the service-role
+                // key needed to actually delete the underlying Supabase
+                // Auth user, so that step happens via a dedicated Edge
+                // Function (see supabase-edge-function-delete-account.ts).
+                // If that function isn't deployed yet, we fall back to
+                // just signing the person out with an honest message —
+                // their data IS gone, but the empty auth account record
+                // itself will need the Edge Function deployed to fully
+                // disappear too.
+                showToast('Removing your account…');
+                try {
+                    const { error: fnError } = await supabase.functions.invoke('delete-account');
+                    if (fnError) throw fnError;
+                    showToast('Your account has been fully deleted. Signing out…');
+                } catch (fnErr) {
+                    console.warn('delete-account Edge Function unavailable, falling back to sign-out only:', fnErr);
+                    showToast('Your data was removed. Deploy the delete-account Edge Function to also remove the account record itself.');
+                }
+
+                setTimeout(() => window.logout(), 1800);
+            } catch (err) {
+                console.error('Account deletion error:', err);
+                showToast('Something went wrong deleting your data. Please contact support.');
+            }
+        }
+    });
 };
 
 document.getElementById('saveLocationBtn')?.addEventListener('click', async () => {
@@ -2613,6 +3672,15 @@ document.getElementById('saveLocationBtn')?.addEventListener('click', async () =
         const locationEl = document.getElementById('profile-ui-location');
         if (locationEl) locationEl.textContent = `${institution} · ${region}`;
         showToast('Settings updated ✓');
+
+        // Institution may have just changed — refresh the scope banner
+        // label and, if currently viewing a campus-scoped tab, re-run it
+        // so the feed reflects the new institution right away.
+        updateCampusScopeBanner();
+        if (['all', 'product', 'skill'].includes(currentFeedType)) {
+            const clickedBtn = document.querySelector('.feed-tab-btn.text-amber-400');
+            window.filterFeed(currentFeedType, clickedBtn);
+        }
     } catch (err) {
         console.error("Save settings error:", err);
         showToast('Failed to save. Please try again.');
@@ -2630,11 +3698,19 @@ function unsubscribeConversations() {
     }
 }
 
+let currentTypingChan = null;
+let typingStopTimer = null;
+
 function unsubscribeActiveThread() {
     if (currentMessagesChan) {
         supabase.removeChannel(currentMessagesChan);
         currentMessagesChan = null;
     }
+    if (currentTypingChan) {
+        supabase.removeChannel(currentTypingChan);
+        currentTypingChan = null;
+    }
+    clearTimeout(typingStopTimer);
     activeConversationId = null;
     activeConversationPeer = null;
 }
@@ -2667,6 +3743,7 @@ async function openInboxView() {
         conversationsCache = data || [];
         renderInboxList();
         subscribeConversationsList();
+        updateDmUnreadBadge();
     } catch (err) {
         console.error("Inbox load error:", err);
         content.innerHTML = `<div class="p-12 text-center text-red-400 text-xs">Couldn't load your chats. Pull to refresh.</div>`;
@@ -2690,7 +3767,10 @@ function renderInboxList() {
     content.innerHTML = `<div class="divide-y divide-slate-800/60 bg-slate-900 border border-slate-800/60 rounded-3xl overflow-hidden">${
         conversationsCache.map(conv => {
             const peer = dmPeerInfo(conv);
-            const isUnread = conv.last_sender && conv.last_sender !== currentUserData.id && !conv.last_read_by_me;
+            const isUnread = isConversationUnread(conv);
+            const previewText = (conv.last_message && conv.last_message.startsWith('post_share:'))
+                ? '📎 Shared a listing'
+                : (esc(conv.last_message) || 'Say hello 👋');
             return `
             <button
                 onclick="window.openDM('${escAttr(peer.id)}','${escAttr(peer.name)}','${escAttr(peer.avatar)}')"
@@ -2701,7 +3781,7 @@ function renderInboxList() {
                         <p class="text-white font-bold text-sm truncate">${esc(peer.name)}</p>
                         <span class="text-[10px] text-slate-500 shrink-0">${esc(timeAgo(conv.last_message_at))}</span>
                     </div>
-                    <p class="text-xs ${isUnread ? 'text-slate-200 font-semibold' : 'text-slate-500'} truncate mt-0.5">${esc(conv.last_message) || 'Say hello 👋'}</p>
+                    <p class="text-xs ${isUnread ? 'text-slate-200 font-semibold' : 'text-slate-500'} truncate mt-0.5">${previewText}</p>
                 </div>
                 ${isUnread ? '<div class="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0"></div>' : ''}
             </button>`;
@@ -2725,13 +3805,14 @@ function subscribeConversationsList() {
                 conversationsCache = data || [];
                 // Only re-render the list if we're actually looking at it
                 if (!activeConversationId) renderInboxList();
+                updateDmUnreadBadge();
             } catch (_) {}
         })
         .subscribe();
 }
 
 // Opens (or creates) a conversation and renders the WhatsApp-style thread view.
-window.openDM = async function (otherUserId, otherUserName, otherUserAvatar) {
+window.openDM = async function (otherUserId, otherUserName, otherUserAvatar, postContext = null) {
     if (!currentUserData) { window.openLoginModal(); return; }
     if (!otherUserId) { window.navigateTo('dms'); return; }
     if (otherUserId === currentUserData.id) return;
@@ -2758,9 +3839,25 @@ window.openDM = async function (otherUserId, otherUserName, otherUserAvatar) {
         activeConversationId   = convId;
         activeConversationPeer = { id: otherUserId, name: otherUserName || 'Student', avatar: otherUserAvatar || 'https://ui-avatars.com/api/?name=Student' };
 
+        // Opening the thread means the person has now seen it — mark it
+        // read immediately so the unread dot/badge clears right away
+        // rather than waiting for the next inbox refresh.
+        markConversationRead(convId);
+
         renderChatThreadShell();
         await loadAndRenderMessages();
         subscribeActiveThreadMessages();
+
+        // If this open came from a "Contact"/"Contact Seller" tap on a
+        // specific listing, share a small preview of that post as the
+        // opening message — using a structured `post_share:` prefix in
+        // the existing text column (no schema change needed) so
+        // renderChatBubble can detect and render it as a card instead of
+        // plain text. This only fires from a fresh contact tap, never
+        // when simply reopening an existing conversation from the inbox.
+        if (postContext && postContext.id) {
+            await sendPostSharePreview(postContext);
+        }
 
         // Register this thread as a back-nav layer: hardware/gesture back
         // while inside a chat thread returns to the inbox list instead of
@@ -2774,6 +3871,56 @@ window.openDM = async function (otherUserId, otherUserName, otherUserAvatar) {
     }
 };
 
+// Sends a lightweight "shared listing" message so the seller can see the
+// exact item being asked about right in the chat, without needing a
+// dedicated messages table column. The payload is JSON, prefixed so it's
+// unambiguous and never collides with a person typing a normal message
+// that happens to start with the same characters.
+async function sendPostSharePreview(postContext) {
+    const payload = {
+        id: postContext.id,
+        title: postContext.title || 'Listing',
+        price: postContext.price ?? 0,
+        image: postContext.image || '',
+        type: postContext.type || 'product'
+    };
+    const text = `post_share:${JSON.stringify(payload)}`;
+
+    const optimisticMsg = {
+        id: `local-${Date.now()}`,
+        sender_id: currentUserData.id,
+        text,
+        created_at: new Date().toISOString()
+    };
+
+    const container = document.getElementById('chat-messages');
+    if (container) {
+        const emptyState = container.querySelector('p');
+        if (emptyState && container.children.length === 1) container.innerHTML = '';
+        container.innerHTML += renderChatBubble(optimisticMsg);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    try {
+        const { error: msgErr } = await supabase.from('messages').insert({
+            conversation_id: activeConversationId,
+            sender_id: currentUserData.id,
+            text
+        });
+        if (msgErr) throw msgErr;
+
+        await supabase.from('conversations').update({
+            last_message: `Shared: ${payload.title}`,
+            last_message_at: new Date().toISOString(),
+            last_sender: currentUserData.id
+        }).eq('id', activeConversationId);
+    } catch (err) {
+        console.error("Post share send error:", err);
+        // Non-fatal: the person can still type a normal message even if
+        // the preview card failed to send.
+    }
+}
+
 function renderChatThreadShell() {
     const content = document.getElementById('dms-content');
     if (!content || !activeConversationPeer) return;
@@ -2785,7 +3932,10 @@ function renderChatThreadShell() {
                     <i class="fas fa-arrow-left text-xs"></i>
                 </button>
                 <img src="${esc(activeConversationPeer.avatar)}" class="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0" alt="">
-                <p class="text-white font-bold text-sm truncate">${esc(activeConversationPeer.name)}</p>
+                <div class="min-w-0">
+                    <p class="text-white font-bold text-sm truncate">${esc(activeConversationPeer.name)}</p>
+                    <p id="chat-typing-status" class="text-amber-400 text-[10px] font-semibold h-3.5"></p>
+                </div>
             </div>
             <div id="chat-messages" class="flex-1 overflow-y-auto space-y-2 px-1 pb-2"></div>
             <div class="flex items-center gap-2 pt-2 border-t border-slate-800/60">
@@ -2795,6 +3945,7 @@ function renderChatThreadShell() {
                     placeholder="Message..."
                     class="flex-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-full px-4 py-2.5 focus:outline-none focus:border-amber-400 transition"
                     onkeydown="if(event.key==='Enter') window.sendChatMessage()"
+                    oninput="window._handleTypingInput()"
                 >
                 <button onclick="window.sendChatMessage()" class="w-10 h-10 flex items-center justify-center bg-amber-400 text-black rounded-full active:scale-90 transition shrink-0">
                     <i class="fas fa-paper-plane text-xs"></i>
@@ -2805,11 +3956,53 @@ function renderChatThreadShell() {
 
 function renderChatBubble(msg) {
     const isMe = msg.sender_id === currentUserData.id;
+
+    // Shared-listing messages (from "Contact"/"Contact Seller") are
+    // encoded as post_share:{...json...} in the same text column — detect
+    // and render them as a small tappable product card instead of a
+    // plain text bubble, so the seller sees exactly what's being asked
+    // about.
+    if (typeof msg.text === 'string' && msg.text.startsWith('post_share:')) {
+        try {
+            const payload = JSON.parse(msg.text.slice('post_share:'.length));
+            return renderPostSharePreviewBubble(payload, isMe, msg.created_at);
+        } catch (_) {
+            // Malformed payload — fall through to plain text rendering
+            // below rather than showing nothing.
+        }
+    }
+
     return `
         <div class="flex ${isMe ? 'justify-end' : 'justify-start'}">
             <div class="max-w-[75%] ${isMe ? 'bg-amber-400 text-black' : 'bg-slate-800 text-white'} rounded-2xl ${isMe ? 'rounded-br-sm' : 'rounded-bl-sm'} px-3.5 py-2">
                 <p class="text-sm break-words">${esc(msg.text)}</p>
                 <p class="text-[9px] ${isMe ? 'text-black/50' : 'text-slate-400'} mt-1 text-right">${esc(formatClockTime(msg.created_at))}</p>
+            </div>
+        </div>`;
+}
+
+function renderPostSharePreviewBubble(payload, isMe, createdAt) {
+    return `
+        <div class="flex ${isMe ? 'justify-end' : 'justify-start'}">
+            <div
+                onclick="window.closeDMThread(); setTimeout(() => openDetail('${escAttr(payload.id)}'), 50)"
+                class="max-w-[78%] ${isMe ? 'bg-amber-400/10 border-amber-400/30' : 'bg-slate-800 border-slate-700'} border rounded-2xl ${isMe ? 'rounded-br-sm' : 'rounded-bl-sm'} p-2 cursor-pointer active:scale-[0.98] transition">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-12 h-12 rounded-xl bg-slate-950 overflow-hidden shrink-0 border border-slate-700/50">
+                        ${payload.image
+                            ? `<img src="${esc(payload.image)}" class="w-full h-full object-cover" alt="">`
+                            : `<div class="w-full h-full flex items-center justify-center text-slate-600"><i class="fas fa-image text-sm"></i></div>`
+                        }
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-[9px] uppercase tracking-widest font-bold ${isMe ? 'text-amber-500' : 'text-slate-500'}">
+                            ${payload.type === 'skill' ? 'Shared Service' : 'Shared Listing'}
+                        </p>
+                        <p class="text-xs font-bold ${isMe ? 'text-white' : 'text-white'} truncate">${esc(payload.title)}</p>
+                        <p class="text-amber-400 font-black text-xs">GH₵${esc(String(payload.price))}</p>
+                    </div>
+                </div>
+                <p class="text-[9px] ${isMe ? 'text-black/40' : 'text-slate-500'} mt-1.5 text-right">${esc(formatClockTime(createdAt))}</p>
             </div>
         </div>`;
 }
@@ -2867,9 +4060,63 @@ function subscribeActiveThreadMessages() {
             if (emptyState && container.children.length === 1) container.innerHTML = '';
             container.innerHTML += renderChatBubble(payload.new);
             container.scrollTop = container.scrollHeight;
+
+            // Any incoming message implicitly means the peer stopped
+            // typing — clear the indicator right away instead of waiting
+            // for their typing-stopped broadcast.
+            setTypingStatusVisible(false);
+        })
+        .subscribe();
+
+    subscribeTypingPresence();
+}
+
+// Typing indicator via Supabase Presence — deliberately avoids any
+// schema change (no new column/table) by using a presence channel keyed
+// to the conversation, where each side just broadcasts a boolean typing
+// flag that the other side listens for.
+function subscribeTypingPresence() {
+    if (currentTypingChan) {
+        supabase.removeChannel(currentTypingChan);
+        currentTypingChan = null;
+    }
+    if (!activeConversationId || !currentUserData) return;
+
+    currentTypingChan = supabase.channel(`typing-${activeConversationId}`, {
+        config: { presence: { key: currentUserData.id } }
+    });
+
+    currentTypingChan
+        .on('presence', { event: 'sync' }, () => {
+            const state = currentTypingChan.presenceState();
+            const peerIsTyping = Object.keys(state)
+                .filter(uid => uid !== currentUserData.id)
+                .some(uid => state[uid]?.[0]?.typing);
+            setTypingStatusVisible(peerIsTyping);
         })
         .subscribe();
 }
+
+function setTypingStatusVisible(visible) {
+    const el = document.getElementById('chat-typing-status');
+    if (!el || !activeConversationPeer) return;
+    el.textContent = visible ? `${activeConversationPeer.name.split(' ')[0]} is typing…` : '';
+}
+
+// Called on every keystroke in the chat input (debounced): broadcasts
+// "typing" presence immediately, then automatically broadcasts
+// "stopped typing" after a short pause, so the peer's indicator clears
+// on its own if the person stops without sending.
+window._handleTypingInput = function () {
+    if (!currentTypingChan || !currentUserData) return;
+
+    currentTypingChan.track({ typing: true });
+
+    clearTimeout(typingStopTimer);
+    typingStopTimer = setTimeout(() => {
+        currentTypingChan?.track({ typing: false });
+    }, 2000);
+};
 
 window.sendChatMessage = async function () {
     const input = document.getElementById('chat-input');
@@ -2877,6 +4124,8 @@ window.sendChatMessage = async function () {
     if (!text || !activeConversationId || !currentUserData) return;
 
     input.value = '';
+    clearTimeout(typingStopTimer);
+    currentTypingChan?.track({ typing: false });
 
     const optimisticMsg = {
         id: `local-${Date.now()}`,
@@ -2987,9 +4236,35 @@ if (activeAuthChange) {
             document.getElementById('dms-auth-gate')?.classList.add('hidden');
             document.getElementById('dms-content')?.classList.remove('hidden');
 
-            subscribeFeed();
+            // Fix: the very first feed load after sign-in previously
+            // called subscribeFeed() with no filter at all, bypassing
+            // campus scoping entirely — so someone with "My Campus"
+            // selected would still see everyone nationwide until they
+            // manually clicked a tab. Now the initial load applies the
+            // same "all" tab base filter (including campus scope) that
+            // filterFeed('all', ...) would.
+            updateCampusScopeBanner();
+            subscribeFeed((q) => {
+                if (currentCampusScope === 'mine' && currentUserData?.institution) {
+                    return q.eq("institution", currentUserData.institution);
+                }
+                return q;
+            });
             try { loadProfileStats(); } catch (_) {}
             _initAvatarLongPress();
+
+            // Populate the DMs unread badge immediately on sign-in,
+            // rather than only after the person happens to open the DMs
+            // tab for the first time.
+            try {
+                const { data: convData } = await supabase
+                    .from('conversations')
+                    .select('*')
+                    .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
+                    .order('last_message_at', { ascending: false });
+                conversationsCache = convData || [];
+                updateDmUnreadBadge();
+            } catch (_) {}
         } else {
             unsubscribeFeed();
             unsubscribeConversations();
@@ -3007,6 +4282,9 @@ if (activeAuthChange) {
             setEl('profile-following-count',   '0');
             setEl('profile-posts-count',       '0');
 
+            conversationsCache = [];
+            document.getElementById('dms-unread-badge')?.classList.add('hidden');
+
             const grid = document.getElementById('profile-grid');
             if (grid) grid.innerHTML = '';
 
@@ -3015,6 +4293,7 @@ if (activeAuthChange) {
             document.getElementById('dms-auth-gate')?.classList.remove('hidden');
             document.getElementById('dms-content')?.classList.add('hidden');
 
+            document.getElementById('campus-scope-banner')?.classList.add('hidden');
             subscribeFeed();
             // Only auto-open the login modal on a genuine signed-out state
             // while online — never as a side-effect of connectivity loss.
@@ -3088,7 +4367,57 @@ window.addEventListener('online', () => {
         if (submitBtnLabel) submitBtnLabel.textContent = submitBtn.dataset.originalText;
         submitBtn.disabled = false;
     }
-    if (typeof subscribeFeed === 'function') subscribeFeed();
+    // Fix: this previously called subscribeFeed() with no filter at all,
+    // which silently dropped campus scoping (and any type filter) the
+    // moment connectivity returned — someone browsing "My Campus" would
+    // get bounced to the nationwide feed after a brief signal drop with
+    // no indication why. Now it re-applies whichever filter the current
+    // tab + scope combination should actually have.
+    if (typeof subscribeFeed === 'function') {
+        if (currentFeedType === 'following') {
+            loadFollowingFeed();
+        } else {
+            const baseFilter = (q) => {
+                if (currentFeedType === 'reels') {
+                    return q.eq("media_type", "video");
+                }
+                if (currentFeedType !== 'all' && currentFeedType !== 'product') {
+                    q = q.eq("type", currentFeedType);
+                }
+                if (currentCampusScope === 'mine' && currentUserData?.institution) {
+                    q = q.eq("institution", currentUserData.institution);
+                }
+                return q;
+            };
+            subscribeFeed(baseFilter);
+        }
+    }
+});
+
+// ─── GLOBAL ERROR HANDLING ────────────────────────────────────────────────────
+// Previously there was no catch-all: any error thrown outside an explicit
+// try/catch (a bug, an unexpected null, a rejected promise nobody
+// awaited) failed completely silently — nothing shown to the person,
+// nothing but a console line only a developer would ever see. This
+// doesn't fix underlying bugs, but it means the person using the app
+// always gets SOME feedback that something went wrong instead of the UI
+// just quietly not doing what they expected, with a debounce so a
+// cascade of related errors doesn't spam multiple toasts at once.
+let _lastGlobalErrorToastAt = 0;
+function showGlobalErrorToast(context, err) {
+    console.error(`[Global Error Handler] ${context}:`, err);
+    const now = Date.now();
+    if (now - _lastGlobalErrorToastAt < 4000) return; // avoid toast spam from a cascade of related errors
+    _lastGlobalErrorToastAt = now;
+    showToast("Something went wrong. Please try again.");
+}
+
+window.addEventListener('error', (event) => {
+    showGlobalErrorToast('Uncaught error', event.error || event.message);
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+    showGlobalErrorToast('Unhandled promise rejection', event.reason);
 });
 
 // ─── UTILITY FUNCTION: WIRE CAROUSEL COUNTERS ───────────────────────────────

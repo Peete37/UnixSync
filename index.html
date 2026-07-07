@@ -11,9 +11,7 @@
   <style>
     .hidden { display: none !important; }
 
-
     body { font-family: 'Inter', sans-serif; }
-
 
     .sr-only {
       position: absolute;
@@ -26,7 +24,6 @@
       white-space: nowrap;
       border: 0;
     }
-
 
     /* ── HEADER ── */
     .site-header {
@@ -42,7 +39,6 @@
       margin: 0 auto;
       transition: background 0.25s ease, border-color 0.25s ease, opacity 0.25s ease;
     }
-
 
     /* TikTok-style: on the Reels tab the header becomes a transparent
        overlay floating over the video instead of a solid bar. Tabs and
@@ -74,13 +70,11 @@
       text-shadow: 0 1px 4px rgba(0,0,0,0.8);
     }
 
-
     .header-row {
       display: flex;
       align-items: center;
       gap: 10px;
     }
-
 
     .header-icon-btn {
       position: relative;
@@ -113,13 +107,10 @@
       border: 2px solid #020617;
     }
 
-
     .feed-tabs-scroll { scroll-behavior: smooth; }
-
 
     /* ── SEARCH ── */
     .search-wrap { position: relative; margin-top: 10px; }
-
 
     .search-wrap i {
       position: absolute;
@@ -130,9 +121,7 @@
       color: #64748b;
       pointer-events: none;
 
-
     }
-
 
     .search-wrap input {
       width: 100%;
@@ -147,19 +136,15 @@
       transition: border-color 0.2s, box-shadow 0.2s;
     }
 
-
     .search-wrap input::placeholder { color: #475569; }
-
 
     .search-wrap input:focus {
       border-color: #fbbf24;
       box-shadow: 0 0 0 3px rgba(251,191,36,0.1);
     }
 
-
     /* ── TABS ── */
     .feed-tab-btn { transition: color 0.15s, border-color 0.15s; }
-
 
     /* ── TIKTOK SCROLL FEED ── */
     #posts-feed {
@@ -171,7 +156,6 @@
     }
     #posts-feed::-webkit-scrollbar { display: none; }
 
-
     /* When Products tab renders a grid, disable snap-scroll behavior so
        the grid can scroll normally instead of snapping per-row. */
     #posts-feed.grid-mode {
@@ -180,7 +164,6 @@
       min-height: calc(100vh - 140px);
       overflow-y: visible;
     }
-
 
     /* Reels: true full-bleed, fixed to the viewport so it's completely
        independent of <main>'s padding/max-width (that's what was causing
@@ -202,7 +185,6 @@
       z-index: 30;
     }
 
-
     .reel-card {
       position: relative;
       scroll-snap-align: start;
@@ -213,13 +195,11 @@
       overflow: hidden;
     }
 
-
     .reel-video {
       width: 100%;
       height: 100%;
       object-fit: cover;
     }
-
 
     .reel-actions {
       position: absolute;
@@ -235,7 +215,6 @@
       z-index: 5;
     }
 
-
     .reel-action-btn {
       display: flex;
       flex-direction: column;
@@ -246,7 +225,6 @@
       cursor: pointer;
     }
 
-
     .reel-info {
       position: absolute;
       left: 14px;
@@ -255,7 +233,6 @@
       text-shadow: 0 1px 6px rgba(0,0,0,0.8);
       z-index: 4;
     }
-
 
     /* TikTok-style bottom sheet comment panel: slides up from the bottom,
        fixed to viewport (not clipped by the reel card), sits above
@@ -321,7 +298,6 @@
       background: #1c1c1e;
     }
 
-
     /* Backdrop behind the comment sheet — click to dismiss */
     .comments-backdrop {
       position: fixed;
@@ -337,7 +313,6 @@
       pointer-events: auto;
     }
 
-
     .tiktok-card {
       scroll-snap-align: start;
       scroll-snap-stop: always;
@@ -350,7 +325,6 @@
       position: relative;
     }
 
-
     .tiktok-card .card-media {
       flex: 1;
       min-height: 0;
@@ -358,14 +332,12 @@
       position: relative;
     }
 
-
     .tiktok-card .card-media img,
     .tiktok-card .card-media video {
       width: 100%;
       height: 100%;
       object-fit: cover;
     }
-
 
     .tiktok-card .card-media::after {
       content: '';
@@ -376,12 +348,10 @@
       pointer-events: none;
     }
 
-
     .tiktok-card .card-info {
       padding: 10px 12px 6px;
       flex-shrink: 0;
     }
-
 
     .tiktok-card .card-actions {
       display: flex;
@@ -391,7 +361,6 @@
       padding: 4px 12px 6px;
       flex-shrink: 0;
     }
-
 
     .action-btn {
       display: flex;
@@ -410,12 +379,10 @@
     .action-btn:hover { background: rgba(255,255,255,0.06); }
     .action-btn i { font-size: 13px; }
 
-
     .tiktok-card .card-cta {
       padding: 6px 12px 10px;
       flex-shrink: 0;
     }
-
 
     /* ── SEARCH RESULT CARDS ── */
     #search-results .post-card {
@@ -427,13 +394,11 @@
       cursor: pointer;
     }
 
-
     #search-results .post-card:hover {
       transform: translateY(-2px);
       box-shadow: 0 12px 40px rgba(0,0,0,0.5);
       border-color: rgba(251,191,36,0.15);
     }
-
 
     /* ── BOTTOM NAV ── */
     .bottom-nav-container {
@@ -448,7 +413,6 @@
       transition: transform 0.3s ease;
     }
 
-
     .bottom-nav {
       max-width: 448px;
       margin: 0 auto;
@@ -456,7 +420,6 @@
       align-items: center;
       justify-content: space-between;
     }
-
 
     .bottom-nav button {
       display: flex;
@@ -477,7 +440,6 @@
       position: relative;
     }
 
-
     .bottom-nav button i {
       font-size: 17px;
       color: #64748b;
@@ -488,14 +450,11 @@
       transition: color 0.15s;
     }
 
-
     .bottom-nav button:hover i,
     .bottom-nav button:hover span { color: #94a3b8; }
 
-
     .bottom-nav button.nav-active i   { color: #fbbf24; }
     .bottom-nav button.nav-active span { color: #ffffff; }
-
 
     .nav-cart-badge {
       position: absolute;
@@ -514,7 +473,6 @@
       justify-content: center;
     }
 
-
     .nav-fab-btn {
       width: 42px !important;
       height: 42px !important;
@@ -530,18 +488,15 @@
       gap: 0 !important;
     }
 
-
     .nav-fab-btn:hover {
       box-shadow: 0 6px 28px rgba(251,191,36,0.6) !important;
       transform: translateY(-8px) scale(1.05) !important;
     }
 
-
     .nav-fab-btn i {
       font-size: 15px !important;
       color: #000 !important;
     }
-
 
     /* ── MODALS ── */
     #post-modal .modal-inner,
@@ -553,7 +508,6 @@
       border-radius: 24px;
     }
 
-
     #profile-container select,
     #post-modal select,
     #post-modal input[type="text"],
@@ -562,14 +516,12 @@
       transition: border-color 0.2s, box-shadow 0.2s;
     }
 
-
     #profile-container select:focus,
     #post-modal select:focus,
     #post-modal input:focus,
     #post-modal textarea:focus {
       box-shadow: 0 0 0 3px rgba(251,191,36,0.12);
     }
-
 
     /* ── LOGIN DIVIDER ── */
     .login-divider {
@@ -590,25 +542,19 @@
       background: rgba(255,255,255,0.08);
     }
 
-
     /* ── SCROLLBAR ── */
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
 
-
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { scrollbar-width: none; }
 
-
     main { padding-bottom: 100px; }
-
 
     .bottom-nav-hidden { transform: translateY(100%); }
 
-
     .no-browser-menu { -webkit-touch-callout: none; user-select: none; }
-
 
     .line-clamp-1 {
       display: -webkit-box;
@@ -622,7 +568,6 @@
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
-
 
     /* ── MEDIA EDIT PREVIEW GRID (WhatsApp-style) ── */
     #editMediaModal .edit-thumb-strip {
@@ -681,7 +626,6 @@
       color: #fff;
       display: flex; align-items: center; justify-content: center;
     }
-
 
     /* ── OPTIONS MENU (3-dot action sheet) ──
        Reusable bottom-sheet style menu used for both post options
@@ -754,7 +698,6 @@
       margin: 4px 0;
     }
 
-
     .post-options-trigger {
       width: 30px; height: 30px;
       display: flex;
@@ -773,12 +716,9 @@
   </style>
 </head>
 
-
 <body class="bg-[#020617] text-slate-100 min-h-screen antialiased">
 
-
   <input type="file" id="mediaInput" class="hidden" accept="image/*,video/*" multiple />
-
 
   <!-- Single merged header row: search toggle · scrollable tabs · saved icon.
        No wordmark — icons only, TikTok-style. Becomes fully transparent/
@@ -789,7 +729,6 @@
         <i class="fas fa-search text-xs"></i>
       </button>
 
-
       <div id="feed-tabs" class="feed-tabs-scroll flex-1 flex items-center gap-4 overflow-x-auto no-scrollbar text-[11px] font-bold tracking-wider uppercase">
         <button onclick="window.filterFeed('all', this)" class="feed-tab-btn shrink-0 text-amber-400 whitespace-nowrap pb-1 border-b-2 border-amber-400">All</button>
         <button onclick="window.filterFeed('reels', this)" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Reels</button>
@@ -798,13 +737,11 @@
         <button onclick="window.filterFeed('skill', this)" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Services</button>
       </div>
 
-
       <button id="nav-btn-cart" class="header-icon-btn shrink-0" onclick="window.navigateTo('cart', document.getElementById('nav-btn-cart'))" aria-label="Saved items">
         <i class="fas fa-bookmark text-xs"></i>
         <span id="header-cart-badge" class="badge-dot hidden">0</span>
       </button>
     </div>
-
 
     <div class="search-wrap hidden" id="header-search-wrap">
       <i class="fas fa-search"></i>
@@ -819,9 +756,7 @@
     </div>
   </div>
 
-
   <main class="px-4 pt-4 max-w-md mx-auto">
-
 
     <div id="feed-container" class="pb-24">
       <!-- Campus scope banner: shows whether the feed is scoped to the
@@ -841,10 +776,8 @@
         <span class="text-amber-400 text-[10px] font-black uppercase tracking-wider shrink-0">Switch</span>
       </button>
 
-
       <div id="posts-feed"></div>
     </div>
-
 
     <div id="explore-container" class="hidden pb-24 space-y-4">
       <div class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl">
@@ -853,7 +786,6 @@
       </div>
       <div id="search-results" class="space-y-4"></div>
     </div>
-
 
     <div id="dms-container" class="hidden pb-24 space-y-4">
       <div id="dms-auth-gate" class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
@@ -865,10 +797,8 @@
         </button>
       </div>
 
-
       <div id="dms-content" class="hidden space-y-4"></div>
     </div>
-
 
     <div id="cart-container" class="hidden pb-24 space-y-4">
       <div class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl">
@@ -877,7 +807,6 @@
       </div>
       <div id="cart-items-wrapper" class="space-y-3"></div>
     </div>
-
 
     <div id="profile-container" class="hidden pb-24 space-y-6">
       <div id="profile-auth-gate" class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
@@ -888,7 +817,6 @@
           Sign In
         </button>
       </div>
-
 
       <div id="profile-content" class="hidden space-y-6">
         <div class="flex items-center gap-4 bg-slate-900 border border-slate-800/60 p-5 rounded-3xl">
@@ -912,7 +840,6 @@
           </div>
         </div>
 
-
         <div class="grid grid-cols-3 gap-3 bg-slate-900/50 border border-slate-800/60 p-4 rounded-2xl text-center">
           <div>
             <span id="profile-posts-count" class="block text-lg font-black text-white">0</span>
@@ -928,21 +855,17 @@
           </div>
         </div>
 
-
         <div class="flex border-b border-slate-900 text-sm">
           <button onclick="window.switchProfileTab('posts', this)" class="profile-subtab-btn flex-1 py-3 text-center text-amber-400 font-bold border-b-2 border-amber-400 uppercase tracking-wider text-xs focus:outline-none">My Gigs & Posts</button>
           <button onclick="window.switchProfileTab('settings', this)" class="profile-subtab-btn flex-1 py-3 text-center text-slate-500 font-bold border-b-2 border-transparent uppercase tracking-wider text-xs focus:outline-none hover:text-slate-300">Campus Settings</button>
         </div>
-
 
         <div class="profile-tab-contents">
           <div id="profile-subview-posts" class="profile-subview">
             <div id="profile-grid" class="grid grid-cols-3 gap-2"></div>
           </div>
 
-
           <div id="profile-subview-settings" class="profile-subview hidden space-y-4 bg-slate-900 p-5 rounded-3xl border border-slate-800/60">
-
 
             <div class="border-b border-slate-800 pb-2">
               <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
@@ -963,7 +886,6 @@
               </button>
             </div>
 
-
             <div class="border-b border-slate-800 pb-2 pt-2">
               <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
                 <i class="fas fa-map-marker-alt text-amber-400"></i> Local Campus Selection
@@ -982,7 +904,6 @@
                 Save Selection Changes
               </button>
             </div>
-
 
             <div class="border-b border-slate-800 pb-2 pt-2">
               <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
@@ -1006,7 +927,6 @@
               </label>
             </div>
 
-
             <div class="border-b border-slate-800 pb-2 pt-2">
               <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
                 <i class="fas fa-bell text-amber-400"></i> Notifications
@@ -1027,7 +947,6 @@
               </label>
             </div>
 
-
             <div class="border-b border-slate-800 pb-2 pt-2">
               <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
                 <i class="fas fa-shield-halved text-amber-400"></i> Privacy & Support
@@ -1045,7 +964,6 @@
               </button>
             </div>
 
-
             <div class="pt-2 border-t border-slate-800 space-y-2">
               <button onclick="window.signOutUser()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
                 <i class="fas fa-sign-out-alt mr-2"></i>Sign Out
@@ -1060,7 +978,6 @@
       </div>
     </div>
   </main>
-
 
   <div class="bottom-nav-container">
     <nav class="bottom-nav">
@@ -1086,7 +1003,6 @@
       </button>
     </nav>
   </div>
-
 
   <div id="post-modal" class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-4">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl modal-inner">
@@ -1132,7 +1048,6 @@
     </div>
   </div>
 
-
   <!-- WhatsApp-style pre-upload media edit modal: shows attached files with
        a thumbnail strip + main preview, allows rotate/remove before the
        listing is actually published. -->
@@ -1152,7 +1067,6 @@
     </div>
   </div>
 
-
   <div id="detail-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 overflow-y-auto">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden relative my-auto shadow-2xl modal-inner">
       <button onclick="window.closeDetailModal()" class="absolute top-4 right-4 z-50 bg-black/60 text-white w-8 h-8 rounded-full flex items-center justify-center hover:bg-black/80 transition focus:outline-none" aria-label="Close detail viewport">
@@ -1162,7 +1076,6 @@
     </div>
   </div>
 
-
   <div id="avatarModal" class="hidden fixed inset-0 z-[300] flex items-end justify-center bg-black/70 backdrop-blur-sm p-4">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden mb-4 shadow-2xl modal-inner">
       <div class="flex justify-between items-center p-4 pb-2">
@@ -1170,11 +1083,9 @@
         <button id="closeAvatarBtn" class="w-7 h-7 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 text-xs hover:text-white transition" aria-label="Close avatar panel">✕</button>
       </div>
 
-
       <img id="modalAvatarImg" src="" alt="Profile Avatar"
            class="w-full aspect-square object-cover no-browser-menu select-none"
            style="-webkit-touch-callout: none; user-select: none;">
-
 
       <div class="flex gap-3 p-4">
         <button id="copyImageBtn" class="flex-1 flex items-center justify-center gap-2 bg-slate-800 border border-slate-700 text-white font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
@@ -1189,7 +1100,6 @@
       </div>
     </div>
   </div>
-
 
   <div id="login-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
@@ -1208,7 +1118,6 @@
         Continue with Google
       </button>
       <div class="login-divider">or sign in with email</div>
-
 
       <form onsubmit="event.preventDefault(); window.loginWithEmail();" class="space-y-3">
         <div>
@@ -1235,13 +1144,11 @@
         </button>
       </form>
 
-
       <p class="text-center text-[10px] text-slate-500">
         No account? <button onclick="window.showSignupView()" class="text-amber-400 font-bold hover:underline">Create one free</button>
       </p>
     </div>
   </div>
-
 
   <div id="signup-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
     <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
@@ -1256,7 +1163,6 @@
         Sign up with Google
       </button>
       <div class="login-divider">or create with email</div>
-
 
       <form onsubmit="event.preventDefault(); window.signUpWithEmail();" class="space-y-3">
         <div>
@@ -1288,23 +1194,19 @@
         </button>
       </form>
 
-
       <p class="text-center text-[10px] text-slate-500">
         Already have an account? <button onclick="window.showLoginView()" class="text-amber-400 font-bold hover:underline">Sign in</button>
       </p>
     </div>
   </div>
 
-
   <script>
     const _NAV_VIEWS = ['feed-container','explore-container','dms-container','profile-container','cart-container'];
-
 
     function _setActiveNav(activeBtn) {
       document.querySelectorAll('.bottom-nav button').forEach(btn => btn.classList.remove('nav-active'));
       if (activeBtn) activeBtn.classList.add('nav-active');
     }
-
 
     window.togglePasswordVisibility = function() {
       const pwInput = document.getElementById('login-password');
@@ -1319,7 +1221,6 @@
       }
     };
 
-
     window.loginWithEmail = async function() {
       const email    = document.getElementById('login-email')?.value?.trim();
       const password = document.getElementById('login-password')?.value;
@@ -1330,7 +1231,6 @@
         alert('Email sign-in not yet wired.');
       }
     };
-
 
     window.signUpWithEmail = async function() {
       const name     = document.getElementById('signup-name')?.value?.trim();
@@ -1345,7 +1245,6 @@
       }
     };
 
-
     window.showSignupView = function() {
       document.getElementById('login-modal')?.classList.add('hidden');
       document.getElementById('signup-modal')?.classList.remove('hidden');
@@ -1357,7 +1256,6 @@
     window.closeSignupModal = function() {
       document.getElementById('signup-modal')?.classList.add('hidden');
     };
-
 
     // Toggles the slide-down search input under the merged header row.
     // Tapping the search icon reveals it and focuses the input; tapping
@@ -1375,12 +1273,10 @@
       }
     };
 
-
     // Live count of attached files for the "Create Listing" modal, and a
     // running badge on the header/nav bookmark icons for saved-item count.
     document.addEventListener('DOMContentLoaded', function() {
       _setActiveNav(document.getElementById('nav-btn-feed'));
-
 
       const mediaInput = document.getElementById('mediaInput');
       mediaInput?.addEventListener('change', function() {
@@ -1391,7 +1287,6 @@
           window.openEditMediaModal(mediaInput.files);
         }
       });
-
 
       function refreshCartBadges() {
         const list = window._userCartList || [];
@@ -1406,11 +1301,9 @@
       setInterval(refreshCartBadges, 1500);
     });
 
-
     /* ── PROXY STUBS ── */
     (function() {
       const _queue = {};
-
 
       function makeStub(name) {
         _queue[name] = [];
@@ -1419,7 +1312,6 @@
           _queue[name].push(arguments);
         };
       }
-
 
       [
         'filterFeed','switchProfileTab','togglePostModal','navigateTo',
@@ -1432,7 +1324,6 @@
         'closeEditMediaModal','confirmEditedMedia'
       ].forEach(makeStub);
 
-
       window._registerModuleFunction = function(name, fn) {
         window['_real_' + name] = fn;
         window[name] = fn;
@@ -1444,9 +1335,7 @@
     })();
   </script>
 
-
   <script type="module" src="./app.js"></script>
-
 
   <script type="module">
     const _moduleExports = [
@@ -1460,19 +1349,16 @@
       'closeEditMediaModal','confirmEditedMedia'
     ];
 
-
     _moduleExports.forEach(name => {
       if (typeof window[name] === 'function' && typeof window._registerModuleFunction === 'function') {
         window._registerModuleFunction(name, window[name]);
       }
     });
 
-
     if (typeof _setActiveNav === 'function') {
       _setActiveNav(document.getElementById('nav-btn-feed'));
     }
   </script>
-
 
 </body>
 </html>
