@@ -698,6 +698,193 @@
       margin: 4px 0;
     }
 
+    /* ── PREMIUM CAMPUS SETTINGS ── */
+    .settings-card {
+      background: linear-gradient(180deg, rgba(30,41,59,0.5) 0%, rgba(15,23,42,0.5) 100%);
+      border: 1px solid rgba(148,163,184,0.12);
+      border-radius: 20px;
+      overflow: hidden;
+    }
+    .settings-card + .settings-card { margin-top: 14px; }
+    .settings-card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 16px 12px;
+    }
+    .settings-card-icon {
+      width: 30px; height: 30px;
+      border-radius: 9px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(251,191,36,0.12);
+      color: #fbbf24;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+    .settings-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 13px 16px;
+      border-top: 1px solid rgba(148,163,184,0.08);
+    }
+    .settings-row:first-of-type { border-top: none; }
+    .settings-row-link {
+      width: 100%;
+      text-align: left;
+      color: #fff;
+      transition: background 0.15s;
+    }
+    .settings-row-link:active { background: rgba(255,255,255,0.04); }
+    .settings-row-link .chev { color: #475569; font-size: 11px; transition: transform 0.15s; }
+
+    /* Styled switch used in place of raw checkboxes for a more premium feel */
+    .settings-switch {
+      position: relative;
+      width: 42px; height: 24px;
+      flex-shrink: 0;
+      appearance: none;
+      -webkit-appearance: none;
+      background: #334155;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.2s;
+      outline: none;
+    }
+    .settings-switch:checked { background: #fbbf24; }
+    .settings-switch::before {
+      content: '';
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+    .settings-switch:checked::before { transform: translateX(18px); }
+
+    .campus-id-strip {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(251,191,36,0.14) 0%, rgba(251,191,36,0.02) 100%);
+      border: 1px solid rgba(251,191,36,0.2);
+      margin-bottom: 14px;
+    }
+    .campus-id-strip .badge-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #34d399;
+      box-shadow: 0 0 0 3px rgba(52,211,153,0.15);
+      flex-shrink: 0;
+    }
+
+    /* ── INFO SHEET (Privacy Policy / Help & Support / Blocked Users) ── */
+    .info-sheet-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 95;
+      background: #0b0f1a;
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .info-sheet-overlay.sheet-open { transform: translateX(0); }
+    .info-sheet-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      padding-top: calc(16px + env(safe-area-inset-top, 0px));
+      border-bottom: 1px solid rgba(148,163,184,0.1);
+      flex-shrink: 0;
+    }
+    .info-sheet-back {
+      width: 34px; height: 34px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.06);
+      display: flex; align-items: center; justify-content: center;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .info-sheet-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+    }
+    .info-sheet-body h4 {
+      color: #fbbf24;
+      font-weight: 800;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin: 20px 0 8px;
+    }
+    .info-sheet-body h4:first-child { margin-top: 0; }
+    .info-sheet-body p {
+      color: #cbd5e1;
+      font-size: 13px;
+      line-height: 1.7;
+      margin-bottom: 10px;
+    }
+    .info-sheet-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 60px 20px;
+      color: #64748b;
+    }
+    .blocked-user-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(148,163,184,0.08);
+    }
+    .blocked-user-row img {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+
+    /* ── MY GIGS & POSTS — press-and-hold multi-select ── */
+    #grid-select-toolbar.select-mode-active { display: flex; }
+    .grid-tile.select-mode .grid-tile-check {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .grid-tile-check {
+      position: absolute;
+      top: 6px; left: 6px;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: rgba(15,23,42,0.75);
+      border: 2px solid rgba(255,255,255,0.55);
+      display: flex; align-items: center; justify-content: center;
+      color: transparent;
+      font-size: 11px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+      z-index: 2;
+    }
+    .grid-tile.tile-selected .grid-tile-check {
+      background: #fbbf24;
+      border-color: #fbbf24;
+      color: #0b0f1a;
+    }
+    .grid-tile.tile-selected {
+      outline: 2px solid #fbbf24;
+      outline-offset: -2px;
+    }
+
     .post-options-trigger {
       width: 30px; height: 30px;
       display: flex;
@@ -862,109 +1049,132 @@
 
         <div class="profile-tab-contents">
           <div id="profile-subview-posts" class="profile-subview">
+            <div id="grid-select-toolbar" class="hidden items-center justify-between mb-3 bg-slate-900 border border-slate-800 rounded-2xl px-4 py-2.5">
+              <button onclick="window.exitGridSelectMode()" class="text-slate-400 text-xs font-bold uppercase tracking-wider">Cancel</button>
+              <span id="grid-select-count" class="text-white text-xs font-bold">0 selected</span>
+              <button onclick="window.deleteSelectedGridItems()" class="text-red-400 text-xs font-black uppercase tracking-wider flex items-center gap-1.5">
+                <i class="fas fa-trash-can"></i> Delete
+              </button>
+            </div>
             <div id="profile-grid" class="grid grid-cols-3 gap-2"></div>
           </div>
 
-          <div id="profile-subview-settings" class="profile-subview hidden space-y-4 bg-slate-900 p-5 rounded-3xl border border-slate-800/60">
+          <div id="profile-subview-settings" class="profile-subview hidden">
 
-            <div class="border-b border-slate-800 pb-2">
-              <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
-                <i class="fas fa-user text-amber-400"></i> Account
-              </h3>
-            </div>
-            <div class="space-y-3">
-              <div>
-                <label for="settingsDisplayName" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Display Name</label>
-                <input type="text" id="settingsDisplayName" name="settingsDisplayName" placeholder="Your name" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400">
+            <div class="campus-id-strip">
+              <span class="badge-dot"></span>
+              <div class="min-w-0">
+                <p class="text-white text-xs font-bold truncate" id="settingsCampusStripName">Campus Account</p>
+                <p class="text-slate-400 text-[11px] truncate" id="settingsCampusStripInst">Set your institution below</p>
               </div>
-              <div>
-                <label for="settingsEmail" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Email</label>
-                <input type="email" id="settingsEmail" name="settingsEmail" disabled class="w-full mt-1 bg-slate-950 border border-slate-800 text-slate-500 text-sm rounded-xl px-3 py-2.5 cursor-not-allowed">
-              </div>
-              <button id="saveAccountBtn" class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-2.5 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
-                Save Name
-              </button>
             </div>
 
-            <div class="border-b border-slate-800 pb-2 pt-2">
-              <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
-                <i class="fas fa-map-marker-alt text-amber-400"></i> Local Campus Selection
-              </h3>
-            </div>
-            <div class="space-y-3">
-              <div>
-                <label for="profileRegion" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Region</label>
-                <select id="profileRegion" name="profileRegion" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-icon"><i class="fas fa-user"></i></span>
+                <h3 class="text-white font-black text-xs uppercase tracking-widest">Account</h3>
               </div>
-              <div>
-                <label for="profileInstitution" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Institution</label>
-                <select id="profileInstitution" name="profileInstitution" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
-              </div>
-              <button id="saveLocationBtn" class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 mt-2 shadow-lg shadow-amber-400/10">
-                Save Selection Changes
-              </button>
-            </div>
-
-            <div class="border-b border-slate-800 pb-2 pt-2">
-              <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
-                <i class="fas fa-wifi text-amber-400"></i> Data & Playback
-              </h3>
-            </div>
-            <div class="space-y-1">
-              <label class="flex items-center justify-between py-2 cursor-pointer">
+              <div class="px-4 pb-4 space-y-3">
                 <div>
-                  <p class="text-white text-xs font-bold">Data Saver Mode</p>
-                  <p class="text-slate-500 text-[10px] mt-0.5">Lower image/video quality to use less data</p>
+                  <label for="settingsDisplayName" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Display Name</label>
+                  <input type="text" id="settingsDisplayName" name="settingsDisplayName" placeholder="Your name" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400">
                 </div>
-                <input type="checkbox" id="settingsDataSaver" class="w-5 h-5 accent-amber-400">
-              </label>
-              <label class="flex items-center justify-between py-2 cursor-pointer border-t border-slate-800/60">
                 <div>
-                  <p class="text-white text-xs font-bold">Autoplay Videos</p>
-                  <p class="text-slate-500 text-[10px] mt-0.5">Play videos automatically while scrolling</p>
+                  <label for="settingsEmail" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Email</label>
+                  <input type="email" id="settingsEmail" name="settingsEmail" disabled class="w-full mt-1 bg-slate-950 border border-slate-800 text-slate-500 text-sm rounded-xl px-3 py-2.5 cursor-not-allowed">
                 </div>
-                <input type="checkbox" id="settingsAutoplay" checked class="w-5 h-5 accent-amber-400">
-              </label>
+                <button id="saveAccountBtn" class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-2.5 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
+                  Save Name
+                </button>
+              </div>
             </div>
 
-            <div class="border-b border-slate-800 pb-2 pt-2">
-              <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
-                <i class="fas fa-bell text-amber-400"></i> Notifications
-              </h3>
-            </div>
-            <div class="space-y-1">
-              <label class="flex items-center justify-between py-2 cursor-pointer">
-                <p class="text-white text-xs font-bold">Messages</p>
-                <input type="checkbox" id="settingsNotifyMessages" checked class="w-5 h-5 accent-amber-400">
-              </label>
-              <label class="flex items-center justify-between py-2 cursor-pointer border-t border-slate-800/60">
-                <p class="text-white text-xs font-bold">Likes & Comments</p>
-                <input type="checkbox" id="settingsNotifyEngagement" checked class="w-5 h-5 accent-amber-400">
-              </label>
-              <label class="flex items-center justify-between py-2 cursor-pointer border-t border-slate-800/60">
-                <p class="text-white text-xs font-bold">New Followers</p>
-                <input type="checkbox" id="settingsNotifyFollows" checked class="w-5 h-5 accent-amber-400">
-              </label>
-            </div>
-
-            <div class="border-b border-slate-800 pb-2 pt-2">
-              <h3 class="text-white font-black text-xs uppercase tracking-widest flex items-center gap-2">
-                <i class="fas fa-shield-halved text-amber-400"></i> Privacy & Support
-              </h3>
-            </div>
-            <div class="space-y-2">
-              <button onclick="window.showToast && window.showToast('Coming soon')" class="w-full text-left flex items-center justify-between text-white text-xs font-bold py-2.5">
-                Blocked Users <i class="fas fa-chevron-right text-slate-600 text-[10px]"></i>
-              </button>
-              <button onclick="window.showToast && window.showToast('Coming soon')" class="w-full text-left flex items-center justify-between text-white text-xs font-bold py-2.5 border-t border-slate-800/60">
-                Help & Support <i class="fas fa-chevron-right text-slate-600 text-[10px]"></i>
-              </button>
-              <button onclick="window.showToast && window.showToast('Coming soon')" class="w-full text-left flex items-center justify-between text-white text-xs font-bold py-2.5 border-t border-slate-800/60">
-                Privacy Policy <i class="fas fa-chevron-right text-slate-600 text-[10px]"></i>
-              </button>
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-icon"><i class="fas fa-map-marker-alt"></i></span>
+                <h3 class="text-white font-black text-xs uppercase tracking-widest">Local Campus Selection</h3>
+              </div>
+              <div class="px-4 pb-4 space-y-3">
+                <div>
+                  <label for="profileRegion" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Region</label>
+                  <select id="profileRegion" name="profileRegion" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
+                </div>
+                <div>
+                  <label for="profileInstitution" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Institution</label>
+                  <select id="profileInstitution" name="profileInstitution" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
+                </div>
+                <button id="saveLocationBtn" class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 mt-2 shadow-lg shadow-amber-400/10">
+                  Save Selection Changes
+                </button>
+              </div>
             </div>
 
-            <div class="pt-2 border-t border-slate-800 space-y-2">
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-icon"><i class="fas fa-wifi"></i></span>
+                <h3 class="text-white font-black text-xs uppercase tracking-widest">Data & Playback</h3>
+              </div>
+              <div>
+                <label class="settings-row cursor-pointer">
+                  <div class="min-w-0">
+                    <p class="text-white text-xs font-bold">Data Saver Mode</p>
+                    <p class="text-slate-500 text-[10px] mt-0.5">Lower image/video quality to use less data</p>
+                  </div>
+                  <input type="checkbox" id="settingsDataSaver" class="settings-switch">
+                </label>
+                <label class="settings-row cursor-pointer">
+                  <div class="min-w-0">
+                    <p class="text-white text-xs font-bold">Autoplay Videos</p>
+                    <p class="text-slate-500 text-[10px] mt-0.5">Play videos automatically while scrolling</p>
+                  </div>
+                  <input type="checkbox" id="settingsAutoplay" checked class="settings-switch">
+                </label>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-icon"><i class="fas fa-bell"></i></span>
+                <h3 class="text-white font-black text-xs uppercase tracking-widest">Notifications</h3>
+              </div>
+              <div>
+                <label class="settings-row cursor-pointer">
+                  <p class="text-white text-xs font-bold">Messages</p>
+                  <input type="checkbox" id="settingsNotifyMessages" checked class="settings-switch">
+                </label>
+                <label class="settings-row cursor-pointer">
+                  <p class="text-white text-xs font-bold">Likes & Comments</p>
+                  <input type="checkbox" id="settingsNotifyEngagement" checked class="settings-switch">
+                </label>
+                <label class="settings-row cursor-pointer">
+                  <p class="text-white text-xs font-bold">New Followers</p>
+                  <input type="checkbox" id="settingsNotifyFollows" checked class="settings-switch">
+                </label>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <span class="settings-card-icon"><i class="fas fa-shield-halved"></i></span>
+                <h3 class="text-white font-black text-xs uppercase tracking-widest">Privacy & Support</h3>
+              </div>
+              <div>
+                <button onclick="window.openInfoSheet('blocked')" class="settings-row settings-row-link">
+                  <span class="text-xs font-bold">Blocked Users</span>
+                  <i class="fas fa-chevron-right chev"></i>
+                </button>
+                <button onclick="window.openInfoSheet('help')" class="settings-row settings-row-link">
+                  <span class="text-xs font-bold">Help & Support</span>
+                  <i class="fas fa-chevron-right chev"></i>
+                </button>
+                <button onclick="window.openInfoSheet('privacy')" class="settings-row settings-row-link">
+                  <span class="text-xs font-bold">Privacy Policy</span>
+                  <i class="fas fa-chevron-right chev"></i>
+                </button>
+              </div>
+            </div>
+
+            <div class="pt-2 space-y-2">
               <button onclick="window.signOutUser()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
                 <i class="fas fa-sign-out-alt mr-2"></i>Sign Out
               </button>
@@ -978,6 +1188,18 @@
       </div>
     </div>
   </main>
+
+  <!-- Info sheet: full-screen panel used for Privacy Policy, Help & Support,
+       and Blocked Users. Content is filled in by window.openInfoSheet(). -->
+  <div id="info-sheet-overlay" class="info-sheet-overlay">
+    <div class="info-sheet-header">
+      <button class="info-sheet-back" onclick="window.closeInfoSheet()" aria-label="Back">
+        <i class="fas fa-arrow-left"></i>
+      </button>
+      <h2 id="info-sheet-title" class="text-white font-black text-sm uppercase tracking-widest">Loading</h2>
+    </div>
+    <div id="info-sheet-body" class="info-sheet-body"></div>
+  </div>
 
   <div class="bottom-nav-container">
     <nav class="bottom-nav">
@@ -1269,8 +1491,27 @@
         wrap.classList.remove('hidden');
         input?.focus();
       } else {
+        window.closeHeaderSearch();
+      }
+    };
+
+    // Fix: the search bar only ever closed if the person tapped the
+    // search icon a second time — switching tabs (Feed/Explore/DMs/
+    // Profile/Cart) or opening a search result left it sitting open on
+    // screen until a full page refresh. navigateTo() and the search
+    // result tap handler both call this now so the bar always closes
+    // itself the moment it's no longer relevant, and the input/results
+    // are cleared so the next time it's opened it starts fresh instead
+    // of showing the last query.
+    window.closeHeaderSearch = function() {
+      const wrap = document.getElementById('header-search-wrap');
+      const input = document.getElementById('campus-global-search');
+      const results = document.getElementById('search-results');
+      if (wrap && !wrap.classList.contains('hidden')) {
         wrap.classList.add('hidden');
       }
+      if (input) input.value = '';
+      if (results) results.innerHTML = '';
     };
 
     // Live count of attached files for the "Create Listing" modal, and a
@@ -1357,6 +1598,24 @@
 
     if (typeof _setActiveNav === 'function') {
       _setActiveNav(document.getElementById('nav-btn-feed'));
+    }
+  </script>
+
+  <script>
+    // Registers the service worker that caches static app-shell assets
+    // (this HTML shell, app.js, Tailwind/FontAwesome/Google Fonts CDN
+    // scripts, web fonts) so repeat visits on the same campus Wi-Fi or
+    // mobile data don't re-download the same unchanging files every
+    // time. Live app data (posts, likes, DMs, media) is never cached —
+    // see sw.js for exactly what is and isn't touched.
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(() => {
+          // Registration can fail (e.g. served over plain HTTP in some
+          // dev setups) — the app works fine without it, just without
+          // the data savings, so this is intentionally silent.
+        });
+      });
     }
   </script>
 

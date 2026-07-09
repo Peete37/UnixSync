@@ -37,7 +37,16 @@ let currentCommentsChan = null;
 let allCachedPosts      = [];
 let isAuthInitialized   = false;
 let isOnline            = navigator.onLine;
-let currentFeedType     = 'all'; // tracks active tab: all | following | product | skill
+// Fix: this used to be hardcoded to 'all', so any refresh silently
+// bounced the person back to the All tab no matter what they were
+// viewing (Reels, Products, Services, Following). Restoring it from
+// localStorage here means the boot sequence below (which calls
+// filterFeed(currentFeedType, ...)) naturally lands back on the right
+// tab. Falls back to 'all' for first-ever visits or an unrecognized
+// stored value.
+const _validFeedTabs = ['all', 'reels', 'following', 'product', 'skill'];
+const _savedFeedTab  = localStorage.getItem('campus_market_feed_tab');
+let currentFeedType   = _validFeedTabs.includes(_savedFeedTab) ? _savedFeedTab : 'all'; // tracks active tab: all | reels | following | product | skill
 
 // ─── CAMPUS SCOPE STATE ────────────────────────────────────────────────────────
 // Previously institution/region were pure display metadata — every tab
@@ -107,8 +116,23 @@ function updateDmUnreadBadge() {
     }
 }
 
+// Fix: post ids come back from Supabase as a JS `number` (posts.id is
+// bigint), but the same id also flows through HTML onclick attributes
+// (e.g. onclick="likePost('123', this)") which always stringifies it to
+// "123". Set membership is strict-equality based, so 123 !== "123" and a
+// Set mixing both types silently fails half its lookups — this was the
+// real cause of likes (and bookmarks) reading as "unliked"/"unsaved"
+// after a refresh or a fresh scroll-in render even though the DB had the
+// like recorded correctly. Every id is now funneled through this helper
+// before being stored in or checked against an id-keyed Set, so
+// comparisons are always string-to-string regardless of where the id
+// originated.
+const idKey = (id) => String(id);
+
 // Persistent state maps that survive feed re-renders
-const likedPostIds      = new Set(JSON.parse(localStorage.getItem('campus_market_likes') || '[]'));
+const likedPostIds      = new Set(
+    JSON.parse(localStorage.getItem('campus_market_likes') || '[]').map(idKey)
+);
 const openCommentIds    = new Set(); // tracks which comment sections are open
 
 let userCartList = JSON.parse(localStorage.getItem("campus_market_cart") || "[]");
@@ -435,10 +459,14 @@ async function subscribeFeed(baseFilter = null) {
                 .eq("user_id", currentUserData.id);
 
             if (remoteSaves) {
-                const savedIds = remoteSaves.map(s => s.post_id);
-                userCartList = userCartList.filter(item => savedIds.includes(item.id));
+                // Same string/number mismatch as likes (posts.id is bigint,
+                // but ids flowing through onclick attributes are strings) —
+                // normalize both sides through idKey so a saved item never
+                // silently reads as "not bookmarked" after a refresh.
+                const savedIds = remoteSaves.map(s => idKey(s.post_id));
+                userCartList = userCartList.filter(item => savedIds.includes(idKey(item.id)));
                 allCachedPosts.forEach(({ id, data: d }) => {
-                    if (savedIds.includes(id) && !userCartList.some(c => c.id === id)) {
+                    if (savedIds.includes(idKey(id)) && !userCartList.some(c => idKey(c.id) === idKey(id))) {
                         userCartList.push({
                             id,
                             title: d.title,
@@ -469,7 +497,7 @@ async function subscribeFeed(baseFilter = null) {
 
                 if (remoteLikes) {
                     likedPostIds.clear();
-                    remoteLikes.forEach(l => likedPostIds.add(l.post_id));
+                    remoteLikes.forEach(l => likedPostIds.add(idKey(l.post_id)));
                     localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
                 }
             } catch (likeSyncErr) {
@@ -617,6 +645,18 @@ function setNavHighlight(btn, viewId) {
 }
 
 window.navigateTo = function (viewId, btn = null) {
+    // Fix: the header search bar (and its results) used to stay open on
+    // screen after switching tabs — the only thing that closed it was
+    // tapping the search icon a second time. Closing it here means
+    // moving to Feed/Explore/DMs/Profile/Cart always leaves a clean
+    // header behind. _runSearchImmediate() also routes through
+    // navigateTo('explore') on every keystroke to show results, so we
+    // skip the auto-close in that one case — otherwise it would wipe
+    // out the query the person is still typing.
+    if (typeof window.closeHeaderSearch === 'function' && !window._searchNavInProgress) {
+        window.closeHeaderSearch();
+    }
+
     // Stop all reel video audio whenever we leave the feed entirely, so
     // switching to Profile/DMs/etc never leaves background audio playing.
     if (viewId !== 'feed') {
@@ -774,7 +814,7 @@ window.openDetail = async function (postId) {
                 ${isFollowing ? '✓ Following' : '+ Follow'}
             </button>` : '';
 
-        const isAddedToCart  = userCartList.some(item => item.id === d.id);
+        const isAddedToCart  = userCartList.some(item => idKey(item.id) === idKey(d.id));
         const cartText       = isAddedToCart ? "✓ Added to Chart" : "Add to Chart List";
         const cartColorClass = isAddedToCart
             ? "bg-slate-800 border border-slate-700 text-slate-400"
@@ -1450,22 +1490,29 @@ window.likePost = async function (postId, btn) {
         showToast("Error: Missing Post Identifier");
         return;
     }
-    if (likeInFlight.has(postId)) return;
-    likeInFlight.add(postId);
 
-    const liked   = likedPostIds.has(postId);
+    // Normalize once: postId arrives as a string (it's read out of an HTML
+    // attribute), but everywhere else in the app (allCachedPosts, the RPC
+    // calls, etc.) may hold it as the raw bigint number from the DB. Doing
+    // every lookup/comparison through the same string key keeps this
+    // function's behavior consistent regardless of which type shows up.
+    const key = idKey(postId);
+    if (likeInFlight.has(key)) return;
+    likeInFlight.add(key);
+
+    const liked   = likedPostIds.has(key);
     const countEl = btn.querySelector('.like-count');
     const icon    = btn.querySelector('i');
     let currentCount = parseInt(countEl?.textContent || 0);
 
     // 1. Optimistic UI update
     if (liked) {
-        likedPostIds.delete(postId);
+        likedPostIds.delete(key);
         icon.className = 'far fa-heart text-slate-300';
         btn.classList.remove('text-rose-500');
         currentCount = Math.max(0, currentCount - 1);
     } else {
-        likedPostIds.add(postId);
+        likedPostIds.add(key);
         icon.className = 'fas fa-heart text-rose-500';
         btn.classList.add('text-rose-500');
         currentCount = currentCount + 1;
@@ -1475,8 +1522,10 @@ window.likePost = async function (postId, btn) {
     localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
 
     // Keep the in-memory cache in sync so a re-render (tab switch, search,
-    // etc.) before the next DB refresh doesn't show a stale count.
-    const cachedEntry = allCachedPosts.find(p => p.id === postId);
+    // etc.) before the next DB refresh doesn't show a stale count. Compare
+    // via idKey too, since allCachedPosts ids come straight from Supabase
+    // (numbers for a bigint column) while postId here is a string.
+    const cachedEntry = allCachedPosts.find(p => idKey(p.id) === key);
     if (cachedEntry?.data) cachedEntry.data.likes_count = currentCount;
 
     // 2. Execute Backend sync — this is what makes likes survive reload.
@@ -1524,12 +1573,12 @@ window.likePost = async function (postId, btn) {
         // Roll back the optimistic UI exactly, since the write did not
         // actually persist.
         if (liked) {
-            likedPostIds.add(postId);
+            likedPostIds.add(key);
             icon.className = 'fas fa-heart text-rose-500';
             btn.classList.add('text-rose-500');
             currentCount = currentCount + 1;
         } else {
-            likedPostIds.delete(postId);
+            likedPostIds.delete(key);
             icon.className = 'far fa-heart text-slate-300';
             btn.classList.remove('text-rose-500');
             currentCount = Math.max(0, currentCount - 1);
@@ -1540,7 +1589,7 @@ window.likePost = async function (postId, btn) {
 
         showToast("Couldn't save your like — please try again.");
     } finally {
-        likeInFlight.delete(postId);
+        likeInFlight.delete(key);
     }
 };
 
@@ -1621,6 +1670,37 @@ window.postComment = async function(postId, inputEl, parentCommentId = null) {
     lastCommentPostedAt = now;
 
     inputEl.value = '';
+    window._syncCommentSendState(postId, inputEl);
+
+    // Fix: posting used to clear the input and then just wait silently for
+    // the realtime echo to repaint the list — on any network lag it looked
+    // like the tap did nothing. This appends an immediate "sending…"
+    // placeholder bubble so the comment appears the instant it's sent; the
+    // next realtime-triggered fetchAndRender() (see toggleComments) does a
+    // full re-render from the DB and naturally replaces this placeholder
+    // with the real row, so there's no separate cleanup or dedupe needed.
+    const list = document.getElementById(`comment-list-${postId}`);
+    const emptyState = list?.querySelector('.far.fa-comment-dots')?.closest('div');
+    if (emptyState) emptyState.remove();
+    if (list) {
+        const metadata = currentUserData.user_metadata || {};
+        list.insertAdjacentHTML('beforeend', renderCommentItem({
+            id: `pending-${now}`,
+            user_id: currentUserData.id,
+            user_name: metadata.full_name || 'Anonymous Student',
+            user_avatar: metadata.avatar_url || '',
+            text,
+            parent_comment_id: parentCommentId,
+            created_at: new Date().toISOString(),
+            likes_count: 0
+        }, postId));
+        const pendingEl = document.getElementById(`comment-item-pending-${now}`);
+        if (pendingEl) {
+            pendingEl.style.opacity = '0.55';
+            pendingEl.querySelectorAll('button').forEach(b => b.disabled = true);
+        }
+        list.scrollTop = list.scrollHeight;
+    }
 
     try {
         const metadata = currentUserData.user_metadata || {};
@@ -1633,9 +1713,20 @@ window.postComment = async function(postId, inputEl, parentCommentId = null) {
             created_at: new Date().toISOString()
         };
         if (parentCommentId) insertPayload.parent_comment_id = parentCommentId;
-        await supabase.from('comments').insert(insertPayload);
+        const { error } = await supabase.from('comments').insert(insertPayload);
+        if (error) throw error;
     } catch(err) {
         console.error("Comment submission error:", err);
+        // RLS policies added for blocking (see blocked_users_rls.sql) reject
+        // the insert outright if either person has blocked the other —
+        // this is the only way to know that happened when it's the OTHER
+        // person who blocked you, since your local blockedUserIds set has
+        // no way of knowing about a block made from their side.
+        const isBlockRejection = err?.code === '42501' || /row-level security/i.test(err?.message || '');
+        showToast(isBlockRejection
+            ? "This comment couldn't be posted."
+            : "Couldn't post your comment — please try again.");
+        document.getElementById(`comment-item-pending-${now}`)?.remove();
     }
 };
 
@@ -1675,23 +1766,45 @@ window.submitCommentFromInput = function (postId, inputEl) {
     if (parentId) window.cancelCommentReply(postId);
 };
 
-const likedCommentIds = new Set(JSON.parse(localStorage.getItem('campus_market_comment_likes') || '[]'));
+// Enables/disables the paper-plane send button based on whether there's
+// actual (trimmed) text to send — mirrors the disabled feel of iMessage/
+// WhatsApp send buttons rather than always looking tappable.
+window._syncCommentSendState = function (postId, inputEl) {
+    const sendBtn = document.getElementById(`comment-send-${postId}`);
+    if (sendBtn) sendBtn.disabled = inputEl.value.trim().length === 0;
+};
+
+// The Send button doesn't have a direct reference to its input the way
+// the onkeydown handler does, so it looks the input up by shared
+// container instead of relying on DOM sibling order (which would break
+// silently if the markup around it ever changes).
+window._submitFromSendBtn = function (postId) {
+    const input = document.querySelector(`#comments-${CSS.escape(postId)} .comment-input-field`);
+    if (input) window.submitCommentFromInput(postId, input);
+};
+
+// Same string/number id mismatch as posts (comments.id is also a bigint
+// primary key) — normalized through idKey for the same reason.
+const likedCommentIds = new Set(
+    JSON.parse(localStorage.getItem('campus_market_comment_likes') || '[]').map(idKey)
+);
 
 window.likeComment = async function (commentId, btn) {
     if (!currentUserData) { showToast("Please sign in to like comments."); return; }
 
-    const liked = likedCommentIds.has(commentId);
+    const key = idKey(commentId);
+    const liked = likedCommentIds.has(key);
     const countEl = btn.querySelector('.comment-like-count');
     const icon = btn.querySelector('i');
     let count = parseInt(countEl?.textContent || 0);
 
     if (liked) {
-        likedCommentIds.delete(commentId);
-        icon.className = 'far fa-thumbs-up text-slate-400';
+        likedCommentIds.delete(key);
+        icon.className = 'far fa-heart text-slate-400';
         count = Math.max(0, count - 1);
     } else {
-        likedCommentIds.add(commentId);
-        icon.className = 'fas fa-thumbs-up text-amber-400';
+        likedCommentIds.add(key);
+        icon.className = 'fas fa-heart text-rose-500';
         count = count + 1;
     }
     if (countEl) countEl.textContent = count;
@@ -1751,25 +1864,41 @@ window.deleteComment = function (commentId, postId) {
     });
 };
 
+// Expands a collapsed reply group (see fetchAndRender inside
+// toggleComments) and hides the "View N more replies" toggle that
+// revealed it.
+window._expandReplies = function (groupId) {
+    document.getElementById(groupId)?.classList.remove('hidden');
+    document.getElementById(`toggle-${groupId}`)?.classList.add('hidden');
+};
+
 function renderCommentItem(c, postId) {
-    const isLiked = likedCommentIds.has(c.id);
-    const heartClass = isLiked ? 'fas fa-thumbs-up text-amber-400' : 'far fa-thumbs-up text-slate-400';
+    const isLiked = likedCommentIds.has(idKey(c.id));
+    const heartClass = isLiked ? 'fas fa-heart text-rose-500' : 'far fa-heart text-slate-400';
     const isOwn = currentUserData && c.user_id === currentUserData.id;
     const indentClass = c.parent_comment_id ? 'ml-7' : '';
+    const avatarFallback = `https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(c.user_name || 'U')}`;
+    const bubbleClass = isOwn
+        ? 'bg-amber-400/10 border-amber-400/25'
+        : 'bg-slate-800 border-slate-700/20';
 
     return `
-        <div class="flex gap-2 items-start text-left mt-2 ${indentClass}" id="comment-item-${escAttr(c.id)}">
-            <img src="${esc(c.user_avatar) || 'https://ui-avatars.com/api/?name=U'}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
-            <div class="bg-slate-800 rounded-2xl px-3 py-2 flex-1 border border-slate-700/20">
+        <div class="flex gap-2 items-start text-left mt-2.5 ${indentClass}" id="comment-item-${escAttr(c.id)}">
+            <img src="${esc(c.user_avatar) || avatarFallback}" onerror="this.onerror=null; this.src='${avatarFallback}'" class="w-7 h-7 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
+            <div class="${bubbleClass} rounded-2xl px-3 py-2 flex-1 border min-w-0">
                 <div class="flex items-start justify-between gap-2">
-                    <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(c.user_name)}</p>
-                    <button onclick="window.openCommentOptionsMenu('${escAttr(c.id)}', '${escAttr(postId)}', ${isOwn ? 'true' : 'false'})" class="text-slate-500 hover:text-white transition shrink-0 -mt-0.5 -mr-1 px-1.5 py-0.5" aria-label="More options">
+                    <div class="flex items-baseline gap-1.5 min-w-0">
+                        <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide truncate">${esc(c.user_name)}</p>
+                        ${isOwn ? '<span class="text-[8px] text-amber-400/60 font-bold uppercase shrink-0">You</span>' : ''}
+                        <span class="text-[9px] text-slate-500 shrink-0">· ${timeAgo(c.created_at)}</span>
+                    </div>
+                    <button onclick="window.openCommentOptionsMenu('${escAttr(c.id)}', '${escAttr(postId)}', ${isOwn ? 'true' : 'false'}, '${escAttr(c.user_id)}', '${escAttr(c.user_name)}')" class="text-slate-500 hover:text-white transition shrink-0 -mt-0.5 -mr-1 px-1.5 py-0.5" aria-label="More options">
                         <i class="fas fa-ellipsis-vertical text-[11px]"></i>
                     </button>
                 </div>
-                <p class="text-xs text-slate-200 mt-0.5">${esc(c.text)}</p>
+                <p class="text-xs text-slate-200 mt-0.5 break-words">${esc(c.text)}</p>
                 <div class="flex items-center gap-3 mt-1.5">
-                    <button onclick="window.likeComment('${escAttr(c.id)}', this)" class="flex items-center gap-1">
+                    <button onclick="window.likeComment('${escAttr(c.id)}', this)" class="flex items-center gap-1 active:scale-90 transition">
                         <i class="${heartClass} text-[11px]"></i>
                         <span class="comment-like-count text-[10px] text-slate-400 font-semibold">${parseInt(c.likes_count || 0)}</span>
                     </button>
@@ -1846,19 +1975,50 @@ window.toggleComments = async function (postId) {
         updateCommentCountUI(postId, count ?? (comments ? comments.length : 0));
 
         if (!comments || comments.length === 0) {
-            list.innerHTML = `<p class="text-[10px] text-slate-600 italic py-2 pl-1">No comments yet. Start the chat!</p>`;
+            list.innerHTML = `
+                <div class="flex flex-col items-center justify-center text-center py-8 px-4">
+                    <i class="far fa-comment-dots text-2xl text-slate-700 mb-2"></i>
+                    <p class="text-xs text-slate-400 font-semibold">No comments yet</p>
+                    <p class="text-[10px] text-slate-600 mt-0.5">Be the first to say something</p>
+                </div>`;
             return;
         }
 
-        // Top-level comments first, replies immediately after their parent
+        // Top-level comments first, replies immediately after their parent.
+        // idKey() here matters for the same reason it does everywhere else
+        // in the app — comment ids are bigints from the DB, and comparing
+        // them without normalizing types silently drops replies from view.
         const topLevel = comments.filter(c => !c.parent_comment_id);
         const replies  = comments.filter(c => c.parent_comment_id);
+        const REPLY_PREVIEW_COUNT = 2;
 
         topLevel.forEach(c => {
             list.innerHTML += renderCommentItem(c, postId);
-            replies.filter(r => r.parent_comment_id === c.id).forEach(r => {
-                list.innerHTML += renderCommentItem(r, postId);
-            });
+            const childReplies = replies.filter(r => idKey(r.parent_comment_id) === idKey(c.id));
+            if (childReplies.length === 0) return;
+
+            if (childReplies.length <= REPLY_PREVIEW_COUNT) {
+                childReplies.forEach(r => { list.innerHTML += renderCommentItem(r, postId); });
+                return;
+            }
+
+            // Long threads start collapsed to a couple of replies with a
+            // "View N more replies" toggle, instead of always dumping every
+            // reply into view — keeps a busy thread scannable.
+            const groupId = `replies-${idKey(c.id)}`;
+            childReplies.slice(0, REPLY_PREVIEW_COUNT).forEach(r => { list.innerHTML += renderCommentItem(r, postId); });
+            list.innerHTML += `
+                <button
+                    id="toggle-${groupId}"
+                    onclick="window._expandReplies('${escAttr(groupId)}')"
+                    class="ml-7 mt-1 text-[10px] text-amber-400/80 hover:text-amber-400 font-bold flex items-center gap-1.5"
+                >
+                    <span class="w-5 h-px bg-slate-700"></span>
+                    View ${childReplies.length - REPLY_PREVIEW_COUNT} more repl${childReplies.length - REPLY_PREVIEW_COUNT === 1 ? 'y' : 'ies'}
+                </button>
+                <div id="${groupId}" class="hidden">
+                    ${childReplies.slice(REPLY_PREVIEW_COUNT).map(r => renderCommentItem(r, postId)).join('')}
+                </div>`;
         });
     };
 
@@ -2024,6 +2184,155 @@ window._runOptionsMenuAction = function (index) {
     }
 };
 
+// ─── BLOCKING ───────────────────────────────────────────────────────────────
+// Blocking a person hides their posts from your feed and hides/prevents
+// DMs with them — it does NOT delete anything they've already posted or
+// notify them in any way. Mirrors the `reports` table's fallback pattern:
+// if a `blocked_users` table isn't set up yet in Supabase, blocks are kept
+// in localStorage on this device so the feature still works end-to-end
+// (including unblocking) rather than being a dead end.
+//
+// Suggested table (create this in Supabase for the block to sync across
+// devices and actually filter server-side data other people send you):
+//   create table blocked_users (
+//     id bigint generated always as identity primary key,
+//     blocker_id uuid not null references auth.users(id),
+//     blocked_id uuid not null references auth.users(id),
+//     blocked_name text,
+//     created_at timestamptz not null default now(),
+//     unique (blocker_id, blocked_id)
+//   );
+//   alter table blocked_users enable row level security;
+//   create policy "read own blocks" on blocked_users for select using (auth.uid() = blocker_id);
+//   create policy "insert own blocks" on blocked_users for insert with check (auth.uid() = blocker_id);
+//   create policy "delete own blocks" on blocked_users for delete using (auth.uid() = blocker_id);
+const blockedUserIds = new Set(
+    JSON.parse(localStorage.getItem('campus_market_blocked_users') || '[]').map(idKey)
+);
+// Keeps display names alongside ids so the Blocked Users settings list has
+// something to show even before/without a `blocked_users` table (which
+// would otherwise require a join back to `profiles` to get a name).
+let blockedUserNames = JSON.parse(localStorage.getItem('campus_market_blocked_names') || '{}');
+
+function _persistBlockedLocally() {
+    localStorage.setItem('campus_market_blocked_users', JSON.stringify([...blockedUserIds]));
+    localStorage.setItem('campus_market_blocked_names', JSON.stringify(blockedUserNames));
+}
+
+// Pulls the signed-in person's block list from Supabase (if the table
+// exists) so blocks made on another device are respected here too, then
+// falls back to whatever's in localStorage if the table isn't there yet.
+async function syncBlockedUsers() {
+    if (!currentUserData) return;
+    try {
+        const { data, error } = await supabase
+            .from('blocked_users')
+            .select('blocked_id, blocked_name')
+            .eq('blocker_id', currentUserData.id);
+        if (error) throw error;
+
+        blockedUserIds.clear();
+        blockedUserNames = {};
+        (data || []).forEach(row => {
+            const key = idKey(row.blocked_id);
+            blockedUserIds.add(key);
+            if (row.blocked_name) blockedUserNames[key] = row.blocked_name;
+        });
+        _persistBlockedLocally();
+    } catch (err) {
+        // No table yet (or RLS not set up) — silently keep using whatever
+        // is already in localStorage from a previous local-only block.
+        console.warn('Blocked-users sync skipped (using local list):', err);
+    }
+}
+
+window.blockUser = function (userId, userName = 'this student') {
+    if (!currentUserData) { showToast('Please sign in to block someone.'); return; }
+    if (!userId) { showToast("Couldn't identify this user — please try again."); return; }
+    if (idKey(userId) === idKey(currentUserData.id)) return;
+
+    showConfirmDialog({
+        title: `Block ${userName}?`,
+        message: "You won't see their posts anymore, and neither of you can message the other. You can unblock them anytime from Campus Settings.",
+        confirmLabel: 'Block',
+        danger: true,
+        onConfirm: async () => {
+            const key = idKey(userId);
+            blockedUserIds.add(key);
+            blockedUserNames[key] = userName;
+            _persistBlockedLocally();
+
+            // A blocked person's existing posts/threads are already on
+            // screen in some cases (feed cache, open inbox) — refresh
+            // whatever's currently visible so the block takes effect
+            // immediately instead of only on next reload.
+            try { renderFeedFromCache(); } catch (_) {}
+            try { if (document.getElementById('dms-content') && !activeConversationId) renderInboxList(); } catch (_) {}
+            if (activeConversationPeer && idKey(activeConversationPeer.id) === key) {
+                window.closeDMThread();
+            }
+
+            try {
+                const { error } = await supabase.from('blocked_users').insert({
+                    blocker_id: currentUserData.id,
+                    blocked_id: userId,
+                    blocked_name: userName
+                });
+                if (error) throw error;
+            } catch (err) {
+                console.warn('Block insert failed, kept locally only:', err);
+            }
+
+            // Blocking someone also breaks any follow relationship between
+            // you two, in either direction — matches what people expect
+            // from blocking on other apps, and avoids the odd state of
+            // still "following" someone you've just blocked.
+            try {
+                await supabase.from('follows').delete()
+                    .eq('follower_id', currentUserData.id).eq('following_id', userId);
+                await supabase.from('follows').delete()
+                    .eq('follower_id', userId).eq('following_id', currentUserData.id);
+            } catch (err) {
+                console.warn('Follow cleanup on block failed:', err);
+            }
+
+            showToast(`${userName} is blocked.`);
+        }
+    });
+};
+
+window.unblockUser = function (userId, userName = 'this student') {
+    const key = idKey(userId);
+
+    showConfirmDialog({
+        title: `Unblock ${userName}?`,
+        message: "They'll be able to message you again and their posts will show up in your feed.",
+        confirmLabel: 'Unblock',
+        danger: false,
+        onConfirm: async () => {
+            blockedUserIds.delete(key);
+            delete blockedUserNames[key];
+            _persistBlockedLocally();
+
+            try { renderFeedFromCache(); } catch (_) {}
+            if (document.getElementById('info-sheet-overlay')?.classList.contains('sheet-open')) {
+                window.openInfoSheet('blocked');
+            }
+
+            try {
+                await supabase.from('blocked_users')
+                    .delete()
+                    .eq('blocker_id', currentUserData.id)
+                    .eq('blocked_id', userId);
+            } catch (err) {
+                console.warn('Unblock delete failed remotely, removed locally only:', err);
+            }
+
+            showToast(`${userName} unblocked.`);
+        }
+    });
+};
+
 // ─── REPORTING ────────────────────────────────────────────────────────────────
 // Previously "Report" just showed a toast and did nothing at all — no
 // record was kept anywhere, so it was a dead end dressed up as a real
@@ -2064,27 +2373,31 @@ async function submitReport(targetType, targetId, reason = 'unspecified') {
 }
 
 // Post options: only the owner gets a real "Delete listing"; everyone
-// else gets a "Report" action that now actually persists (see
-// submitReport above) instead of being a dead-end toast.
-window.openPostOptionsMenu = function (postId, isOwn) {
+// else gets "Report" (persists — see submitReport above) and "Block
+// user" (hides this person's posts and DMs — see blockUser above).
+window.openPostOptionsMenu = function (postId, isOwn, authorId = null, authorName = 'this student') {
     const items = isOwn
         ? [
             { label: 'Delete listing', icon: 'fas fa-trash-can', danger: true, action: () => window.deletePost(postId) }
           ]
         : [
-            { label: 'Report listing', icon: 'fas fa-flag', action: () => submitReport('post', postId) }
+            { label: 'Report listing', icon: 'fas fa-flag', action: () => submitReport('post', postId) },
+            { divider: true },
+            { label: `Block ${authorName}`, icon: 'fas fa-user-slash', danger: true, action: () => window.blockUser(authorId, authorName) }
           ];
     openOptionsMenu(items);
 };
 
-// Comment options: owner gets Delete; everyone else gets Report.
-window.openCommentOptionsMenu = function (commentId, postId, isOwn) {
+// Comment options: owner gets Delete; everyone else gets Report + Block.
+window.openCommentOptionsMenu = function (commentId, postId, isOwn, authorId = null, authorName = 'this student') {
     const items = isOwn
         ? [
             { label: 'Delete comment', icon: 'fas fa-trash-can', danger: true, action: () => window.deleteComment(commentId, postId) }
           ]
         : [
-            { label: 'Report comment', icon: 'fas fa-flag', action: () => submitReport('comment', commentId) }
+            { label: 'Report comment', icon: 'fas fa-flag', action: () => submitReport('comment', commentId) },
+            { divider: true },
+            { label: `Block ${authorName}`, icon: 'fas fa-user-slash', danger: true, action: () => window.blockUser(authorId, authorName) }
           ];
     openOptionsMenu(items);
 };
@@ -2147,13 +2460,13 @@ function renderFeedCard(id, d) {
 
     const deleteBlock = `
         <button
-            onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? 'true' : 'false'})"
+            onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? 'true' : 'false'}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')"
             class="post-options-trigger"
             aria-label="More options">
             <i class="fas fa-ellipsis-vertical"></i>
         </button>`;
 
-    const isLiked       = likedPostIds.has(id);
+    const isLiked       = likedPostIds.has(idKey(id));
     const heartClass    = isLiked ? 'fas fa-heart text-rose-500' : 'far fa-heart text-slate-300';
     const likedData     = isLiked ? 'true' : 'false';
 
@@ -2162,7 +2475,7 @@ function renderFeedCard(id, d) {
     const displayLikes  = parseInt(d.likes_count || 0);
     const displayComments = commentCountCache[id] ?? parseInt(d.comments_count || 0);
 
-    const isAddedToCart  = userCartList.some(item => item.id === id);
+    const isAddedToCart  = userCartList.some(item => idKey(item.id) === idKey(id));
     const bookmarkClass  = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
 
     registerPostContext(id, d, mediaUrls[0] || '');
@@ -2230,11 +2543,23 @@ function renderFeedCard(id, d) {
             <div class="flex items-center gap-1.5">
                 <input
                     type="text"
+                    inputmode="text"
+                    maxlength="500"
                     placeholder="Add a comment…"
-                    class="flex-1 bg-slate-800/80 border border-slate-700/50 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
+                    class="comment-input-field flex-1 bg-slate-800/80 border border-slate-700/50 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
+                    oninput="window._syncCommentSendState('${escAttr(id)}', this)"
                     onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
                 >
                 <button id="cancel-reply-${escAttr(id)}" onclick="window.cancelCommentReply('${escAttr(id)}')" class="hidden text-[10px] text-slate-500 hover:text-white px-1">✕</button>
+                <button
+                    id="comment-send-${escAttr(id)}"
+                    disabled
+                    onclick="window._submitFromSendBtn('${escAttr(id)}')"
+                    class="comment-send-btn shrink-0 w-8 h-8 rounded-xl bg-amber-400 text-black flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed active:scale-90"
+                    aria-label="Send comment"
+                >
+                    <i class="fas fa-paper-plane text-[11px]"></i>
+                </button>
             </div>
             <div id="comment-list-${escAttr(id)}" class="max-h-36 overflow-y-auto space-y-1.5 custom-scrollbar"></div>
         </div>
@@ -2253,14 +2578,15 @@ function renderProductGridCard(id, d) {
     }
 
     const isVideo = d.media_type === 'video';
-    const isAddedToCart = userCartList.some(item => item.id === id);
+    const isAddedToCart = userCartList.some(item => idKey(item.id) === idKey(id));
     const bookmarkClass = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-white/80";
 
     return `
     <div class="bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden" id="grid-card-${escAttr(id)}">
         <div class="relative aspect-square w-full bg-slate-950 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
             ${isVideo
-                ? `<video class="w-full h-full object-cover" muted loop playsinline autoplay src="${esc(mediaUrl)}"></video>`
+                ? `<video class="w-full h-full object-cover" muted loop playsinline preload="none" src="${esc(mediaUrl)}"></video>
+                   <div class="absolute top-2 left-2 w-6 h-6 rounded-full bg-black/50 flex items-center justify-center text-white text-[10px]"><i class="fas fa-play"></i></div>`
                 : `<img class="w-full h-full object-cover" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
             }
             <button
@@ -2478,16 +2804,16 @@ function renderReelCard(id, d) {
     }
     const videoUrl = mediaUrls[0] || '';
 
-    const isLiked = likedPostIds.has(id);
+    const isLiked = likedPostIds.has(idKey(id));
     const heartClass = isLiked ? 'fas fa-heart text-rose-500' : 'far fa-heart text-white';
     const displayLikes = parseInt(d.likes_count || 0);
     const displayComments = commentCountCache[id] ?? parseInt(d.comments_count || 0);
-    const isAddedToCart = userCartList.some(item => item.id === id);
+    const isAddedToCart = userCartList.some(item => idKey(item.id) === idKey(id));
     const bookmarkClass = isAddedToCart ? 'fas fa-bookmark text-amber-400' : 'far fa-bookmark text-white';
     const isOwnPost = currentUserData && d.user_id === currentUserData.id;
 
     const deleteBlock = `
-        <button onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? 'true' : 'false'})" class="reel-action-btn">
+        <button onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? 'true' : 'false'}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="reel-action-btn">
             <i class="fas fa-ellipsis-vertical text-white text-lg"></i>
         </button>`;
 
@@ -2542,11 +2868,23 @@ function renderReelCard(id, d) {
             <div class="comments-input-row flex items-center gap-1.5">
                 <input
                     type="text"
+                    inputmode="text"
+                    maxlength="500"
                     placeholder="Add a comment…"
-                    class="flex-1 bg-white/10 border border-white/20 text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none focus:border-amber-400 transition"
+                    class="comment-input-field flex-1 bg-white/10 border border-white/20 text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none focus:border-amber-400 transition"
+                    oninput="window._syncCommentSendState('${escAttr(id)}', this)"
                     onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
                 >
                 <button id="cancel-reply-${escAttr(id)}" onclick="window.cancelCommentReply('${escAttr(id)}')" class="hidden text-[10px] text-white/60 hover:text-white px-1">✕</button>
+                <button
+                    id="comment-send-${escAttr(id)}"
+                    disabled
+                    onclick="window._submitFromSendBtn('${escAttr(id)}')"
+                    class="comment-send-btn shrink-0 w-8 h-8 rounded-xl bg-amber-400 text-black flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed active:scale-90"
+                    aria-label="Send comment"
+                >
+                    <i class="fas fa-paper-plane text-[11px]"></i>
+                </button>
             </div>
         </div>
     </div>`;
@@ -2620,7 +2958,7 @@ window.toggleCartItem = async function (postId) {
         return;
     }
 
-    const index = userCartList.findIndex(item => item.id === postId);
+    const index = userCartList.findIndex(item => idKey(item.id) === idKey(postId));
     const isRemoving = index > -1;
 
     // 1. Optimistic UI: Handle local mutations instantly
@@ -2785,6 +3123,47 @@ async function refreshFollowButtonStates() {
     }
 }
 
+// Shared delete implementation: removes the post's media from storage,
+// deletes the DB row (scoped to the current user so someone can't delete
+// another person's post even by guessing an id), and cleans up any local
+// caches that reference it. Used by both the single-post delete (options
+// menu) and the "My Gigs & Posts" bulk delete, so there's exactly one
+// place that knows how to fully remove a post.
+async function _deletePostById(postId) {
+    const { data: currentPost, error: fetchErr } = await supabase
+        .from("posts")
+        .select("media_url")
+        .eq("id", postId)
+        .single();
+
+    if (fetchErr) throw fetchErr;
+
+    if (currentPost?.media_url) {
+        const targets = currentPost.media_url.startsWith('[') ? JSON.parse(currentPost.media_url) : [currentPost.media_url];
+        for (const url of targets) {
+            const pathParts   = url.split('/storage/v1/object/public/posts/');
+            const storagePath = pathParts[1];
+            if (storagePath) await supabase.storage.from("posts").remove([storagePath]);
+        }
+    }
+
+    const { error: dbDeleteErr } = await supabase
+        .from("posts")
+        .delete()
+        .eq("id", postId)
+        .eq("user_id", currentUserData.id);
+
+    if (dbDeleteErr) throw dbDeleteErr;
+
+    const cartIndex = userCartList.findIndex(item => idKey(item.id) === idKey(postId));
+    if (cartIndex > -1) {
+        userCartList.splice(cartIndex, 1);
+        localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
+    }
+
+    allCachedPosts = allCachedPosts.filter(item => idKey(item.id) !== idKey(postId));
+}
+
 window.deletePost = function (postId) {
     if (!currentUserData) return;
 
@@ -2795,39 +3174,8 @@ window.deletePost = function (postId) {
         danger: true,
         onConfirm: async () => {
             try {
-                const { data: currentPost, error: fetchErr } = await supabase
-                    .from("posts")
-                    .select("media_url")
-                    .eq("id", postId)
-                    .single();
-
-                if (fetchErr) throw fetchErr;
-
-                if (currentPost?.media_url) {
-                    const targets = currentPost.media_url.startsWith('[') ? JSON.parse(currentPost.media_url) : [currentPost.media_url];
-                    for (const url of targets) {
-                        const pathParts   = url.split('/storage/v1/object/public/posts/');
-                        const storagePath = pathParts[1];
-                        if (storagePath) await supabase.storage.from("posts").remove([storagePath]);
-                    }
-                }
-
-                const { error: dbDeleteErr } = await supabase
-                    .from("posts")
-                    .delete()
-                    .eq("id", postId)
-                    .eq("user_id", currentUserData.id);
-
-                if (dbDeleteErr) throw dbDeleteErr;
-
-                const cartIndex = userCartList.findIndex(item => item.id === postId);
-                if (cartIndex > -1) {
-                    userCartList.splice(cartIndex, 1);
-                    localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
-                }
-
+                await _deletePostById(postId);
                 showToast("Post deleted successfully! ✓");
-                allCachedPosts = allCachedPosts.filter(item => item.id !== postId);
                 renderFeedFromCache();
             } catch (err) {
                 console.error("Error deleting post from database:", err);
@@ -2951,6 +3299,17 @@ function renderFeedFromCache() {
     const feed = document.getElementById('posts-feed');
     if (!feed) return;
 
+    // Blocking a user should hide their posts everywhere in the app —
+    // rather than patching every fetch site that populates
+    // allCachedPosts (subscribeFeed, loadNextFeedPage, loadFollowingFeed,
+    // loadNextFollowingPage, search, etc.) individually and risking one
+    // being missed later, this single filter runs right before anything
+    // paints to the screen, so it's a guarantee regardless of which path
+    // put a post in the cache.
+    if (blockedUserIds.size > 0) {
+        allCachedPosts = allCachedPosts.filter(({ data: d }) => !blockedUserIds.has(idKey(d.user_id)));
+    }
+
     // Reels tab: full-bleed vertical video feed, TikTok-style
     if (currentFeedType === 'reels') {
         renderReelsFeed();
@@ -3046,6 +3405,11 @@ window.filterFeed = function (type, clickedBtn = null) {
 
     const previousType = currentFeedType;
     currentFeedType = type;
+
+    // Remember the active tab so a refresh lands back where the person
+    // actually was (Reels, Products, Services, Following...) instead of
+    // always resetting to "All".
+    localStorage.setItem('campus_market_feed_tab', type);
 
     // Leaving Reels: stop any playing video audio immediately.
     if (previousType === 'reels' && type !== 'reels') {
@@ -3192,11 +3556,15 @@ async function _runSearchImmediate(term) {
 
     const trimmedTerm = term.trim();
     if (!trimmedTerm) {
+        window._searchNavInProgress = true;
         window.navigateTo('feed');
+        window._searchNavInProgress = false;
         return;
     }
 
+    window._searchNavInProgress = true;
     window.navigateTo('explore');
+    window._searchNavInProgress = false;
     resultsEl.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Searching Campus...</div>`;
     const lower = trimmedTerm.toLowerCase();
 
@@ -3440,6 +3808,11 @@ async function loadProfileStats() {
         setEl('profile-following-count', followingRes.count || 0);
         setEl('profile-posts-count', postsCount);
 
+        // The grid is about to be rebuilt from scratch, so any select-mode
+        // state (checkmarks, the toolbar) referring to the old tiles would
+        // otherwise be left dangling.
+        if (typeof window.exitGridSelectMode === 'function') window.exitGridSelectMode();
+
         const grid = document.getElementById('profile-grid');
         if (grid) {
             grid.innerHTML = '';
@@ -3481,6 +3854,15 @@ function populateAccountSettings() {
     }
     if (emailInput) {
         emailInput.value = currentUserData.email || '';
+    }
+
+    const stripName = document.getElementById('settingsCampusStripName');
+    const stripInst = document.getElementById('settingsCampusStripInst');
+    if (stripName) stripName.textContent = metadata.full_name || currentUserData.email || 'Campus Account';
+    if (stripInst) {
+        stripInst.textContent = currentUserData.institution
+            ? `${currentUserData.institution}${currentUserData.region ? ' · ' + currentUserData.region : ''}`
+            : 'Set your institution below';
     }
 }
 
@@ -3554,6 +3936,95 @@ function saveAppSettings(partial) {
 // Exposed so other parts of the app (media pipeline, video observers) can
 // check the current preference without re-reading localStorage directly.
 window.getAppSettings = getAppSettings;
+
+// ─── INFO SHEET: Privacy Policy / Help & Support / Blocked Users ────────────
+// Replaces the old "Coming soon" toast placeholders with real, readable
+// content. Blocked Users is honest about the fact that there's no
+// block-a-person feature wired up yet (it would need its own table + RLS
+// + feed filtering — a separate feature, not a settings-page fix) rather
+// than faking a list or silently doing nothing.
+const INFO_SHEET_CONTENT = {
+    privacy: {
+        title: 'Privacy Policy',
+        render: () => `
+            <h4>What we collect</h4>
+            <p>Your name, email, institution, and region come from sign-in and onboarding so listings and gigs can be matched to your campus. Anything you post — photos, videos, descriptions, prices, messages — is stored so it can be shown to other students.</p>
+            <h4>How it's used</h4>
+            <p>Your posts and profile are shown to other students on your campus (or nationwide, if you switch off campus scope). Direct messages are only visible to you and the other person in the conversation.</p>
+            <h4>What we don't do</h4>
+            <p>CampusMarket doesn't sell your data to advertisers, and doesn't share your contact details with anyone outside a conversation you've started yourself.</p>
+            <h4>Your choices</h4>
+            <p>You can edit your display name and campus at any time from this Settings tab. Deleting your account removes your posts, comments, and profile information.</p>
+            <h4>Questions</h4>
+            <p>Reach out through Help & Support above if you'd like more detail on anything here.</p>
+        `
+    },
+    help: {
+        title: 'Help & Support',
+        render: () => `
+            <h4>Buying or selling</h4>
+            <p>Tap Contact Seller on any listing to open a direct message with the person who posted it. Prices and availability are set by the student posting, not by CampusMarket.</p>
+            <h4>Reporting a problem</h4>
+            <p>Open the listing or message you want to report and use the options menu (⋯) to send a report. A team member reviews every report.</p>
+            <h4>Account issues</h4>
+            <p>If you're locked out or something looks wrong with your profile, email the address below with your registered email and a short description.</p>
+            <h4>Data usage</h4>
+            <p>Turn on Data Saver Mode above to load lower-quality media and use less data on campus Wi-Fi or mobile data.</p>
+            <h4>Contact</h4>
+            <p><a href="mailto:support@campusmarket.app" class="text-amber-400 font-bold">support@campusmarket.app</a></p>
+        `
+    },
+    blocked: {
+        title: 'Blocked Users',
+        render: () => {
+            const ids = [...blockedUserIds];
+            if (ids.length === 0) {
+                return `
+                    <div class="info-sheet-empty">
+                        <i class="fas fa-user-shield text-3xl mb-3 text-slate-600"></i>
+                        <p class="text-slate-300 font-bold text-sm mb-1">No blocked users</p>
+                        <p class="text-xs max-w-[240px] leading-relaxed">When you block someone from a post, comment, or chat, they'll show up here so you can unblock them anytime.</p>
+                    </div>
+                `;
+            }
+            return ids.map(id => {
+                const name = blockedUserNames[id] || 'Student';
+                const fallbackAvatar = `https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(name)}`;
+                return `
+                    <div class="blocked-user-row">
+                        <img src="${fallbackAvatar}" alt="">
+                        <p class="text-white text-sm font-bold flex-1 truncate">${esc(name)}</p>
+                        <button
+                            onclick="window.unblockUser('${escAttr(id)}', '${escAttr(name)}')"
+                            class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-[11px] font-black uppercase tracking-wider px-3 py-1.5 rounded-lg shrink-0 active:scale-95 transition"
+                        >
+                            Unblock
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        }
+    }
+};
+
+window.openInfoSheet = function (key) {
+    const entry = INFO_SHEET_CONTENT[key];
+    const overlay = document.getElementById('info-sheet-overlay');
+    const titleEl  = document.getElementById('info-sheet-title');
+    const bodyEl   = document.getElementById('info-sheet-body');
+    if (!entry || !overlay || !titleEl || !bodyEl) return;
+
+    titleEl.textContent = entry.title;
+    bodyEl.innerHTML = entry.render();
+    bodyEl.scrollTop = 0;
+    overlay.classList.add('sheet-open');
+    pushUiState('info-sheet', () => window.closeInfoSheet(true));
+};
+
+window.closeInfoSheet = function (fromPop = false) {
+    document.getElementById('info-sheet-overlay')?.classList.remove('sheet-open');
+    if (!fromPop) popUiState('info-sheet');
+};
 
 function initSettingsToggles() {
     const settings = getAppSettings();
@@ -3671,6 +4142,8 @@ document.getElementById('saveLocationBtn')?.addEventListener('click', async () =
 
         const locationEl = document.getElementById('profile-ui-location');
         if (locationEl) locationEl.textContent = `${institution} · ${region}`;
+        const stripInst = document.getElementById('settingsCampusStripInst');
+        if (stripInst) stripInst.textContent = `${institution} · ${region}`;
         showToast('Settings updated ✓');
 
         // Institution may have just changed — refresh the scope banner
@@ -3754,7 +4227,12 @@ function renderInboxList() {
     const content = document.getElementById('dms-content');
     if (!content) return;
 
-    if (conversationsCache.length === 0) {
+    // A blocked person's existing conversation is hidden from the inbox
+    // entirely (not deleted — unblocking brings it right back) so it
+    // reads as "gone" rather than sitting there unusable.
+    const visibleConversations = conversationsCache.filter(conv => !blockedUserIds.has(idKey(dmPeerInfo(conv).id)));
+
+    if (visibleConversations.length === 0) {
         content.innerHTML = `
             <div class="text-center py-16 space-y-3 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
                 <p class="text-3xl">💬</p>
@@ -3765,7 +4243,7 @@ function renderInboxList() {
     }
 
     content.innerHTML = `<div class="divide-y divide-slate-800/60 bg-slate-900 border border-slate-800/60 rounded-3xl overflow-hidden">${
-        conversationsCache.map(conv => {
+        visibleConversations.map(conv => {
             const peer = dmPeerInfo(conv);
             const isUnread = isConversationUnread(conv);
             const previewText = (conv.last_message && conv.last_message.startsWith('post_share:'))
@@ -3817,6 +4295,11 @@ window.openDM = async function (otherUserId, otherUserName, otherUserAvatar, pos
     if (!otherUserId) { window.navigateTo('dms'); return; }
     if (otherUserId === currentUserData.id) return;
 
+    if (blockedUserIds.has(idKey(otherUserId))) {
+        showToast("You've blocked this person. Unblock them in Campus Settings to message again.");
+        return;
+    }
+
     window.navigateTo('dms');
     const content = document.getElementById('dms-content');
     if (!content) return;
@@ -3867,7 +4350,18 @@ window.openDM = async function (otherUserId, otherUserName, otherUserAvatar, pos
         });
     } catch (err) {
         console.error("Open DM error:", err);
-        content.innerHTML = `<div class="p-12 text-center text-red-400 text-xs">Couldn't open this chat. Try again.</div>`;
+        // If the SQL patch from blocked_users_rls.sql is applied,
+        // get_or_create_conversation raises when either person has
+        // blocked the other — this surfaces that clearly instead of a
+        // generic failure, covering the case where THEY blocked YOU
+        // (which the local blockedUserIds check earlier in this function
+        // has no way to know about).
+        const isBlockRejection = /block/i.test(err?.message || '') || err?.code === '42501';
+        content.innerHTML = `<div class="p-12 text-center text-red-400 text-xs">${
+            isBlockRejection
+                ? "This chat isn't available."
+                : "Couldn't open this chat. Try again."
+        }</div>`;
     }
 };
 
@@ -4123,6 +4617,14 @@ window.sendChatMessage = async function () {
     const text  = input?.value.trim();
     if (!text || !activeConversationId || !currentUserData) return;
 
+    // Backstop: normally openDM() already refuses to open a blocked
+    // person's thread at all, but this covers the edge case of blocking
+    // someone while already inside a conversation with them.
+    if (activeConversationPeer && blockedUserIds.has(idKey(activeConversationPeer.id))) {
+        showToast("You've blocked this person and can't send messages to them.");
+        return;
+    }
+
     input.value = '';
     clearTimeout(typingStopTimer);
     currentTypingChan?.track({ typing: false });
@@ -4157,7 +4659,13 @@ window.sendChatMessage = async function () {
         }).eq('id', activeConversationId);
     } catch (err) {
         console.error("Send message error:", err);
-        showToast('Message failed to send.');
+        // Same block-detection reasoning as postComment above — this is
+        // how we find out the OTHER person blocked you (your local
+        // blockedUserIds only knows about blocks you made yourself).
+        const isBlockRejection = err?.code === '42501' || /row-level security/i.test(err?.message || '');
+        showToast(isBlockRejection
+            ? "This message couldn't be delivered."
+            : 'Message failed to send.');
     }
 };
 
@@ -4236,20 +4744,30 @@ if (activeAuthChange) {
             document.getElementById('dms-auth-gate')?.classList.add('hidden');
             document.getElementById('dms-content')?.classList.remove('hidden');
 
-            // Fix: the very first feed load after sign-in previously
-            // called subscribeFeed() with no filter at all, bypassing
-            // campus scoping entirely — so someone with "My Campus"
-            // selected would still see everyone nationwide until they
-            // manually clicked a tab. Now the initial load applies the
-            // same "all" tab base filter (including campus scope) that
-            // filterFeed('all', ...) would.
+            // Fix: the very first feed load after sign-in/refresh always
+            // rebuilt an "all" style filter and ignored whichever tab
+            // (Reels, Products, Services, Following) the person had open
+            // before — so a refresh silently bounced everyone back to
+            // "All". currentFeedType is now rehydrated from
+            // localStorage before this runs (see the top of the file),
+            // so this restores the same tab, re-applies campus scoping
+            // consistently via the shared filterFeed() path, and syncs
+            // the active-tab button styling and Reels header mode to
+            // match.
+            // filterFeed() guards on isAuthInitialized being true, so it
+            // must be set before we call it here (it's normally set at
+            // the end of this handler) — otherwise this restore call
+            // would silently no-op on first load.
+            isAuthInitialized = true;
+
+            // Load the block list before the first render so a blocked
+            // person's posts never flash on screen for a moment before
+            // being filtered out.
+            await syncBlockedUsers();
+
             updateCampusScopeBanner();
-            subscribeFeed((q) => {
-                if (currentCampusScope === 'mine' && currentUserData?.institution) {
-                    return q.eq("institution", currentUserData.institution);
-                }
-                return q;
-            });
+            const savedTabBtn = document.querySelector(`.feed-tab-btn[onclick*="'${currentFeedType}'"]`);
+            window.filterFeed(currentFeedType, savedTabBtn);
             try { loadProfileStats(); } catch (_) {}
             _initAvatarLongPress();
 
@@ -4449,11 +4967,28 @@ function renderGridItem(id, post) {
 
     const fallbackImage = 'https://images.unsplash.com/photo-1563013544-824ae1d704d3?w=300';
     const isVideo = d.media_type === 'video';
+    const key = idKey(id);
 
+    // Press-and-hold enters multi-select mode and selects this tile; a
+    // normal tap either opens the post (outside select mode) or toggles
+    // selection (while in select mode). onmousedown/touchstart start a
+    // timer; onmouseup/touchend/mouseleave/touchmove-far all cancel it so
+    // a normal tap or a scroll gesture never gets mistaken for a hold.
     return `
-    <div onclick="openDetail('${id}')" class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition">
+    <div
+        class="grid-tile relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition"
+        data-post-id="${escAttr(key)}"
+        onclick="window._handleGridTileTap('${escAttr(key)}')"
+        onmousedown="window._startGridTileHold('${escAttr(key)}')"
+        onmouseup="window._cancelGridTileHold()"
+        onmouseleave="window._cancelGridTileHold()"
+        ontouchstart="window._startGridTileHold('${escAttr(key)}')"
+        ontouchend="window._cancelGridTileHold()"
+        ontouchmove="window._cancelGridTileHold()"
+    >
+        <span class="grid-tile-check"><i class="fas fa-check"></i></span>
         ${isVideo
-            ? `<video class="w-full h-full object-cover" src="${mediaUrl}"></video>
+            ? `<video class="w-full h-full object-cover" src="${mediaUrl}" preload="none" muted playsinline></video>
                <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
             : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
         }
@@ -4462,3 +4997,118 @@ function renderGridItem(id, post) {
         </div>
     </div>`;
 }
+
+// ─── GRID MULTI-SELECT (press-and-hold to select, then bulk delete) ────────
+let _gridHoldTimer = null;
+let _gridSelectMode = false;
+let _gridJustLongPressed = false;
+const _gridSelectedIds = new Set();
+
+window._startGridTileHold = function (id) {
+    clearTimeout(_gridHoldTimer);
+    _gridHoldTimer = setTimeout(() => {
+        _gridHoldTimer = null;
+        _gridJustLongPressed = true;
+        if (!_gridSelectMode) window._enterGridSelectMode();
+        window._toggleGridTileSelection(id);
+    }, 500);
+};
+
+window._cancelGridTileHold = function () {
+    clearTimeout(_gridHoldTimer);
+    _gridHoldTimer = null;
+};
+
+// The click handler fires after mouseup/touchend regardless of whether a
+// hold just happened. If the hold timer already fired (long press), skip
+// the tap behavior entirely — the hold handler already selected the tile,
+// and the browser-generated click right after a long-press shouldn't
+// toggle selection a second time or open the post.
+window._handleGridTileTap = function (id) {
+    if (_gridJustLongPressed) {
+        _gridJustLongPressed = false;
+        return;
+    }
+    if (_gridSelectMode) {
+        window._toggleGridTileSelection(id);
+    } else {
+        openDetail(id);
+    }
+};
+
+window._enterGridSelectMode = function () {
+    _gridSelectMode = true;
+    document.getElementById('grid-select-toolbar')?.classList.add('select-mode-active');
+    document.querySelectorAll('.grid-tile').forEach(t => t.classList.add('select-mode'));
+};
+
+window.exitGridSelectMode = function () {
+    _gridSelectMode = false;
+    _gridSelectedIds.clear();
+    document.getElementById('grid-select-toolbar')?.classList.remove('select-mode-active');
+    document.querySelectorAll('.grid-tile').forEach(t => {
+        t.classList.remove('select-mode', 'tile-selected');
+    });
+    _updateGridSelectCount();
+};
+
+window._toggleGridTileSelection = function (id) {
+    const key = idKey(id);
+    const tile = document.querySelector(`.grid-tile[data-post-id="${CSS.escape(key)}"]`);
+    if (_gridSelectedIds.has(key)) {
+        _gridSelectedIds.delete(key);
+        tile?.classList.remove('tile-selected');
+    } else {
+        _gridSelectedIds.add(key);
+        tile?.classList.add('tile-selected');
+    }
+    _updateGridSelectCount();
+
+    // Selecting the last remaining tile back down to zero doesn't force
+    // an exit — the toolbar (with Cancel) stays up so the person can
+    // keep selecting more without re-triggering a long-press.
+};
+
+function _updateGridSelectCount() {
+    const countEl = document.getElementById('grid-select-count');
+    if (countEl) countEl.textContent = `${_gridSelectedIds.size} selected`;
+}
+
+window.deleteSelectedGridItems = function () {
+    if (_gridSelectedIds.size === 0) {
+        showToast('Select at least one post first.');
+        return;
+    }
+
+    const ids = [..._gridSelectedIds];
+    showConfirmDialog({
+        title: `Delete ${ids.length} post${ids.length > 1 ? 's' : ''}?`,
+        message: "This can't be undone. The selected posts, their media, and any likes or comments on them will be permanently removed.",
+        confirmLabel: 'Delete',
+        danger: true,
+        onConfirm: async () => {
+            showToast(`Deleting ${ids.length} post${ids.length > 1 ? 's' : ''}…`);
+            let failCount = 0;
+
+            for (const id of ids) {
+                try {
+                    await _deletePostById(id);
+                } catch (err) {
+                    console.error('Bulk delete error for post', id, err);
+                    failCount++;
+                }
+            }
+
+            window.exitGridSelectMode();
+            try { loadProfileStats(); } catch (_) {}
+
+            if (failCount === 0) {
+                showToast(`${ids.length} post${ids.length > 1 ? 's' : ''} deleted`);
+            } else {
+                showToast(`Deleted ${ids.length - failCount} of ${ids.length} — some failed, please try again`);
+            }
+        }
+    });
+};
+
+
