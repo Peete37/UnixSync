@@ -661,6 +661,17 @@ window.navigateTo = function (viewId, btn = null) {
     // switching to Profile/DMs/etc never leaves background audio playing.
     if (viewId !== 'feed') {
         pauseAllReelVideos();
+
+        // A reel's comment sheet is moved to document.body the first time
+        // it opens (see toggleComments — this sidesteps a WebKit clipping
+        // bug), which means it's no longer inside feed-container and
+        // won't get hidden by the container toggle below. Close it
+        // explicitly so switching to Profile/DMs/etc never leaves it
+        // floating on screen over whatever view comes next.
+        document.querySelectorAll('.reel-comments.comments-open').forEach(el => {
+            const reelId = el.id.replace('comments-', '');
+            window._closeCommentSheet(reelId);
+        });
     }
 
     ['feed-container', 'profile-container', 'explore-container', 'dms-container', 'cart-container']
@@ -837,7 +848,7 @@ window.openDetail = async function (postId) {
                     <span class="bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700 capitalize">${esc(d.type) || 'product'}</span>
                 </div>
                 <div class="flex items-center justify-between gap-3 p-3 bg-slate-900 rounded-xl border border-slate-800">
-                    <div class="flex items-center gap-3 min-w-0">
+                    <div class="feed-profile-trigger flex items-center gap-3 min-w-0 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
                         <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" data-avatar-for="${escAttr(d.user_id)}" class="w-10 h-10 rounded-full border border-amber-400 object-cover" alt="Avatar">
                         <div class="min-w-0">
                             <p class="text-xs text-slate-500 uppercase">Provider</p>
@@ -1235,11 +1246,23 @@ function renderEditMediaModal() {
     const active = stagedMediaFiles[activeStagedIndex];
 
     const rotationStyle = `transform: rotate(${active.rotation}deg);`;
+    const cropOverlayHtml = `
+        <div id="cropOverlay">
+          <div class="crop-dim"></div>
+          <div class="crop-box" id="cropBox">
+            <div class="crop-handle nw" data-handle="nw"></div>
+            <div class="crop-handle ne" data-handle="ne"></div>
+            <div class="crop-handle sw" data-handle="sw"></div>
+            <div class="crop-handle se" data-handle="se"></div>
+          </div>
+        </div>`;
     mainPreview.innerHTML = active.type === 'video'
         ? `<video src="${active.url}" style="${rotationStyle}" controls muted></video>
            <button class="rotate-btn" onclick="window._rotateStagedMedia()"><i class="fas fa-rotate-right text-sm"></i></button>`
-        : `<img src="${active.url}" style="${rotationStyle}" alt="Preview">
-           <button class="rotate-btn" onclick="window._rotateStagedMedia()"><i class="fas fa-rotate-right text-sm"></i></button>`;
+        : `<img id="editPreviewImg" src="${active.url}" style="${rotationStyle}" alt="Preview">
+           <button class="crop-btn" onclick="window._toggleCropMode()" aria-label="Crop"><i class="fas fa-crop-simple text-sm"></i></button>
+           <button class="rotate-btn" onclick="window._rotateStagedMedia()"><i class="fas fa-rotate-right text-sm"></i></button>
+           ${cropOverlayHtml}`;
 
     thumbStrip.innerHTML = stagedMediaFiles.map((f, i) => `
         <div class="edit-thumb ${i === activeStagedIndex ? 'active-thumb' : ''}" onclick="window._selectStagedMedia(${i})">
@@ -1253,19 +1276,261 @@ function renderEditMediaModal() {
 
 window._selectStagedMedia = function (i) {
     activeStagedIndex = i;
+    // renderEditMediaModal() rebuilds the preview (including cropOverlay)
+    // from scratch, which naturally drops crop mode for the OLD image —
+    // but the footer buttons live outside that rebuilt subtree, so their
+    // crop-mode classes need to be reset explicitly here too.
+    window._cancelCrop();
     renderEditMediaModal();
 };
 
 window._rotateStagedMedia = function () {
     if (!stagedMediaFiles[activeStagedIndex]) return;
     stagedMediaFiles[activeStagedIndex].rotation = (stagedMediaFiles[activeStagedIndex].rotation + 90) % 360;
+    // Rotating invalidates any crop the person already drew, since the
+    // rect was drawn against the old orientation — simplest and least
+    // surprising is to just clear it rather than try to remap coordinates
+    // through a rotation.
+    delete stagedMediaFiles[activeStagedIndex].cropRect;
     renderEditMediaModal();
 };
+
+// ─── CROP ───────────────────────────────────────────────────────────────────
+// A lightweight, dependency-free crop tool: drag inside the box to move
+// it, drag a corner handle to resize it. The crop rect is stored as
+// fractions of the image's natural (rotated) dimensions (0–1 for
+// x/y/width/height), not pixels — that way it's completely independent
+// of whatever size the preview happens to be rendered at on screen, and
+// maps directly onto the full-resolution source image when actually
+// applying the crop in confirmEditedMedia.
+let _cropDragState = null; // { mode: 'move'|'resize', handle, startX, startY, startRect }
+
+window._toggleCropMode = function () {
+    const item = stagedMediaFiles[activeStagedIndex];
+    if (!item || item.type !== 'image') return;
+
+    const overlay = document.getElementById('cropOverlay');
+    const footer = document.getElementById('editMainFooter');
+    const cropFooter = document.getElementById('cropFooter');
+    if (!overlay) return;
+
+    const enteringCropMode = !overlay.classList.contains('crop-active');
+    overlay.classList.toggle('crop-active', enteringCropMode);
+    footer?.classList.toggle('crop-active-hide', enteringCropMode);
+    cropFooter?.classList.toggle('crop-active', enteringCropMode);
+
+    if (enteringCropMode) {
+        // Start from whatever crop was previously set for this image, or
+        // default to a centered 80% box so there's immediately something
+        // visible and adjustable rather than a jarring full-bleed box.
+        const rect = item.cropRect || { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+        _setCropBoxRect(rect);
+        _wireCropHandlers();
+    }
+};
+
+window._cancelCrop = function () {
+    document.getElementById('cropOverlay')?.classList.remove('crop-active');
+    document.getElementById('editMainFooter')?.classList.remove('crop-active-hide');
+    document.getElementById('cropFooter')?.classList.remove('crop-active');
+};
+
+window._applyCrop = function () {
+    const item = stagedMediaFiles[activeStagedIndex];
+    const box = document.getElementById('cropBox');
+    const overlay = document.getElementById('cropOverlay');
+    if (item && box && overlay) {
+        const rect = _readCropBoxRect(box, overlay);
+        // Ignore a crop that's barely different from "no crop" (e.g. a
+        // tiny accidental drag) so we don't force a needless re-encode.
+        const isNoOp = rect.x < 0.01 && rect.y < 0.01 && rect.width > 0.98 && rect.height > 0.98;
+        item.cropRect = isNoOp ? null : rect;
+    }
+    window._cancelCrop();
+    renderEditMediaModal();
+};
+
+// Fix: #editMainPreview is a fixed 1:1 square with object-fit: contain,
+// so any non-square photo is letterboxed inside it — the actual pixels
+// only occupy part of that square, with black bars filling the rest.
+// The crop overlay spans the FULL square container, so without this
+// correction, a percentage-based crop rect computed against the overlay
+// would be calibrated against empty letterbox space for part of its
+// range, producing a crop that's shifted/wrong-sized relative to what
+// the person visually saw and dragged over. This computes the real
+// visible image rect (in the same coordinate space as the overlay) so
+// both reading and writing the crop box can be anchored to actual image
+// pixels, not the surrounding square.
+function _getRenderedImageRect(overlay) {
+    const img = overlay.parentElement?.querySelector('img');
+    const overlayRect = overlay.getBoundingClientRect();
+    if (!img || !img.naturalWidth || !img.naturalHeight) {
+        // No image to measure against (shouldn't normally happen since
+        // crop mode only opens for images) — fall back to treating the
+        // whole overlay as the image area rather than crashing.
+        return { left: overlayRect.left, top: overlayRect.top, width: overlayRect.width, height: overlayRect.height };
+    }
+
+    const containerRatio = overlayRect.width / overlayRect.height;
+    const imageRatio = img.naturalWidth / img.naturalHeight;
+
+    let renderedWidth, renderedHeight;
+    if (imageRatio > containerRatio) {
+        // Image is wider than the container: full width, letterboxed
+        // top/bottom.
+        renderedWidth = overlayRect.width;
+        renderedHeight = overlayRect.width / imageRatio;
+    } else {
+        // Image is taller than (or equal to) the container: full height,
+        // letterboxed left/right.
+        renderedHeight = overlayRect.height;
+        renderedWidth = overlayRect.height * imageRatio;
+    }
+
+    return {
+        left: overlayRect.left + (overlayRect.width - renderedWidth) / 2,
+        top: overlayRect.top + (overlayRect.height - renderedHeight) / 2,
+        width: renderedWidth,
+        height: renderedHeight
+    };
+}
+
+function _setCropBoxRect(rect) {
+    const box = document.getElementById('cropBox');
+    const overlay = document.getElementById('cropOverlay');
+    if (!box || !overlay) return;
+
+    // Convert the image-relative fraction back into overlay-relative
+    // percentages, since that's the coordinate space box.style.left/top
+    // actually operates in (it's a child of the overlay, not the image).
+    const overlayRect = overlay.getBoundingClientRect();
+    const imgRect = _getRenderedImageRect(overlay);
+
+    const leftPx = (imgRect.left - overlayRect.left) + rect.x * imgRect.width;
+    const topPx = (imgRect.top - overlayRect.top) + rect.y * imgRect.height;
+    const widthPx = rect.width * imgRect.width;
+    const heightPx = rect.height * imgRect.height;
+
+    box.style.left = `${(leftPx / overlayRect.width) * 100}%`;
+    box.style.top = `${(topPx / overlayRect.height) * 100}%`;
+    box.style.width = `${(widthPx / overlayRect.width) * 100}%`;
+    box.style.height = `${(heightPx / overlayRect.height) * 100}%`;
+}
+
+function _readCropBoxRect(box, overlay) {
+    const boxRect = box.getBoundingClientRect();
+    const imgRect = _getRenderedImageRect(overlay);
+
+    // Express the box's position/size as fractions of the ACTUAL visible
+    // image area, not the surrounding square — this is what
+    // cropImageFile's rect.x/y/width/height are documented to mean (see
+    // its own comment), and now they actually are.
+    return {
+        x: (boxRect.left - imgRect.left) / imgRect.width,
+        y: (boxRect.top - imgRect.top) / imgRect.height,
+        width: boxRect.width / imgRect.width,
+        height: boxRect.height / imgRect.height
+    };
+}
+
+const CROP_MIN_SIZE_FRACTION = 0.12; // don't allow shrinking below 12% of the image in either axis
+
+function _wireCropHandlers() {
+    const overlay = document.getElementById('cropOverlay');
+    const box = document.getElementById('cropBox');
+    if (!overlay || !box) return;
+
+    // Re-query handles fresh each time since renderEditMediaModal rebuilds
+    // this DOM subtree from scratch on every render.
+    const handles = box.querySelectorAll('.crop-handle');
+
+    const onPointerDown = (e, mode, handle = null) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const imgRect = _getRenderedImageRect(overlay);
+        _cropDragState = {
+            mode,
+            handle,
+            startClientX: e.clientX,
+            startClientY: e.clientY,
+            // Deltas need to be expressed as fractions of the actual
+            // visible image, matching the coordinate space startRect is
+            // already in (see _readCropBoxRect) — using the full,
+            // possibly-letterboxed overlay dimensions here instead would
+            // make the box drift out of sync with the cursor on any
+            // non-square photo.
+            imageWidth: imgRect.width,
+            imageHeight: imgRect.height,
+            startRect: _readCropBoxRect(box, overlay)
+        };
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp, { once: true });
+    };
+
+    const onPointerMove = (e) => {
+        if (!_cropDragState) return;
+        const dxFrac = (e.clientX - _cropDragState.startClientX) / _cropDragState.imageWidth;
+        const dyFrac = (e.clientY - _cropDragState.startClientY) / _cropDragState.imageHeight;
+        const { startRect, mode, handle } = _cropDragState;
+
+        if (mode === 'move') {
+            const newX = _clamp(startRect.x + dxFrac, 0, 1 - startRect.width);
+            const newY = _clamp(startRect.y + dyFrac, 0, 1 - startRect.height);
+            _setCropBoxRect({ ...startRect, x: newX, y: newY });
+            return;
+        }
+
+        // Resize: each corner drags its own two edges, clamped so the box
+        // never shrinks below the minimum or crosses outside the image.
+        let { x, y, width, height } = startRect;
+        if (handle === 'se') {
+            width  = _clamp(startRect.width + dxFrac, CROP_MIN_SIZE_FRACTION, 1 - startRect.x);
+            height = _clamp(startRect.height + dyFrac, CROP_MIN_SIZE_FRACTION, 1 - startRect.y);
+        } else if (handle === 'sw') {
+            const newWidth = _clamp(startRect.width - dxFrac, CROP_MIN_SIZE_FRACTION, startRect.x + startRect.width);
+            x = startRect.x + startRect.width - newWidth;
+            width = newWidth;
+            height = _clamp(startRect.height + dyFrac, CROP_MIN_SIZE_FRACTION, 1 - startRect.y);
+        } else if (handle === 'ne') {
+            width = _clamp(startRect.width + dxFrac, CROP_MIN_SIZE_FRACTION, 1 - startRect.x);
+            const newHeight = _clamp(startRect.height - dyFrac, CROP_MIN_SIZE_FRACTION, startRect.y + startRect.height);
+            y = startRect.y + startRect.height - newHeight;
+            height = newHeight;
+        } else if (handle === 'nw') {
+            const newWidth = _clamp(startRect.width - dxFrac, CROP_MIN_SIZE_FRACTION, startRect.x + startRect.width);
+            const newHeight = _clamp(startRect.height - dyFrac, CROP_MIN_SIZE_FRACTION, startRect.y + startRect.height);
+            x = startRect.x + startRect.width - newWidth;
+            y = startRect.y + startRect.height - newHeight;
+            width = newWidth;
+            height = newHeight;
+        }
+        _setCropBoxRect({ x, y, width, height });
+    };
+
+    const onPointerUp = () => {
+        _cropDragState = null;
+        window.removeEventListener('pointermove', onPointerMove);
+    };
+
+    box.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.crop-handle')) return; // handles have their own listener below
+        onPointerDown(e, 'move');
+    });
+
+    handles.forEach(h => {
+        h.addEventListener('pointerdown', (e) => onPointerDown(e, 'resize', h.dataset.handle));
+    });
+}
+
+function _clamp(val, min, max) {
+    return Math.max(min, Math.min(max, val));
+}
 
 window._removeStagedMedia = function (i) {
     const removed = stagedMediaFiles.splice(i, 1)[0];
     if (removed) { try { URL.revokeObjectURL(removed.url); } catch(_) {} }
     if (activeStagedIndex >= stagedMediaFiles.length) activeStagedIndex = Math.max(0, stagedMediaFiles.length - 1);
+    window._cancelCrop();
     renderEditMediaModal();
     if (stagedMediaFiles.length === 0) {
         const countEl = document.getElementById('mediaFileCount');
@@ -1313,10 +1578,19 @@ window.confirmEditedMedia = async function () {
                 if (item.rotation !== 0) {
                     workingFile = await rotateImageFile(workingFile, item.rotation);
                 }
+                // Crop is applied after rotation (the stored cropRect is
+                // relative to the rotated image, matching what the person
+                // actually saw and dragged the box over) and before
+                // compression, so the final encode only has to happen
+                // once on the already-cropped pixels rather than cropping
+                // a full-size image and re-encoding twice.
+                if (item.cropRect) {
+                    workingFile = await cropImageFile(workingFile, item.cropRect);
+                }
                 const compressedFile = await compressImageFile(workingFile, compressionOptions);
                 processed.push(compressedFile);
             } catch (e) {
-                console.warn('Rotate/compress failed, using original file:', e);
+                console.warn('Rotate/crop/compress failed, using original file:', e);
                 processed.push(item.file);
             }
         } else {
@@ -1348,6 +1622,37 @@ function rotateImageFile(file, degrees) {
             ctx.translate(canvas.width / 2, canvas.height / 2);
             ctx.rotate((degrees * Math.PI) / 180);
             ctx.drawImage(img, -img.width / 2, -img.height / 2);
+            canvas.toBlob((blob) => {
+                URL.revokeObjectURL(objUrl);
+                if (!blob) { reject(new Error('Canvas toBlob failed')); return; }
+                resolve(new File([blob], file.name, { type: file.type || 'image/jpeg' }));
+            }, file.type || 'image/jpeg', 0.92);
+        };
+        img.onerror = reject;
+        img.src = objUrl;
+    });
+}
+
+// Crops an image to the given rect, where rect.x/y/width/height are all
+// fractions (0–1) of the image's own natural dimensions — the same
+// resolution-independent format the crop UI in _readCropBoxRect stores,
+// so this works correctly regardless of what size the crop box preview
+// was actually displayed at on screen.
+function cropImageFile(file, rect) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        const objUrl = URL.createObjectURL(file);
+        img.onload = () => {
+            const sx = rect.x * img.width;
+            const sy = rect.y * img.height;
+            const sw = rect.width * img.width;
+            const sh = rect.height * img.height;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(sw));
+            canvas.height = Math.max(1, Math.round(sh));
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
             canvas.toBlob((blob) => {
                 URL.revokeObjectURL(objUrl);
                 if (!blob) { reject(new Error('Canvas toBlob failed')); return; }
@@ -1548,7 +1853,19 @@ window.likePost = async function (postId, btn) {
                 .eq("user_id", currentUserData.id);
 
             if (deleteErr) throw deleteErr;
-            await supabase.rpc('decrement_post_likes', { post_id_input: postId });
+
+            // Fix: this RPC's error was never checked — if it failed (wrong
+            // argument name, RPC not deployed, permissions issue, etc.) the
+            // `likes` row was still deleted correctly, but posts.likes_count
+            // silently never decremented in the database. The heart would
+            // then look right after a refresh (correctly unliked, since
+            // that's read from the `likes` table) while the count itself
+            // drifted or reverted, which is exactly the "likes keep
+            // disappearing/count is wrong" symptom. Now a real RPC failure
+            // throws and rolls back the whole optimistic update below,
+            // instead of leaving the two tables out of sync forever.
+            const { error: decErr } = await supabase.rpc('decrement_post_likes', { post_id_input: postId });
+            if (decErr) throw decErr;
         } else {
             const { error: insertErr } = await supabase
                 .from("likes")
@@ -1564,7 +1881,8 @@ window.likePost = async function (postId, btn) {
             const isDuplicate = insertErr && insertErr.code === '23505';
             if (insertErr && !isDuplicate) throw insertErr;
             if (!insertErr) {
-                await supabase.rpc('increment_post_likes', { post_id_input: postId });
+                const { error: incErr } = await supabase.rpc('increment_post_likes', { post_id_input: postId });
+                if (incErr) throw incErr;
             }
         }
     } catch (e) {
@@ -2484,7 +2802,7 @@ function renderFeedCard(id, d) {
     <div class="bg-slate-900 border-b border-slate-800/60 w-full" id="feed-card-${escAttr(id)}">
 
         <div class="flex items-center justify-between px-3 py-2.5">
-            <div class="feed-profile-trigger flex items-center gap-2.5 min-w-0 cursor-pointer">
+            <div class="feed-profile-trigger flex items-center gap-2.5 min-w-0 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
                 <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" data-avatar-for="${escAttr(d.user_id)}" class="w-8 h-8 rounded-full border border-slate-700 object-cover shrink-0" alt="">
                 <div class="min-w-0">
                     <p class="text-[12px] font-bold text-white leading-tight truncate">${esc(d.user_name) || 'Student'}</p>
@@ -2773,19 +3091,39 @@ function setupReelsIntersectionObserver() {
     reelsIntersectionObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             const video = entry.target.querySelector('.reel-video');
-            if (!video) return;
+            const reelId = entry.target.id.replace('reel-card-', '');
+
             if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
                 // This reel is the one in view: play it, unmuted only if the
                 // user hasn't explicitly muted it before (default unmuted
                 // like TikTok, matching tap-to-mute behavior already wired).
-                document.querySelectorAll('.reel-video').forEach(v => {
-                    if (v !== video) { v.pause(); v.muted = true; v.currentTime = v.currentTime; }
-                });
-                video.muted = video.dataset.userMuted === 'true';
-                video.play().catch(() => {});
+                if (video) {
+                    document.querySelectorAll('.reel-video').forEach(v => {
+                        if (v !== video) { v.pause(); v.muted = true; v.currentTime = v.currentTime; }
+                    });
+                    video.muted = video.dataset.userMuted === 'true';
+                    video.play().catch(() => {});
+                }
             } else {
-                video.pause();
-                video.muted = true;
+                if (video) {
+                    video.pause();
+                    video.muted = true;
+                }
+
+                // Fix: scrolling to the next/previous reel previously left
+                // the last-opened reel's comment sheet (moved to
+                // document.body, fixed to viewport — see toggleComments)
+                // sitting open on screen, floating over whatever the person
+                // scrolled to next. It looked exactly like a stuck dark
+                // panel covering the bottom half of the screen, and the
+                // only way out was tapping its close button or re-tapping
+                // the comment icon to toggle it shut. Closing it here the
+                // moment its reel leaves view means it can never outlive
+                // the reel it belongs to.
+                const commentSheet = document.getElementById(`comments-${reelId}`);
+                if (commentSheet?.classList.contains('comments-open')) {
+                    window._closeCommentSheet(reelId);
+                }
             }
         });
     }, { root: feed, threshold: [0, 0.6, 1] });
@@ -2843,7 +3181,7 @@ function renderReelCard(id, d) {
         </div>
 
         <div class="reel-info">
-            <div class="flex items-center gap-2 mb-1.5">
+            <div class="feed-profile-trigger flex items-center gap-2 mb-1.5 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
                 <img src="${esc(d.user_avatar) || 'https://ui-avatars.com/api/?name=User'}" data-avatar-for="${escAttr(d.user_id)}" class="w-8 h-8 rounded-full border border-white/40 object-cover shrink-0" alt="">
                 <p class="text-white font-bold text-sm leading-tight truncate">${esc(d.user_name) || 'Student'}</p>
             </div>
@@ -2938,7 +3276,15 @@ window.toggleCartItem = async function (postId) {
     }
 
     let postRecord = null;
-    const found = allCachedPosts.find(p => p.id === postId || p.data?.id === postId);
+    // Fix: this used to compare p.id === postId directly — p.id is the raw
+    // bigint from the DB while postId is always a string (read out of an
+    // HTML onclick attribute), so this comparison almost never matched and
+    // the code fell through to a fragile DOM-scraping fallback below every
+    // single time. That's exactly why "Add to Cart"/bookmarking looked
+    // broken or inconsistent — it was silently guessing at the title/price
+    // from whatever text happened to be in the card's DOM instead of using
+    // the real post data.
+    const found = allCachedPosts.find(p => idKey(p.id) === idKey(postId) || idKey(p.data?.id) === idKey(postId));
     if (found) postRecord = found.data ? found.data : found;
 
     if (!postRecord) {
@@ -3006,20 +3352,64 @@ window.toggleCartItem = async function (postId) {
     }
 
     // 2. Background Sync with Supabase saves table
+    //
+    // Fix: a failure here used to only log a console warning — the bookmark
+    // icon, the toast, and userCartList had already all been updated
+    // optimistically above with no way to know the write never actually
+    // reached the database. The item would then look "added" until the
+    // next reload silently re-synced against the real `saves` table and
+    // made it vanish again — exactly the "Add to Cart isn't working"
+    // symptom. Now a real failure rolls back every part of the optimistic
+    // update and tells the person plainly, instead of drifting silently.
     try {
         if (isRemoving) {
-            await supabase
+            const { error } = await supabase
                 .from("saves")
                 .delete()
                 .eq("user_id", currentUserData.id)
                 .eq("post_id", postId);
+            if (error) throw error;
         } else {
-            await supabase
+            const { error } = await supabase
                 .from("saves")
                 .insert({ user_id: currentUserData.id, post_id: postId });
+            // A duplicate save (e.g. a fast double-tap) isn't a real
+            // failure — the row already exists, which is what we wanted.
+            const isDuplicate = error && error.code === '23505';
+            if (error && !isDuplicate) throw error;
         }
-    } catch(err) {
-        console.warn("Saves table background sync failed/delayed:", err);
+    } catch (err) {
+        console.error("Saves table sync failed — reverting bookmark UI:", err);
+
+        if (isRemoving) {
+            userCartList.splice(index, 0, {
+                id: postId,
+                title: postRecord.title,
+                price: postRecord.price,
+                media_url: postRecord.media_url || '',
+                media_type: postRecord.media_type || 'image',
+                institution: postRecord.institution || '',
+                type: postRecord.type || 'product',
+                user_name: postRecord.user_name || 'Anonymous'
+            });
+        } else {
+            const revertIndex = userCartList.findIndex(item => idKey(item.id) === idKey(postId));
+            if (revertIndex > -1) userCartList.splice(revertIndex, 1);
+        }
+        localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
+
+        const revertedIsSaved = isRemoving; // if we were removing, it's back to saved; if we were adding, it's back to unsaved
+        if (feedIcon) feedIcon.className = revertedIsSaved ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
+        if (gridBtn) gridBtn.className = revertedIsSaved ? "fas fa-bookmark text-amber-400 text-xs" : "far fa-bookmark text-white/80 text-xs";
+        if (detailBtn) {
+            const labelText = detailBtn.querySelector('.cart-btn-label');
+            if (labelText) labelText.textContent = revertedIsSaved ? "✓ Added to Chart" : "Add to Chart List";
+        }
+        if (!document.getElementById('cart-container')?.classList.contains('hidden')) {
+            renderCartListView();
+        }
+
+        showToast("Couldn't save that — please try again.");
     }
 };
 
@@ -4026,6 +4416,128 @@ window.closeInfoSheet = function (fromPop = false) {
     if (!fromPop) popUiState('info-sheet');
 };
 
+// ─── PUBLIC PROFILE (someone else's page, opened from a post) ──────────────
+// A read-only view of another student: avatar, name, institution, follower/
+// following/post counts, their public posts grid, and Follow + Message
+// actions. Deliberately separate from #profile-container (the signed-in
+// person's OWN profile, with editable settings/account deletion/etc.) —
+// this only ever fetches and displays someone else's public data.
+window.openPublicProfile = async function (userId) {
+    if (!userId) return;
+    const overlay = document.getElementById('public-profile-overlay');
+    const titleEl = document.getElementById('public-profile-title');
+    const bodyEl = document.getElementById('public-profile-body');
+    if (!overlay || !bodyEl) return;
+
+    titleEl.textContent = 'Profile';
+    bodyEl.innerHTML = `
+        <div class="flex items-center justify-center py-20">
+            <i class="fas fa-circle-notch fa-spin text-slate-600 text-xl"></i>
+        </div>`;
+    overlay.classList.add('sheet-open');
+    pushUiState('public-profile', () => window.closePublicProfile(true));
+
+    try {
+        const [followersRes, followingRes, postsRes, isFollowingRes] = await Promise.all([
+            supabase.from('follows').select('', { count: 'exact', head: true }).eq('following_id', userId),
+            supabase.from('follows').select('', { count: 'exact', head: true }).eq('follower_id', userId),
+            supabase.from('posts').select('id, title, media_url, media_type, price').eq('user_id', userId).order('created_at', { ascending: false }),
+            currentUserData
+                ? supabase.from('follows').select('id').eq('follower_id', currentUserData.id).eq('following_id', userId).maybeSingle()
+                : Promise.resolve({ data: null })
+        ]);
+
+        // The name/institution/avatar aren't stored anywhere queryable by
+        // user id alone (profiles are keyed by auth, not duplicated per
+        // post) — the most recent post from this person is a reliable,
+        // already-available source for display info without needing a
+        // separate profiles-table fetch.
+        const latestPost = postsRes.data?.[0];
+        const displayName = latestPost?.user_name || blockedUserNames[idKey(userId)] || 'Student';
+        const avatarUrl = latestPost?.user_avatar || `https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(displayName)}`;
+        const institution = latestPost?.institution || '';
+        const isFollowing = !!isFollowingRes?.data;
+        const isBlocked = blockedUserIds.has(idKey(userId));
+
+        titleEl.textContent = displayName;
+
+        bodyEl.innerHTML = `
+            <div class="public-profile-header">
+                <img src="${esc(avatarUrl)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(displayName)}'" alt="">
+                <h3 class="text-white font-black text-lg mt-3">${esc(displayName)}</h3>
+                ${institution ? `<p class="text-slate-500 text-xs mt-1">${esc(institution)}</p>` : ''}
+            </div>
+
+            <div class="public-profile-stats">
+                <div><span class="stat-value">${postsRes.data?.length || 0}</span><span class="stat-label">Posts</span></div>
+                <div><span class="stat-value">${followersRes.count || 0}</span><span class="stat-label">Followers</span></div>
+                <div><span class="stat-value">${followingRes.count || 0}</span><span class="stat-label">Following</span></div>
+            </div>
+
+            <div class="flex gap-2 mb-5">
+                <button
+                    onclick="toggleFollow('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}'); window._refreshPublicProfileFollowState('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}')"
+                    class="flex-1 font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 ${isFollowing ? 'bg-slate-800 border border-slate-700 text-white' : 'bg-amber-400 text-black'}"
+                >
+                    ${isFollowing ? 'Following' : '+ Follow'}
+                </button>
+                <button
+                    onclick="window.openDM('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}')"
+                    class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                >
+                    Message
+                </button>
+            </div>
+
+            <div class="grid grid-cols-3 gap-2 mb-6">
+                ${
+                    postsRes.data && postsRes.data.length > 0
+                        ? postsRes.data.map(d => renderPublicGridItem(d.id, d)).join('')
+                        : `<div class="col-span-3 info-sheet-empty !py-10">
+                             <i class="fas fa-box-open text-2xl mb-2 text-slate-600"></i>
+                             <p class="text-xs">No posts yet</p>
+                           </div>`
+                }
+            </div>
+
+            ${!isBlocked ? `
+                <button
+                    onclick="window.blockUser('${escAttr(userId)}', '${escAttr(displayName)}')"
+                    class="w-full text-red-400 text-xs font-bold uppercase tracking-wider py-3"
+                >
+                    <i class="fas fa-user-slash mr-1.5"></i> Block ${esc(displayName)}
+                </button>
+            ` : ''}
+        `;
+    } catch (err) {
+        console.error('Public profile load error:', err);
+        bodyEl.innerHTML = `
+            <div class="info-sheet-empty">
+                <i class="fas fa-triangle-exclamation text-2xl mb-2 text-slate-600"></i>
+                <p class="text-xs">Couldn't load this profile. Please try again.</p>
+            </div>`;
+    }
+};
+
+// Re-renders just the Follow button's label/style after toggling, without
+// re-fetching the whole profile — toggleFollow already updated the DB by
+// the time this runs immediately after it in the onclick above.
+window._refreshPublicProfileFollowState = async function (userId, displayName, avatarUrl) {
+    if (!currentUserData) return;
+    const { data } = await supabase.from('follows').select('id').eq('follower_id', currentUserData.id).eq('following_id', userId).maybeSingle();
+    const isFollowing = !!data;
+    const btn = document.querySelector('#public-profile-body button[onclick*="toggleFollow"]');
+    if (btn) {
+        btn.textContent = isFollowing ? 'Following' : '+ Follow';
+        btn.className = `flex-1 font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 ${isFollowing ? 'bg-slate-800 border border-slate-700 text-white' : 'bg-amber-400 text-black'}`;
+    }
+};
+
+window.closePublicProfile = function (fromPop = false) {
+    document.getElementById('public-profile-overlay')?.classList.remove('sheet-open');
+    if (!fromPop) popUiState('public-profile');
+};
+
 function initSettingsToggles() {
     const settings = getAppSettings();
     const map = {
@@ -4253,7 +4765,7 @@ function renderInboxList() {
             <button
                 onclick="window.openDM('${escAttr(peer.id)}','${escAttr(peer.name)}','${escAttr(peer.avatar)}')"
                 class="w-full flex items-center gap-3 p-3.5 text-left active:bg-slate-800/60 transition">
-                <img src="${esc(peer.avatar)}" class="w-12 h-12 rounded-full object-cover border border-slate-700 shrink-0" alt="">
+                <img src="${esc(peer.avatar)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(peer.name)}'" class="w-12 h-12 rounded-full object-cover border border-slate-700 shrink-0" alt="">
                 <div class="min-w-0 flex-1">
                     <div class="flex items-center justify-between gap-2">
                         <p class="text-white font-bold text-sm truncate">${esc(peer.name)}</p>
@@ -4391,17 +4903,35 @@ async function sendPostSharePreview(postContext) {
     if (container) {
         const emptyState = container.querySelector('p');
         if (emptyState && container.children.length === 1) container.innerHTML = '';
+
+        const newLabel = formatDateSeparator(optimisticMsg.created_at);
+        if (newLabel !== container.dataset.lastDateLabel) {
+            container.innerHTML += renderDateSeparator(newLabel);
+        }
+        container.dataset.lastDateLabel = newLabel;
+
         container.innerHTML += renderChatBubble(optimisticMsg);
         container.scrollTop = container.scrollHeight;
     }
 
     try {
-        const { error: msgErr } = await supabase.from('messages').insert({
-            conversation_id: activeConversationId,
-            sender_id: currentUserData.id,
-            text
-        });
+        // Same duplication-bug fix as sendChatMessage: capture the real
+        // inserted row id so the realtime echo of this exact message can
+        // be recognized and skipped instead of rendered a second time.
+        const { data: inserted, error: msgErr } = await supabase
+            .from('messages')
+            .insert({
+                conversation_id: activeConversationId,
+                sender_id: currentUserData.id,
+                text
+            })
+            .select('id')
+            .single();
         if (msgErr) throw msgErr;
+
+        if (container && inserted?.id) {
+            container.dataset.lastOptimisticId = String(inserted.id);
+        }
 
         await supabase.from('conversations').update({
             last_message: `Shared: ${payload.title}`,
@@ -4425,28 +4955,60 @@ function renderChatThreadShell() {
                 <button onclick="window.closeDMThread()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 text-slate-300 active:scale-90 transition shrink-0">
                     <i class="fas fa-arrow-left text-xs"></i>
                 </button>
-                <img src="${esc(activeConversationPeer.avatar)}" class="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0" alt="">
+                <img src="${esc(activeConversationPeer.avatar)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(activeConversationPeer.name)}'" class="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0" alt="">
                 <div class="min-w-0">
                     <p class="text-white font-bold text-sm truncate">${esc(activeConversationPeer.name)}</p>
                     <p id="chat-typing-status" class="text-amber-400 text-[10px] font-semibold h-3.5"></p>
                 </div>
             </div>
             <div id="chat-messages" class="flex-1 overflow-y-auto space-y-2 px-1 pb-2"></div>
-            <div class="flex items-center gap-2 pt-2 border-t border-slate-800/60">
-                <input
-                    type="text"
+            <div class="flex items-end gap-2 pt-2 border-t border-slate-800/60">
+                <textarea
                     id="chat-input"
+                    rows="1"
+                    maxlength="1000"
                     placeholder="Message..."
-                    class="flex-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-full px-4 py-2.5 focus:outline-none focus:border-amber-400 transition"
-                    onkeydown="if(event.key==='Enter') window.sendChatMessage()"
-                    oninput="window._handleTypingInput()"
+                    class="flex-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-2xl px-4 py-2.5 focus:outline-none focus:border-amber-400 transition resize-none max-h-32 leading-normal"
+                    style="field-sizing: content;"
+                    onkeydown="window._handleChatInputKeydown(event)"
+                    oninput="window._handleTypingInput(); window._autoGrowChatInput(this); window._syncChatSendState(this)"
+                ></textarea>
+                <button
+                    id="chat-send-btn"
+                    disabled
+                    onclick="window.sendChatMessage()"
+                    class="w-10 h-10 flex items-center justify-center bg-amber-400 text-black rounded-full active:scale-90 transition shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
                 >
-                <button onclick="window.sendChatMessage()" class="w-10 h-10 flex items-center justify-center bg-amber-400 text-black rounded-full active:scale-90 transition shrink-0">
                     <i class="fas fa-paper-plane text-xs"></i>
                 </button>
             </div>
         </div>`;
 }
+
+// Enter sends the message (matching every mainstream chat app); Shift+Enter
+// inserts a normal newline instead, so a longer message can actually be
+// composed across multiple lines without accidentally sending mid-thought.
+window._handleChatInputKeydown = function (event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        window.sendChatMessage();
+    }
+};
+
+// Grows the textarea with its content up to the max-h-32 CSS cap (beyond
+// that it scrolls internally instead of pushing the rest of the layout
+// around) — the `field-sizing: content` inline style above handles this
+// automatically in browsers that support it, but this is the fallback for
+// ones that don't.
+window._autoGrowChatInput = function (el) {
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+};
+
+window._syncChatSendState = function (el) {
+    const sendBtn = document.getElementById('chat-send-btn');
+    if (sendBtn) sendBtn.disabled = el.value.trim().length === 0;
+};
 
 function renderChatBubble(msg) {
     const isMe = msg.sender_id === currentUserData.id;
@@ -4466,13 +5028,68 @@ function renderChatBubble(msg) {
         }
     }
 
+    // Read receipts: a single check for sent-but-not-yet-read, a double
+    // check for read — only shown on your OWN messages (seeing whether
+    // the other person read your own message), matching WhatsApp/iMessage
+    // conventions. `read` already existed as a column being written to
+    // (see loadAndRenderMessages' mark-as-read call) but was never
+    // actually displayed anywhere.
+    const receiptHtml = isMe
+        ? `<i class="fas ${msg.read ? 'fa-check-double text-blue-400' : 'fa-check text-black/40'} text-[10px] ml-1"></i>`
+        : '';
+
     return `
-        <div class="flex ${isMe ? 'justify-end' : 'justify-start'}">
+        <div class="flex ${isMe ? 'justify-end' : 'justify-start'}" data-message-id="${escAttr(idKey(msg.id))}">
             <div class="max-w-[75%] ${isMe ? 'bg-amber-400 text-black' : 'bg-slate-800 text-white'} rounded-2xl ${isMe ? 'rounded-br-sm' : 'rounded-bl-sm'} px-3.5 py-2">
                 <p class="text-sm break-words">${esc(msg.text)}</p>
-                <p class="text-[9px] ${isMe ? 'text-black/50' : 'text-slate-400'} mt-1 text-right">${esc(formatClockTime(msg.created_at))}</p>
+                <p class="text-[9px] ${isMe ? 'text-black/50' : 'text-slate-400'} mt-1 text-right flex items-center justify-end gap-0.5">
+                    ${esc(formatClockTime(msg.created_at))}${receiptHtml}
+                </p>
             </div>
         </div>`;
+}
+
+// A short date separator ("Today", "Yesterday", or e.g. "Jul 3") shown
+// once between groups of messages from different calendar days —
+// standard in every mainstream chat app, and without it a long
+// conversation just reads as one undifferentiated wall of bubbles with
+// no sense of when anything happened.
+function formatDateSeparator(dateStr) {
+    const msgDate = new Date(dateStr);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    const isSameDay = (a, b) => a.toDateString() === b.toDateString();
+    if (isSameDay(msgDate, today)) return 'Today';
+    if (isSameDay(msgDate, yesterday)) return 'Yesterday';
+    return msgDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function renderDateSeparator(label) {
+    return `
+        <div class="flex items-center gap-3 my-3">
+            <span class="flex-1 h-px bg-slate-800"></span>
+            <span class="text-[9px] text-slate-500 font-bold uppercase tracking-widest shrink-0">${esc(label)}</span>
+            <span class="flex-1 h-px bg-slate-800"></span>
+        </div>`;
+}
+
+// Renders a full message list with date separators inserted between
+// days — shared by the initial load and anywhere else a full list needs
+// re-rendering, so date-grouping logic lives in exactly one place.
+function renderMessageListWithDateSeparators(messages) {
+    let html = '';
+    let lastDateLabel = null;
+    messages.forEach(msg => {
+        const label = formatDateSeparator(msg.created_at);
+        if (label !== lastDateLabel) {
+            html += renderDateSeparator(label);
+            lastDateLabel = label;
+        }
+        html += renderChatBubble(msg);
+    });
+    return html;
 }
 
 function renderPostSharePreviewBubble(payload, isMe, createdAt) {
@@ -4519,7 +5136,8 @@ async function loadAndRenderMessages() {
         if (!messages || messages.length === 0) {
             container.innerHTML = `<p class="text-center text-[11px] text-slate-500 py-6">No messages yet. Say hello 👋</p>`;
         } else {
-            container.innerHTML = messages.map(renderChatBubble).join('');
+            container.innerHTML = renderMessageListWithDateSeparators(messages);
+            container.dataset.lastDateLabel = formatDateSeparator(messages[messages.length - 1].created_at);
             container.scrollTop = container.scrollHeight;
         }
 
@@ -4543,15 +5161,41 @@ function subscribeActiveThreadMessages() {
     }
     if (!activeConversationId) return;
 
+    // Tracks message ids already rendered in this thread session, as a
+    // second safety net alongside container.dataset.lastOptimisticId — in
+    // the rare case where the realtime INSERT event arrives before
+    // sendChatMessage's own insert().select() round-trip has finished
+    // (both are separate network round-trips racing each other), relying
+    // on dataset.lastOptimisticId alone could still momentarily miss and
+    // double-render. This set makes the render idempotent regardless of
+    // which one wins the race.
+    const renderedMessageIds = new Set();
+
     currentMessagesChan = supabase
         .channel(`messages-live-${activeConversationId}`)
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `conversation_id=eq.${activeConversationId}` }, (payload) => {
             const container = document.getElementById('chat-messages');
             if (!container) return;
-            // Avoid duplicating our own optimistically-rendered bubble
-            if (container.dataset.lastOptimisticId === String(payload.new.id)) return;
+
+            const incomingId = String(payload.new.id);
+            if (container.dataset.lastOptimisticId === incomingId || renderedMessageIds.has(incomingId)) return;
+            renderedMessageIds.add(incomingId);
+
             const emptyState = container.querySelector('p');
             if (emptyState && container.children.length === 1) container.innerHTML = '';
+
+            // If this message falls on a different day than the last one
+            // currently rendered, insert a date separator first — keeps a
+            // long-running open thread correctly grouped by day even
+            // without a full reload.
+            const newLabel = formatDateSeparator(payload.new.created_at);
+            const lastBubble = container.lastElementChild;
+            const lastLabel = container.dataset.lastDateLabel;
+            if (newLabel !== lastLabel) {
+                container.innerHTML += renderDateSeparator(newLabel);
+            }
+            container.dataset.lastDateLabel = newLabel;
+
             container.innerHTML += renderChatBubble(payload.new);
             container.scrollTop = container.scrollHeight;
 
@@ -4559,6 +5203,21 @@ function subscribeActiveThreadMessages() {
             // typing — clear the indicator right away instead of waiting
             // for their typing-stopped broadcast.
             setTypingStatusVisible(false);
+        })
+        // Fix/addition: `read` was already being written to (see the
+        // mark-as-read call in loadAndRenderMessages) but nothing ever
+        // reflected that back into the UI in real time — your own sent
+        // message would keep showing a single check forever unless you
+        // fully reloaded the thread. Listening for UPDATE events lets the
+        // check flip to double the instant the other person actually
+        // opens the conversation and their mark-as-read query runs.
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages", filter: `conversation_id=eq.${activeConversationId}` }, (payload) => {
+            if (!payload.new.read) return;
+            const bubble = document.querySelector(`[data-message-id="${CSS.escape(String(payload.new.id))}"] i.fa-check`);
+            if (bubble) {
+                bubble.classList.remove('fa-check', 'text-black/40');
+                bubble.classList.add('fa-check-double', 'text-blue-400');
+            }
         })
         .subscribe();
 
@@ -4626,6 +5285,8 @@ window.sendChatMessage = async function () {
     }
 
     input.value = '';
+    input.style.height = 'auto';
+    window._syncChatSendState(input);
     clearTimeout(typingStopTimer);
     currentTypingChan?.track({ typing: false });
 
@@ -4640,17 +5301,40 @@ window.sendChatMessage = async function () {
     if (container) {
         const emptyState = container.querySelector('p');
         if (emptyState && container.children.length === 1) container.innerHTML = '';
+
+        const newLabel = formatDateSeparator(optimisticMsg.created_at);
+        if (newLabel !== container.dataset.lastDateLabel) {
+            container.innerHTML += renderDateSeparator(newLabel);
+        }
+        container.dataset.lastDateLabel = newLabel;
+
         container.innerHTML += renderChatBubble(optimisticMsg);
         container.scrollTop = container.scrollHeight;
     }
 
     try {
-        const { error: msgErr } = await supabase.from('messages').insert({
-            conversation_id: activeConversationId,
-            sender_id: currentUserData.id,
-            text
-        });
+        // Fix: this insert's returned row id was never captured anywhere,
+        // so the realtime handler's dedup check (comparing
+        // container.dataset.lastOptimisticId against the incoming row's
+        // id) could never actually match — every message you sent would
+        // render once optimistically here, then render AGAIN a moment
+        // later when Supabase's realtime INSERT event echoed it back,
+        // showing every outgoing message duplicated. Selecting the
+        // inserted row back and recording its real id closes that gap.
+        const { data: inserted, error: msgErr } = await supabase
+            .from('messages')
+            .insert({
+                conversation_id: activeConversationId,
+                sender_id: currentUserData.id,
+                text
+            })
+            .select('id')
+            .single();
         if (msgErr) throw msgErr;
+
+        if (container && inserted?.id) {
+            container.dataset.lastOptimisticId = String(inserted.id);
+        }
 
         await supabase.from('conversations').update({
             last_message: text,
@@ -4844,13 +5528,28 @@ window.addEventListener('scroll', () => {
 }, { passive: true });
 
 // ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ──────────────────────────────
+// Fix: this previously called navigateTo('profile') unconditionally,
+// which always opens the SIGNED-IN person's own profile tab — tapping
+// someone else's name/avatar on a post had nowhere real to go and just
+// silently reopened your own profile every time. Now it reads which
+// person was actually tapped (data-user-id, added to every profile
+// trigger element) and opens a real, separate public-profile view for
+// them — own profile stays reachable only via the bottom nav, as before.
 document.body.addEventListener('click', (event) => {
     const profileClickTarget = event.target.closest('.feed-profile-trigger');
     if (profileClickTarget) {
         event.preventDefault();
         event.stopPropagation();
-        if (typeof window.navigateTo === 'function') {
+        const userId = profileClickTarget.dataset.userId;
+        if (!userId) return;
+
+        // Tapping your OWN name/avatar on your own post should go to your
+        // real profile tab (with editable settings etc.), not the
+        // read-only public view meant for other people.
+        if (currentUserData && idKey(userId) === idKey(currentUserData.id)) {
             window.navigateTo('profile');
+        } else if (typeof window.openPublicProfile === 'function') {
+            window.openPublicProfile(userId);
         }
     }
 });
@@ -4953,6 +5652,37 @@ function wireCarouselCounters(postId) {
 }
 
 // ─── UTILITY FUNCTION: RENDER PROFILE GRID ITEM ─────────────────────────────
+// Simple, view-only grid tile — used for the public profile view (someone
+// ELSE's posts). Deliberately has none of renderGridItem's press-and-hold
+// multi-select wiring, since selecting-to-delete only ever makes sense on
+// your own profile; a tap just opens the post like anywhere else in the
+// app.
+function renderPublicGridItem(id, post) {
+    const d = post.data ? post.data : post;
+    let mediaUrl = '';
+    if (d.media_url) {
+        if (d.media_url.startsWith('[')) {
+            try { mediaUrl = JSON.parse(d.media_url)[0]; } catch(_) { mediaUrl = d.media_url; }
+        } else {
+            mediaUrl = d.media_url;
+        }
+    }
+    const fallbackImage = 'https://images.unsplash.com/photo-1563013544-824ae1d704d3?w=300';
+    const isVideo = d.media_type === 'video';
+
+    return `
+    <div class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition" onclick="openDetail('${escAttr(idKey(id))}')">
+        ${isVideo
+            ? `<video class="w-full h-full object-cover" src="${mediaUrl}" preload="none" muted playsinline></video>
+               <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
+            : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
+        }
+        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
+            <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
+        </div>
+    </div>`;
+}
+
 function renderGridItem(id, post) {
     const d = post.data ? post.data : post;
 

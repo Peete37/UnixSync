@@ -177,7 +177,15 @@
       top: 0;
       left: 0;
       right: 0;
-      bottom: 0;
+      /* Fix: this used to run all the way to the bottom of the viewport
+         (bottom: 0), with the bottom nav (z-index: 50) drawn on top of
+         it — so the actual video content underneath the nav bar was
+         genuinely covered, not just visually layered. Insetting the
+         container to stop exactly where the nav begins means the reel
+         itself is never hidden behind it; scroll-snap and video sizing
+         both naturally adjust since each .reel-card is height: 100% of
+         this now-shorter container. */
+      bottom: calc(78px + env(safe-area-inset-bottom, 0px));
       height: auto;
       margin: 0;
       width: 100%;
@@ -204,10 +212,11 @@
     .reel-actions {
       position: absolute;
       right: 12px;
-      /* Base offset plus the bottom nav's real footprint (~78px including
-         its own bottom safe-area padding) so the action stack always
-         clears the nav bar instead of being partially hidden under it. */
-      bottom: calc(78px + env(safe-area-inset-bottom, 0px) + 40px);
+      /* posts-feed.reels-mode now already stops above the bottom nav
+         (see its bottom: calc(...) above), so this only needs its own
+         small breathing room from the very edge of that shorter
+         container — not a second nav-height compensation on top of it. */
+      bottom: 40px;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -229,7 +238,7 @@
       position: absolute;
       left: 14px;
       right: 80px;
-      bottom: calc(78px + env(safe-area-inset-bottom, 0px) + 8px);
+      bottom: 8px;
       text-shadow: 0 1px 6px rgba(0,0,0,0.8);
       z-index: 4;
     }
@@ -626,6 +635,88 @@
       color: #fff;
       display: flex; align-items: center; justify-content: center;
     }
+    #editMediaModal .crop-btn {
+      position: absolute;
+      top: 10px; right: 54px;
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    /* ── CROP OVERLAY ── */
+    /* A draggable/resizable box over the image preview. Percent-based
+       positioning (not pixels) so the crop rect scales correctly if the
+       preview element itself ever changes size (e.g. rotation), and so
+       the stored crop rect is naturally resolution-independent — it maps
+       directly onto the full-resolution source image at export time. */
+    #cropOverlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+    }
+    #cropOverlay.crop-active { display: block; }
+    #cropOverlay .crop-dim {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      /* The actual "hole" is punched via a box-shadow spread on
+         .crop-box itself (see below) rather than clip-path, since that's
+         far simpler to keep in sync with a dynamically resized box. */
+      pointer-events: none;
+    }
+    #cropOverlay .crop-box {
+      position: absolute;
+      border: 2px solid #fbbf24;
+      box-shadow: 0 0 0 9999px rgba(0,0,0,0.55);
+      touch-action: none;
+      cursor: move;
+    }
+    #cropOverlay .crop-box::before,
+    #cropOverlay .crop-box::after {
+      content: '';
+      position: absolute;
+      background: rgba(251,191,36,0.5);
+      pointer-events: none;
+    }
+    /* Rule-of-thirds guide lines */
+    #cropOverlay .crop-box::before {
+      left: 33.333%; right: 33.333%; top: 0; bottom: 0;
+      border-left: 1px solid rgba(255,255,255,0.35);
+      border-right: 1px solid rgba(255,255,255,0.35);
+      background: none;
+    }
+    #cropOverlay .crop-box::after {
+      top: 33.333%; bottom: 33.333%; left: 0; right: 0;
+      border-top: 1px solid rgba(255,255,255,0.35);
+      border-bottom: 1px solid rgba(255,255,255,0.35);
+      background: none;
+    }
+    #cropOverlay .crop-handle {
+      position: absolute;
+      width: 26px; height: 26px;
+      display: flex; align-items: center; justify-content: center;
+      touch-action: none;
+    }
+    #cropOverlay .crop-handle::after {
+      content: '';
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: #fbbf24;
+      border: 2px solid #0b0f1a;
+    }
+    #cropOverlay .crop-handle.nw { top: -13px; left: -13px; cursor: nwse-resize; }
+    #cropOverlay .crop-handle.ne { top: -13px; right: -13px; cursor: nesw-resize; }
+    #cropOverlay .crop-handle.sw { bottom: -13px; left: -13px; cursor: nesw-resize; }
+    #cropOverlay .crop-handle.se { bottom: -13px; right: -13px; cursor: nwse-resize; }
+
+    #cropFooter {
+      display: none;
+      gap: 8px;
+    }
+    #cropFooter.crop-active { display: flex; }
+    #editMediaModal .edit-main-footer.crop-active-hide { display: none; }
 
     /* ── OPTIONS MENU (3-dot action sheet) ──
        Reusable bottom-sheet style menu used for both post options
@@ -854,6 +945,44 @@
       object-fit: cover;
     }
 
+    /* ── PUBLIC PROFILE (viewing someone else's page) ── */
+    .public-profile-header {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 12px 0 20px;
+    }
+    .public-profile-header img {
+      width: 84px; height: 84px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 3px solid rgba(251,191,36,0.4);
+    }
+    .public-profile-stats {
+      display: flex;
+      justify-content: center;
+      gap: 28px;
+      padding: 16px 0;
+      border-top: 1px solid rgba(148,163,184,0.1);
+      border-bottom: 1px solid rgba(148,163,184,0.1);
+      margin: 16px 0;
+    }
+    .public-profile-stats .stat-value {
+      color: #fff;
+      font-weight: 900;
+      font-size: 18px;
+      display: block;
+      text-align: center;
+    }
+    .public-profile-stats .stat-label {
+      color: #64748b;
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
     /* ── MY GIGS & POSTS — press-and-hold multi-select ── */
     #grid-select-toolbar.select-mode-active { display: flex; }
     .grid-tile.select-mode .grid-tile-check {
@@ -917,12 +1046,43 @@
       </button>
 
       <div id="feed-tabs" class="feed-tabs-scroll flex-1 flex items-center gap-4 overflow-x-auto no-scrollbar text-[11px] font-bold tracking-wider uppercase">
-        <button onclick="window.filterFeed('all', this)" class="feed-tab-btn shrink-0 text-amber-400 whitespace-nowrap pb-1 border-b-2 border-amber-400">All</button>
-        <button onclick="window.filterFeed('reels', this)" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Reels</button>
-        <button onclick="window.filterFeed('following', this)" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Following</button>
-        <button onclick="window.filterFeed('product', this)" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Products</button>
-        <button onclick="window.filterFeed('skill', this)" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Services</button>
+        <button onclick="window.filterFeed('all', this)" data-tab="all" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">All</button>
+        <button onclick="window.filterFeed('reels', this)" data-tab="reels" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Reels</button>
+        <button onclick="window.filterFeed('following', this)" data-tab="following" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Following</button>
+        <button onclick="window.filterFeed('product', this)" data-tab="product" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Products</button>
+        <button onclick="window.filterFeed('skill', this)" data-tab="skill" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Services</button>
       </div>
+      <script>
+        // Fix: the "All" tab used to be hardcoded as visually active
+        // directly in this markup, so on every refresh — even when the
+        // person was last viewing Reels/Products/Following/Services —
+        // the browser painted "All" as highlighted for a brief moment
+        // before app.js finished booting and corrected it. This tiny
+        // synchronous script runs immediately as the browser parses this
+        // exact spot in the HTML (before the rest of the page even
+        // renders), reading the same localStorage key app.js uses to
+        // restore the active feed tab, so the correct tab is already
+        // highlighted at first paint — no flash, and no dependency on
+        // app.js (a deferred module) finishing first.
+        (function () {
+          try {
+            const validTabs = ['all', 'reels', 'following', 'product', 'skill'];
+            const saved = localStorage.getItem('campus_market_feed_tab');
+            const activeTab = validTabs.includes(saved) ? saved : 'all';
+            document.querySelectorAll('#feed-tabs .feed-tab-btn').forEach((btn) => {
+              const isActive = btn.dataset.tab === activeTab;
+              btn.classList.toggle('text-amber-400', isActive);
+              btn.classList.toggle('text-slate-500', !isActive);
+              btn.classList.toggle('border-amber-400', isActive);
+              btn.classList.toggle('border-transparent', !isActive);
+            });
+          } catch (_) {
+            // localStorage can throw in some locked-down/private-browsing
+            // contexts — falling back to the default "All" highlight
+            // (already the else-branch above) is a fine degrade.
+          }
+        })();
+      </script>
 
       <button id="nav-btn-cart" class="header-icon-btn shrink-0" onclick="window.navigateTo('cart', document.getElementById('nav-btn-cart'))" aria-label="Saved items">
         <i class="fas fa-bookmark text-xs"></i>
@@ -1201,6 +1361,22 @@
     <div id="info-sheet-body" class="info-sheet-body"></div>
   </div>
 
+  <!-- Public profile: someone ELSE's profile, opened by tapping their name/
+       avatar on a post. Distinct from #profile-container, which is always
+       the signed-in person's own profile — that view has editable settings,
+       account deletion, etc. that would never make sense here, so this is
+       a separate, purpose-built read-only view rather than trying to
+       repurpose the owner's profile screen for two different jobs. -->
+  <div id="public-profile-overlay" class="info-sheet-overlay">
+    <div class="info-sheet-header">
+      <button class="info-sheet-back" onclick="window.closePublicProfile()" aria-label="Back">
+        <i class="fas fa-arrow-left"></i>
+      </button>
+      <h2 id="public-profile-title" class="text-white font-black text-sm uppercase tracking-widest">Profile</h2>
+    </div>
+    <div id="public-profile-body" class="info-sheet-body"></div>
+  </div>
+
   <div class="bottom-nav-container">
     <nav class="bottom-nav">
       <button id="nav-btn-feed" onclick="window.navigateTo('feed', this)">
@@ -1283,9 +1459,19 @@
       </div>
       <div class="edit-main-preview" id="editMainPreview"></div>
       <div class="edit-thumb-strip no-scrollbar" id="editThumbStrip"></div>
-      <button onclick="window.confirmEditedMedia()" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-1 transition active:scale-95 shadow-lg shadow-amber-400/20">
-        Use These Files
-      </button>
+      <div id="editMainFooter" class="edit-main-footer">
+        <button onclick="window.confirmEditedMedia()" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-1 transition active:scale-95 shadow-lg shadow-amber-400/20">
+          Use These Files
+        </button>
+      </div>
+      <div id="cropFooter" class="mt-1">
+        <button onclick="window._cancelCrop()" class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
+          Cancel
+        </button>
+        <button onclick="window._applyCrop()" class="flex-1 bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 shadow-lg shadow-amber-400/20">
+          Apply Crop
+        </button>
+      </div>
     </div>
   </div>
 
