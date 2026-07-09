@@ -180,12 +180,18 @@
       /* Fix: this used to run all the way to the bottom of the viewport
          (bottom: 0), with the bottom nav (z-index: 50) drawn on top of
          it — so the actual video content underneath the nav bar was
-         genuinely covered, not just visually layered. Insetting the
-         container to stop exactly where the nav begins means the reel
-         itself is never hidden behind it; scroll-snap and video sizing
-         both naturally adjust since each .reel-card is height: 100% of
-         this now-shorter container. */
-      bottom: calc(78px + env(safe-area-inset-bottom, 0px));
+         genuinely covered, not just visually layered.
+         Second fix: a first attempt at this replaced bottom: 0 with a
+         GUESSED pixel height (78px) for the nav bar, but the real nav is
+         taller than that once its icon + label + gap + 20px bottom
+         padding are all added up — so the video was still peeking out
+         from under the nav by that shortfall. --real-nav-height is now
+         measured directly from the actual rendered nav element in JS
+         (see measureBottomNavHeight in app.js) and kept in sync on
+         resize/orientation change, so this can never drift out of sync
+         with reality again. The pixel fallback only matters for the
+         first frame before that JS has run once. */
+      bottom: var(--real-nav-height, 88px);
       height: auto;
       margin: 0;
       width: 100%;
@@ -207,6 +213,17 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
+      /* Fix: video elements are frequently promoted to their own
+         hardware-accelerated compositing layer on mobile browsers, which
+         can end up painting above absolutely-positioned siblings (like
+         .reel-info's profile trigger / .reel-actions' buttons) even
+         without an explicit z-index on the video, silently swallowing
+         taps meant for the UI on top of it. Giving it an explicit,
+         low z-index inside its own stacking context (.reel-card is
+         position: relative) makes sure .reel-info/.reel-actions always
+         win regardless of how the browser happens to composite video. */
+      position: relative;
+      z-index: 1;
     }
 
     .reel-actions {

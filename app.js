@@ -534,7 +534,27 @@ async function subscribeFeed(baseFilter = null) {
                 try {
                     const currentCount = Math.max(feedLoadedCount, FEED_PAGE_SIZE);
                     const data = await fetchFeedSnapshot(() => buildFeedQuery(baseFilter, 0, currentCount - 1));
-                    allCachedPosts = data.map(item => ({ id: item.id, data: item }));
+
+                    // Fix: liking a post writes to posts.likes_count via
+                    // increment_post_likes, which itself fires THIS very
+                    // listener. If that refresh's fresh fetch lands before
+                    // your own increment has actually committed server-side,
+                    // it would silently overwrite your optimistic count with
+                    // the stale pre-like number — which is exactly why likes
+                    // could appear to "revert" seemingly at random shortly
+                    // after tapping them. Any post with a like operation
+                    // still in flight (see likeInFlight, set/cleared in
+                    // likePost) keeps whatever likes_count is already showing
+                    // locally instead of being blindly replaced here.
+                    const previousById = new Map(allCachedPosts.map(p => [idKey(p.id), p.data]));
+                    allCachedPosts = data.map(item => {
+                        if (likeInFlight.has(idKey(item.id))) {
+                            const prev = previousById.get(idKey(item.id));
+                            if (prev) return { id: item.id, data: { ...item, likes_count: prev.likes_count } };
+                        }
+                        return { id: item.id, data: item };
+                    });
+
                     feedLoadedCount = data.length;
                     feedHasMore = data.length >= currentCount;
                     renderFeedFromCache();
@@ -2382,6 +2402,35 @@ window._closeCommentSheet = function (postId, fromPop = false) {
 };
 
 // Global backdrop click dismisses whichever reel comment sheet is open.
+// Measures the ACTUAL rendered height of the bottom nav bar (icons +
+// labels + its own padding, all of which can vary by device font
+// rendering, safe-area insets, etc.) and stores it as a CSS custom
+// property so #posts-feed.reels-mode's bottom inset is always exactly
+// right instead of relying on a guessed pixel constant that can drift
+// out of sync with reality and leave a sliver of video peeking out from
+// under the nav. Re-measures on resize/orientation change since mobile
+// browsers frequently resize the visual viewport when their address bar
+// shows/hides, which can also change how much of the safe-area inset is
+// actually reserved.
+function measureBottomNavHeight() {
+    const nav = document.querySelector('.bottom-nav-container');
+    if (!nav) return;
+    const height = nav.getBoundingClientRect().height;
+    if (height > 0) {
+        document.documentElement.style.setProperty('--real-nav-height', `${height}px`);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    measureBottomNavHeight();
+    // A second pass shortly after load catches any late font-swap or
+    // layout shift that changed the nav's rendered height after the
+    // very first measurement.
+    setTimeout(measureBottomNavHeight, 300);
+});
+window.addEventListener('resize', measureBottomNavHeight);
+window.addEventListener('orientationchange', () => setTimeout(measureBottomNavHeight, 200));
+
 document.addEventListener('DOMContentLoaded', () => {
     if (!document.getElementById('comments-global-backdrop')) {
         const backdrop = document.createElement('div');
@@ -3057,6 +3106,21 @@ function setupFeedCommentAutoClose() {
         feedCommentAutoCloseObserver = null;
     }
 
+    // Fix: root: null observes intersection against the whole BROWSER
+    // viewport — but #posts-feed (in its normal, non-reels mode) scrolls
+    // internally via its own overflow-y: scroll, not by moving the actual
+    // window. A card scrolling within that inner container can stay
+    // "intersecting the viewport" the entire time even as it visually
+    // scrolls out of sight inside #posts-feed, since the container
+    // element itself never moves relative to the window. That meant this
+    // observer could silently never fire for normal-feed scrolling, and
+    // an open comment panel would stay open (and visible, since it's
+    // just an inline block in the card's own DOM) as the person scrolled
+    // straight past it — reading exactly like a stuck dark panel
+    // covering part of the screen. Using #posts-feed itself as the
+    // intersection root fixes this at the source.
+    const feed = document.getElementById('posts-feed');
+
     feedCommentAutoCloseObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) return;
@@ -3072,7 +3136,7 @@ function setupFeedCommentAutoClose() {
                 window._closeCommentSheet(postId);
             }
         });
-    }, { root: null, threshold: 0, rootMargin: '-20% 0px -20% 0px' });
+    }, { root: feed, threshold: 0, rootMargin: '-20% 0px -20% 0px' });
 
     document.querySelectorAll('[id^="feed-card-"]').forEach(card => {
         feedCommentAutoCloseObserver.observe(card);
@@ -5768,14 +5832,26 @@ window._handleGridTileTap = function (id) {
 
 window._enterGridSelectMode = function () {
     _gridSelectMode = true;
-    document.getElementById('grid-select-toolbar')?.classList.add('select-mode-active');
+    // Fix: the toolbar markup starts with class="hidden", and this app's
+    // .hidden rule is `display: none !important` — adding
+    // select-mode-active alone was never enough to show it, since a
+    // non-!important display:flex rule can't override an !important
+    // display:none. The toolbar itself was invisible the whole time even
+    // though tiles correctly flipped into select mode (checkmarks use a
+    // separate, non-!important CSS rule, so those worked fine and made it
+    // look like only "half" of select mode was broken).
+    const toolbar = document.getElementById('grid-select-toolbar');
+    toolbar?.classList.remove('hidden');
+    toolbar?.classList.add('select-mode-active');
     document.querySelectorAll('.grid-tile').forEach(t => t.classList.add('select-mode'));
 };
 
 window.exitGridSelectMode = function () {
     _gridSelectMode = false;
     _gridSelectedIds.clear();
-    document.getElementById('grid-select-toolbar')?.classList.remove('select-mode-active');
+    const toolbar = document.getElementById('grid-select-toolbar');
+    toolbar?.classList.add('hidden');
+    toolbar?.classList.remove('select-mode-active');
     document.querySelectorAll('.grid-tile').forEach(t => {
         t.classList.remove('select-mode', 'tile-selected');
     });
