@@ -490,10 +490,22 @@ async function subscribeFeed(baseFilter = null) {
             // so the heart state always matches the database, not just
             // whatever happened to survive in this browser's storage.
             try {
-                const { data: remoteLikes } = await supabase
+                const { data: remoteLikes, error: likesFetchErr } = await supabase
                     .from("likes")
                     .select("post_id")
                     .eq("user_id", currentUserData.id);
+
+                if (likesFetchErr) {
+                    // Surfacing this (rather than swallowing it) matters:
+                    // if this query errors — e.g. an RLS policy blocking
+                    // the read, or a column type mismatch on the likes
+                    // table — likedPostIds silently keeps whatever was
+                    // last in localStorage instead of actually
+                    // reconciling with the database, which can look
+                    // exactly like "likes disappearing on refresh" when
+                    // the real problem is this sync failing every time.
+                    console.error("Likes sync query failed:", likesFetchErr);
+                }
 
                 if (remoteLikes) {
                     likedPostIds.clear();
@@ -501,7 +513,7 @@ async function subscribeFeed(baseFilter = null) {
                     localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
                 }
             } catch (likeSyncErr) {
-                console.warn("Likes sync failed, falling back to local cache:", likeSyncErr);
+                console.error("Likes sync failed, falling back to local cache:", likeSyncErr);
             }
         }
 
@@ -1941,14 +1953,10 @@ window.sharePost = function (postId, title) {
     }
 };
 
-window.downloadMedia = function (mediaUrl, title) {
-    if (!mediaUrl) return;
-    const a    = document.createElement('a');
-    a.href     = mediaUrl;
-    a.download = title || 'campus-market';
-    a.target   = '_blank';
-    a.click();
-};
+// downloadMedia was removed entirely — post media (photos/videos) is no
+// longer downloadable from anywhere in the app. This is separate from the
+// avatar long-press "Save" button, which only ever lets someone save
+// their OWN profile picture and is unaffected by this change.
 
 // Opens a real DM thread with the seller AND shares a small preview of the
 // exact listing the person tapped "Contact" on, so the seller immediately
@@ -2884,9 +2892,6 @@ function renderFeedCard(id, d) {
                 <button id="feed-cart-icon-${escAttr(id)}" onclick="window.toggleCartItem('${escAttr(id)}')" class="hover:text-amber-400 transition active:scale-90">
                     <i class="${bookmarkClass} text-xl"></i>
                 </button>
-                <button onclick="downloadMedia('${escAttr(mediaUrls[0] || '')}', '${escAttr(d.title)}')" class="text-slate-400 hover:text-purple-400 transition">
-                    <i class="fas fa-arrow-down text-base"></i>
-                </button>
             </div>
         </div>
 
@@ -3235,7 +3240,7 @@ function renderReelCard(id, d) {
                 <i class="far fa-comment text-2xl text-white"></i>
                 <span class="comment-count-${escAttr(id)} text-white text-[10px] font-bold mt-1">${displayComments}</span>
             </button>
-            <button onclick="window.toggleCartItem('${escAttr(id)}')" class="reel-action-btn">
+            <button id="reel-cart-icon-${escAttr(id)}" onclick="window.toggleCartItem('${escAttr(id)}')" class="reel-action-btn">
                 <i class="${bookmarkClass} text-2xl"></i>
             </button>
             <button onclick="sharePost('${escAttr(id)}', '${escAttr(d.title)}')" class="reel-action-btn">
@@ -3402,6 +3407,16 @@ window.toggleCartItem = async function (postId) {
         gridBtn.className = !isRemoving ? "fas fa-bookmark text-amber-400 text-xs" : "far fa-bookmark text-white/80 text-xs";
     }
 
+    // Fix: the reel card's bookmark button had no id at all, so tapping
+    // it on the Reels tab correctly saved the item (toast showed, data
+    // persisted) but the icon on screen never visually flipped between
+    // outline/filled — it silently "worked" with zero visible feedback,
+    // which read as the feature not doing anything.
+    const reelIcon = document.getElementById(`reel-cart-icon-${postId}`)?.querySelector('i');
+    if (reelIcon) {
+        reelIcon.className = !isRemoving ? "fas fa-bookmark text-amber-400 text-2xl" : "far fa-bookmark text-white text-2xl";
+    }
+
     const detailBtn = document.getElementById(`detail-cart-btn-${postId}`);
     if (detailBtn) {
         const labelText = detailBtn.querySelector('.cart-btn-label');
@@ -3465,6 +3480,7 @@ window.toggleCartItem = async function (postId) {
         const revertedIsSaved = isRemoving; // if we were removing, it's back to saved; if we were adding, it's back to unsaved
         if (feedIcon) feedIcon.className = revertedIsSaved ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
         if (gridBtn) gridBtn.className = revertedIsSaved ? "fas fa-bookmark text-amber-400 text-xs" : "far fa-bookmark text-white/80 text-xs";
+        if (reelIcon) reelIcon.className = revertedIsSaved ? "fas fa-bookmark text-amber-400 text-2xl" : "far fa-bookmark text-white text-2xl";
         if (detailBtn) {
             const labelText = detailBtn.querySelector('.cart-btn-label');
             if (labelText) labelText.textContent = revertedIsSaved ? "✓ Added to Chart" : "Add to Chart List";
@@ -4266,6 +4282,13 @@ async function loadProfileStats() {
         // state (checkmarks, the toolbar) referring to the old tiles would
         // otherwise be left dangling.
         if (typeof window.exitGridSelectMode === 'function') window.exitGridSelectMode();
+
+        // Cached so shareSelectedGridItems (multi-select Share) can build
+        // a real summary of title/price for whatever's selected without
+        // a redundant fetch — this data only otherwise existed inside
+        // this function's own closure and was gone the moment it returned.
+        _ownProfilePostsById.clear();
+        postsRes.data?.forEach(d => _ownProfilePostsById.set(idKey(d.id), d));
 
         const grid = document.getElementById('profile-grid');
         if (grid) {
@@ -5797,6 +5820,10 @@ let _gridHoldTimer = null;
 let _gridSelectMode = false;
 let _gridJustLongPressed = false;
 const _gridSelectedIds = new Set();
+// id -> {title, price, ...} for the signed-in person's OWN posts, refreshed
+// every time loadProfileStats() rebuilds the grid. Lets shareSelectedGridItems
+// build a real summary of what's selected without a redundant fetch.
+const _ownProfilePostsById = new Map();
 
 window._startGridTileHold = function (id) {
     clearTimeout(_gridHoldTimer);
@@ -5879,6 +5906,43 @@ function _updateGridSelectCount() {
     const countEl = document.getElementById('grid-select-count');
     if (countEl) countEl.textContent = `${_gridSelectedIds.size} selected`;
 }
+
+// Shares a combined summary of whatever's currently selected in the "My
+// Gigs & Posts" multi-select grid. There's no per-post deep link anywhere
+// in this single-page app to share individually (sharePost, the existing
+// single-post share, already just links back to the app's root URL with
+// a text description) — so for multiple selected posts, this builds one
+// combined text listing (title + price per item) and shares/copies that,
+// which is the honest equivalent given what the app actually has to share.
+window.shareSelectedGridItems = function () {
+    if (_gridSelectedIds.size === 0) {
+        showToast('Select at least one post first.');
+        return;
+    }
+
+    const ids = [..._gridSelectedIds];
+    const items = ids
+        .map(id => _ownProfilePostsById.get(id))
+        .filter(Boolean);
+
+    if (items.length === 0) {
+        showToast("Couldn't find details for the selected posts.");
+        return;
+    }
+
+    const lines = items.map(d => `• ${d.title} — GH₵${d.price ?? 0}`);
+    const intro = items.length === 1
+        ? `Check out "${items[0].title}" on CampusMarket!`
+        : `Check out these ${items.length} listings on CampusMarket!`;
+    const shareText = `${intro}\n${lines.join('\n')}\n${window.location.href}`;
+
+    if (navigator.share) {
+        navigator.share({ title: 'CampusMarket', text: shareText }).catch(() => {});
+    } else {
+        navigator.clipboard?.writeText(shareText);
+        showToast('Link copied to clipboard!');
+    }
+};
 
 window.deleteSelectedGridItems = function () {
     if (_gridSelectedIds.size === 0) {
