@@ -111,9 +111,24 @@ let currentFeedType = _validFeedTabs.includes(_savedFeedTab)
 // past a fridge for sale in Tamale they can't realistically go pick up).
 // Now the All/Products/Services tabs default to "mine" — the signed-in
 // person's own institution — with an easy one-tap switch to "everywhere"
-// for anyone who wants the full nationwide feed. Persisted so the choice
-// survives a reload rather than resetting every visit.
-let currentCampusScope = localStorage.getItem("campus_market_scope") || "mine"; // 'mine' | 'everywhere'
+// Three-tier feed scope: 'institution' (the person's own campus, the
+// tightest/default view) -> 'region' (their wider region, e.g. all of
+// Greater Accra) -> 'everywhere' (nationwide, no scope at all). Each tier
+// is explicit and persisted, rather than silently auto-expanding — the
+// person always knows which one they're looking at and chose to move to
+// a wider one themselves, whether via the banner toggle or the
+// end-of-feed "want to see more?" prompt.
+const _validCampusScopes = ["institution", "region", "everywhere"];
+const _savedCampusScope = localStorage.getItem("campus_market_scope");
+// 'mine' was the old value from before region scoping existed — treat it
+// as 'institution' so anyone's existing saved preference still maps
+// sensibly instead of silently resetting.
+let currentCampusScope =
+  _savedCampusScope === "mine"
+    ? "institution"
+    : _validCampusScopes.includes(_savedCampusScope)
+      ? _savedCampusScope
+      : "institution";
 
 // ─── PAGINATION STATE ─────────────────────────────────────────────────────────
 // Fix: the feed previously had a single hard cap (FEED_LIMIT posts) with
@@ -3554,16 +3569,13 @@ function renderProductGrid() {
 
   if (products.length === 0) {
     const isScopedEmpty =
-      currentCampusScope === "mine" && currentUserData?.institution;
+      currentCampusScope !== "everywhere" && currentUserData?.institution;
     feed.innerHTML = isScopedEmpty
       ? `
             <div class="text-center py-16 space-y-3 px-6">
                 <p class="text-4xl">📦</p>
-                <p class="font-bold text-white">No products from ${esc(currentUserData.institution)} yet</p>
-                <p class="text-slate-500 text-xs">Be the first to list one, or check other campuses.</p>
-                <button onclick="window.toggleCampusScope()" class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
-                    Show Everywhere
-                </button>
+                <p class="font-bold text-white">No products found</p>
+                ${buildScopeWidenPrompt({ contextLabel: "products" })}
             </div>`
       : `
             <div class="text-center py-16 space-y-3">
@@ -3578,9 +3590,17 @@ function renderProductGrid() {
     .map(({ id, data: d }) => renderProductGridCard(id, d))
     .join("")}</div>`;
 
+  const canWidenProducts =
+    currentCampusScope !== "everywhere" && currentUserData?.institution;
   feed.innerHTML += `
-        <div id="feed-load-more-sentinel" class="py-6">
-            ${feedHasMore ? "" : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`}
+        <div id="feed-load-more-sentinel" class="py-6 text-center space-y-2 px-6">
+            ${
+              feedHasMore
+                ? ""
+                : canWidenProducts
+                  ? buildScopeWidenPrompt({ contextLabel: "products" })
+                  : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
+            }
         </div>`;
   setupFeedLoadMoreObserver();
 }
@@ -4486,18 +4506,15 @@ function renderFeedFromCache() {
 
   if (allCachedPosts.length === 0) {
     const isScopedEmpty =
-      currentCampusScope === "mine" &&
+      currentCampusScope !== "everywhere" &&
       currentUserData?.institution &&
       currentFeedType !== "following";
     feed.innerHTML = isScopedEmpty
       ? `
             <div class="text-center py-16 space-y-3 px-6">
                 <p class="text-4xl">📭</p>
-                <p class="font-bold text-white">No posts from ${esc(currentUserData.institution)} yet</p>
-                <p class="text-slate-500 text-xs">Be the first to post, or check what's happening at other campuses.</p>
-                <button onclick="window.toggleCampusScope()" class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
-                    Show Everywhere
-                </button>
+                <p class="font-bold text-white">No posts found</p>
+                ${buildScopeWidenPrompt({ contextLabel: "posts" })}
             </div>`
       : `
             <div class="text-center py-16 space-y-3">
@@ -4516,15 +4533,25 @@ function renderFeedFromCache() {
   });
 
   // Infinite scroll: a sentinel div at the end of the list triggers
-  // loading the next page once it scrolls into view. Shows a small
-  // "you're all caught up" message once there's genuinely nothing left,
-  // instead of just silently stopping with no feedback.
+  // loading the next page once it scrolls into view. Once there's
+  // genuinely nothing left, shows a "want to see more?" prompt offering
+  // to widen to the next scope tier (institution -> region ->
+  // everywhere) rather than just silently stopping with no feedback —
+  // unless already at 'everywhere' or on a tab scope doesn't apply to
+  // (Following), in which case it's just a plain "caught up" message
+  // since there's nowhere wider left to offer.
+  const canWiden =
+    currentCampusScope !== "everywhere" &&
+    currentUserData?.institution &&
+    currentFeedType !== "following";
   feed.innerHTML += `
-        <div id="feed-load-more-sentinel" class="py-6">
+        <div id="feed-load-more-sentinel" class="py-6 text-center space-y-2 px-6">
             ${
               feedHasMore
                 ? ""
-                : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
+                : canWiden
+                  ? buildScopeWidenPrompt({ contextLabel: "posts" })
+                  : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
             }
         </div>`;
 
@@ -4637,8 +4664,15 @@ window.filterFeed = function (type, clickedBtn = null) {
       q = q.eq("type", type);
     }
 
-    if (currentCampusScope === "mine" && currentUserData?.institution) {
+    // Three-tier scoping: institution first (tightest), then region
+    // (wider), then no filter at all for 'everywhere'. Falls through
+    // gracefully to a looser tier if the person's profile is somehow
+    // missing the field a tighter tier needs (e.g. no region saved),
+    // rather than silently returning nothing.
+    if (currentCampusScope === "institution" && currentUserData?.institution) {
       q = q.eq("institution", currentUserData.institution);
+    } else if (currentCampusScope === "region" && currentUserData?.region) {
+      q = q.eq("region", currentUserData.region);
     }
 
     return q;
@@ -4652,6 +4686,43 @@ window.filterFeed = function (type, clickedBtn = null) {
 // feed. Hidden entirely on Reels/Following (scope doesn't apply there)
 // and for anyone without a saved institution yet (nothing to scope by —
 // they'd just see an empty toggle that does nothing).
+// Builds the right "want to see more?" prompt HTML for whichever scope
+// tier is currently active, so the same institution -> region ->
+// everywhere logic doesn't need to be duplicated across every place a
+// feed can run dry (empty-from-zero states AND the scroll-exhaustion
+// prompt at the bottom of a populated feed both call this).
+function buildScopeWidenPrompt({ contextLabel = "posts" } = {}) {
+  if (currentCampusScope === "institution") {
+    const hasRegion = !!currentUserData?.region;
+    return `
+            <p class="text-slate-500 text-xs">
+                No more ${contextLabel} from ${esc(currentUserData.institution)}${hasRegion ? ` — want to see ${esc(currentUserData.region)}?` : " — want to see everywhere?"}
+            </p>
+            <button
+                onclick="window.setCampusScope('${hasRegion ? "region" : "everywhere"}')"
+                class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
+            >
+                ${hasRegion ? `Show ${esc(currentUserData.region)}` : "Show Everywhere"}
+            </button>`;
+  }
+
+  if (currentCampusScope === "region") {
+    return `
+            <p class="text-slate-500 text-xs">
+                No more ${contextLabel} from ${esc(currentUserData.region)} — want to see everywhere?
+            </p>
+            <button
+                onclick="window.setCampusScope('everywhere')"
+                class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
+            >
+                Show Everywhere
+            </button>`;
+  }
+
+  // Already at 'everywhere' — there's nothing wider to offer.
+  return `<p class="text-slate-500 text-xs">That's everything for now.</p>`;
+}
+
 function updateCampusScopeBanner() {
   const banner = document.getElementById("campus-scope-banner");
   const label = document.getElementById("campus-scope-label");
@@ -4666,28 +4737,71 @@ function updateCampusScopeBanner() {
   }
 
   banner.classList.remove("hidden");
-  label.textContent =
-    currentCampusScope === "mine" ? currentUserData.institution : "Everywhere";
+  if (currentCampusScope === "institution") {
+    label.textContent = currentUserData.institution;
+  } else if (currentCampusScope === "region" && currentUserData?.region) {
+    label.textContent = currentUserData.region;
+  } else {
+    label.textContent = "Everywhere";
+  }
 }
 
-// Toggles between "mine" (the person's own institution) and "everywhere"
-// (the full nationwide feed), persists the choice, and re-runs the
-// current tab's query with the new scope applied.
+// Cycles institution -> region -> everywhere -> back to institution,
+// persists the choice, and re-runs the current tab's query with the new
+// scope applied. Skips the region step entirely for anyone without a
+// saved region (goes straight institution -> everywhere for them, same
+// as the old two-tier behavior), so this never traps someone in a tier
+// their profile can't actually support.
 window.toggleCampusScope = function () {
   if (!currentUserData?.institution) return;
 
-  currentCampusScope = currentCampusScope === "mine" ? "everywhere" : "mine";
+  const hasRegion = !!currentUserData?.region;
+  if (currentCampusScope === "institution") {
+    currentCampusScope = hasRegion ? "region" : "everywhere";
+  } else if (currentCampusScope === "region") {
+    currentCampusScope = "everywhere";
+  } else {
+    currentCampusScope = "institution";
+  }
   localStorage.setItem("campus_market_scope", currentCampusScope);
 
-  showToast(
-    currentCampusScope === "mine"
-      ? `Showing posts from ${currentUserData.institution}`
-      : "Showing posts from everywhere",
-  );
+  const scopeLabel =
+    currentCampusScope === "institution"
+      ? currentUserData.institution
+      : currentCampusScope === "region"
+        ? currentUserData.region
+        : "everywhere";
+  showToast(`Showing posts from ${scopeLabel}`);
 
   // Re-apply the current tab with the new scope. Reels/Following
   // aren't affected by scope, so nothing to re-run there — but this
   // button is hidden on those tabs anyway.
+  if (["all", "product", "skill"].includes(currentFeedType)) {
+    const clickedBtn = document.querySelector(".feed-tab-btn.text-amber-400");
+    window.filterFeed(currentFeedType, clickedBtn);
+  }
+};
+
+// Jumps directly to a specific scope tier (used by the end-of-feed
+// "want to see more?" prompt, which offers a specific next tier rather
+// than cycling blindly) — same persistence/re-run behavior as the
+// regular toggle, just targeting an explicit tier instead of advancing
+// by one step.
+window.setCampusScope = function (scope) {
+  if (!_validCampusScopes.includes(scope)) return;
+  if (!currentUserData?.institution) return;
+
+  currentCampusScope = scope;
+  localStorage.setItem("campus_market_scope", currentCampusScope);
+
+  const scopeLabel =
+    scope === "institution"
+      ? currentUserData.institution
+      : scope === "region"
+        ? currentUserData.region || "your region"
+        : "everywhere";
+  showToast(`Showing posts from ${scopeLabel}`);
+
   if (["all", "product", "skill"].includes(currentFeedType)) {
     const clickedBtn = document.querySelector(".feed-tab-btn.text-amber-400");
     window.filterFeed(currentFeedType, clickedBtn);
@@ -6647,8 +6761,13 @@ window.addEventListener("online", () => {
         if (currentFeedType !== "all" && currentFeedType !== "product") {
           q = q.eq("type", currentFeedType);
         }
-        if (currentCampusScope === "mine" && currentUserData?.institution) {
+        if (
+          currentCampusScope === "institution" &&
+          currentUserData?.institution
+        ) {
           q = q.eq("institution", currentUserData.institution);
+        } else if (currentCampusScope === "region" && currentUserData?.region) {
+          q = q.eq("region", currentUserData.region);
         }
         return q;
       };
