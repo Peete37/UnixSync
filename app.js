@@ -7120,3 +7120,108 @@ window.deleteSelectedGridItems = function () {
     },
   });
 };
+
+// ─── OPTIONS MENU (3-dot action sheet) ───────────────────────────────────────
+// Replaces the old always-visible trash-bin delete icon on posts and the
+// bare "Delete" text link on comments with a single "..." entry point that
+// opens a small bottom-sheet menu — the same pattern Instagram, TikTok, and
+// WhatsApp use so a destructive action isn't sitting exposed at a glance.
+// ─── IMPLEMENTATION ──────────────────────────────────────────────────────────
+
+window.openCommentOptionsMenu = function (
+  commentId,
+  postId,
+  isOwner,
+  commentUserName,
+) {
+  const menu = document.createElement("div");
+  menu.id = "global-options-menu";
+  menu.className =
+    "fixed inset-0 z-[250] flex items-end justify-center bg-black/60 backdrop-blur-xs transition-opacity duration-200";
+
+  let actionButtons = "";
+
+  if (isOwner) {
+    const btnDelete = document.createElement("button");
+    btnDelete.className =
+      "w-full text-left text-red-400 font-medium py-4 px-6 hover:bg-slate-800 flex items-center gap-3 transition";
+    btnDelete.onclick = () =>
+      window._handleMenuDeleteComment(commentId, postId);
+    btnDelete.innerHTML =
+      '<i class="fas fa-trash-can text-sm w-5 text-center"></i> Delete Comment';
+    menu.appendChild(btnDelete);
+  } else {
+    const btnReply = document.createElement("button");
+    btnReply.className =
+      "w-full text-left text-white font-medium py-4 px-6 hover:bg-slate-800 flex items-center gap-3 transition";
+    btnReply.onclick = () => window._handleMenuReplyComment(postId, commentId);
+
+    // Using simple string concatenation (+) so the formatter leaves it alone
+    const displayName = commentUserName || "Comment";
+    btnReply.innerHTML =
+      '<i class="fas fa-reply text-sm w-5 text-center text-slate-400"></i> Reply to ' +
+      displayName;
+    menu.appendChild(btnReply);
+
+    const btnReport = document.createElement("button");
+    btnReport.className =
+      "w-full text-left text-amber-500 font-medium py-4 px-6 hover:bg-slate-800 flex items-center gap-3 transition border-t border-slate-800/60";
+    btnReport.onclick = () => window._handleMenuReportComment(commentId);
+    btnReport.innerHTML =
+      '<i class="fas fa-flag text-sm w-5 text-center"></i> Report Abuse';
+    menu.appendChild(btnReport);
+  }
+
+  const btnCancel = document.createElement("button");
+  btnCancel.className =
+    "w-full text-center text-slate-400 font-semibold py-4 border-t border-slate-800/80 bg-slate-950/40 hover:bg-slate-950/60 transition";
+  btnCancel.onclick = () => window.closeOptionsMenu();
+  btnCancel.innerText = "Cancel";
+  menu.appendChild(btnCancel);
+
+  document.body.appendChild(menu);
+  // Keep your push UI state logic cleanly here
+  if (typeof pushUiState === "function") {
+    pushUiState("global-options-menu", () => window.closeOptionsMenu(true));
+  }
+
+  // Close menu when clicking outside the panel
+  menu.addEventListener("click", (e) => {
+    if (e.target === menu) window.closeOptionsMenu();
+  });
+};
+
+window.closeOptionsMenu = function (fromPop = false) {
+  const menu = document.getElementById("global-options-menu");
+  if (!menu) return;
+
+  menu.classList.add("opacity-0");
+  menu.querySelector("div")?.classList.add("translate-y-full");
+
+  setTimeout(() => {
+    menu.remove();
+  }, 200);
+
+  if (!fromPop) popUiState("global-options-menu");
+};
+
+// ─── INTERNAL MENU INTERCEPTORS ──────────────────────────────────────────────
+window._handleMenuDeleteComment = function (commentId, postId) {
+  window.closeOptionsMenu();
+  // Proxy directly to your existing robust delete confirmation flow
+  if (typeof window.deleteComment === "function") {
+    window.deleteComment(commentId, postId);
+  }
+};
+
+window._handleMenuReplyComment = function (postId, commentId, commentUserName) {
+  window.closeOptionsMenu();
+  if (typeof window.startCommentReply === "function") {
+    window.startCommentReply(postId, commentId, commentUserName);
+  }
+};
+
+window._handleMenuReportUser = function (userId) {
+  window.closeOptionsMenu();
+  showToast("Thank you for your report. We'll look into this profile.");
+};
