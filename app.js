@@ -90,6 +90,19 @@ let currentFeedChan = null;
 let currentCommentsChan = null;
 let allCachedPosts = [];
 let isAuthInitialized = false;
+// Fix: Supabase's onAuthStateChange can legitimately fire more than once
+// for a single page load (INITIAL_SESSION, then SIGNED_IN, sometimes
+// TOKEN_REFRESHED) — every one of those events used to re-run the ENTIRE
+// signed-in boot sequence below (re-fetching the profile, re-syncing
+// blocked users, and critically, re-calling filterFeed -> subscribeFeed,
+// which re-ran the whole likes-table sync and re-subscribed to
+// realtime). Confirmed directly in the Network tab: a single refresh
+// produced SIX separate GET requests to the likes table and THREE
+// duplicate-key 409 Conflicts on POST to likes, all within about a
+// second of each other — exactly what repeated boot runs would produce.
+// This flag ensures the expensive one-time boot work only ever runs
+// once per real page load, regardless of how many auth events fire.
+let hasBootedFeedForSession = false;
 let isOnline = navigator.onLine;
 // Fix: this used to be hardcoded to 'all', so any refresh silently
 // bounced the person back to the All tab no matter what they were
@@ -6582,38 +6595,59 @@ if (activeAuthChange) {
       // would silently no-op on first load.
       isAuthInitialized = true;
 
-      // Load the block list before the first render so a blocked
-      // person's posts never flash on screen for a moment before
-      // being filtered out.
-      await syncBlockedUsers();
+      // Everything below this point is expensive and/or has
+      // side effects that don't belong happening more than once
+      // per page load (subscribing to realtime channels, syncing
+      // the likes table, fetching profile stats) — see
+      // hasBootedFeedForSession's declaration for why this guard
+      // exists. The lightweight UI sync above (avatar/name text,
+      // onboarding check) stays unguarded since re-running it
+      // harmlessly on a repeat auth event is fine.
+      if (!hasBootedFeedForSession) {
+        hasBootedFeedForSession = true;
 
-      updateCampusScopeBanner();
-      const savedTabBtn = document.querySelector(
-        `.feed-tab-btn[onclick*="'${currentFeedType}'"]`,
-      );
-      window.filterFeed(currentFeedType, savedTabBtn);
-      try {
-        loadProfileStats();
-      } catch (_) {}
-      _initAvatarLongPress();
+        // Load the block list before the first render so a blocked
+        // person's posts never flash on screen for a moment before
+        // being filtered out.
+        await syncBlockedUsers();
 
-      // Populate the DMs unread badge immediately on sign-in,
-      // rather than only after the person happens to open the DMs
-      // tab for the first time.
-      try {
-        const { data: convData } = await supabase
-          .from("conversations")
-          .select("*")
-          .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
-          .order("last_message_at", { ascending: false });
-        conversationsCache = convData || [];
-        updateDmUnreadBadge();
-      } catch (_) {}
+        updateCampusScopeBanner();
+        const savedTabBtn = document.querySelector(
+          `.feed-tab-btn[onclick*="'${currentFeedType}'"]`,
+        );
+        window.filterFeed(currentFeedType, savedTabBtn);
+        try {
+          loadProfileStats();
+        } catch (_) {}
+        _initAvatarLongPress();
+
+        // Populate the DMs unread badge immediately on sign-in,
+        // rather than only after the person happens to open the DMs
+        // tab for the first time.
+        try {
+          const { data: convData } = await supabase
+            .from("conversations")
+            .select("*")
+            .or(
+              `user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`,
+            )
+            .order("last_message_at", { ascending: false });
+          conversationsCache = convData || [];
+          updateDmUnreadBadge();
+        } catch (_) {}
+      }
     } else {
       unsubscribeFeed();
       unsubscribeConversations();
       unsubscribeActiveThread();
       if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
+
+      // Reset so a genuine sign-out followed by signing back in
+      // (within the same page load, not just a refresh) correctly
+      // re-runs the one-time boot sequence for the new session,
+      // instead of being permanently skipped because it already
+      // ran once for the previous person.
+      hasBootedFeedForSession = false;
 
       if (authProfileNav) {
         authProfileNav.innerHTML = `<i class="fas fa-sign-in-alt text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>`;

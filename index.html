@@ -1,183 +1,260 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Unix-Sync</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <style>
-    .hidden { display: none !important; }
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Unix-Sync</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="manifest" href="manifest.json" />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      .hidden {
+        display: none !important;
+      }
 
-    body { font-family: 'Inter', sans-serif; }
+      body {
+        font-family: "Inter", sans-serif;
+        /* On any screen wider than the app's own column, this fills the
+         margins with the same dark background instead of leaving the
+         browser's default white showing through — without this, desktop
+         visitors would see a jarring white gutter on either side of a
+         dark app. */
+        background: #020617;
+        min-height: 100vh;
+      }
 
-    .sr-only {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border: 0;
-    }
+      /* Centers the whole app as a fixed-width column on anything wider
+       than a phone, the same way Instagram/TikTok's desktop sites work —
+       this app's entire interaction model (press-and-hold selection,
+       bottom sheets, a bottom nav bar, full-bleed vertical reels) is
+       built specifically for a narrow, mobile-shaped screen, so widening
+       it isn't a matter of adding breakpoints; the content itself is
+       designed to be exactly this width. A subtle side border and shadow
+       make the boundary look deliberate rather than like the page is
+       simply too narrow for the window.
+    */
+      @media (min-width: 481px) {
+        body {
+          display: flex;
+          justify-content: center;
+        }
+        #app-shell {
+          width: 448px;
+          min-height: 100vh;
+          background: #020617;
+          border-left: 1px solid rgba(255, 255, 255, 0.06);
+          border-right: 1px solid rgba(255, 255, 255, 0.06);
+          box-shadow: 0 0 60px rgba(0, 0, 0, 0.5);
+          position: relative;
+          /* A no-op transform (translateZ(0) changes nothing visually) is
+           the standard technique for making an element establish a new
+           containing block for any position:fixed descendants — without
+           this, the reels feed, bottom nav, and every modal/overlay
+           (which are all position:fixed, anchored to the viewport by
+           design) would ignore this 448px column entirely and still
+           span the full width of the browser window on desktop, which
+           would completely defeat the point of centering everything
+           else. With it, "fixed" descendants behave as if they were
+           fixed to THIS element instead of the browser viewport. */
+          transform: translateZ(0);
+        }
+      }
 
-    /* ── HEADER ── */
-    .site-header {
-      position: sticky;
-      top: 0;
-      z-index: 40;
-      background: rgba(2, 6, 23, 0.85);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border-bottom: 1px solid rgba(255,255,255,0.06);
-      padding: 10px 16px;
-      max-width: 448px;
-      margin: 0 auto;
-      transition: background 0.25s ease, border-color 0.25s ease, opacity 0.25s ease;
-    }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
 
-    /* TikTok-style: on the Reels tab the header becomes a transparent
+      /* ── HEADER ── */
+      .site-header {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        background: rgba(2, 6, 23, 0.85);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        padding: 10px 16px;
+        max-width: 448px;
+        margin: 0 auto;
+        transition:
+          background 0.25s ease,
+          border-color 0.25s ease,
+          opacity 0.25s ease;
+      }
+
+      /* TikTok-style: on the Reels tab the header becomes a transparent
        overlay floating over the video instead of a solid bar. Tabs and
        icons stay tappable but there's no background/border beneath them. */
-    .site-header.header-reels-mode {
-      background: transparent;
-      border-bottom-color: transparent;
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-      /* Fixed (not absolute/sticky) so it sits flush against the actual
+      .site-header.header-reels-mode {
+        background: transparent;
+        border-bottom-color: transparent;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        /* Fixed (not absolute/sticky) so it sits flush against the actual
          top of the viewport regardless of <main>'s padding or scroll
          position — this is what was leaving a visible gap above the
          tabs on the Reels tab. */
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      width: 100%;
-      max-width: 100%;
-      margin: 0;
-      padding-top: max(10px, env(safe-area-inset-top, 0px));
-      z-index: 45;
-    }
-    .site-header.header-reels-mode .header-icon-btn {
-      background: rgba(0,0,0,0.35);
-      border-color: rgba(255,255,255,0.15);
-    }
-    .site-header.header-reels-mode .feed-tab-btn {
-      text-shadow: 0 1px 4px rgba(0,0,0,0.8);
-    }
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        width: 100%;
+        max-width: 100%;
+        margin: 0;
+        padding-top: max(10px, env(safe-area-inset-top, 0px));
+        z-index: 45;
+      }
+      .site-header.header-reels-mode .header-icon-btn {
+        background: rgba(0, 0, 0, 0.35);
+        border-color: rgba(255, 255, 255, 0.15);
+      }
+      .site-header.header-reels-mode .feed-tab-btn {
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+      }
 
-    .header-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
+      .header-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
 
-    .header-icon-btn {
-      position: relative;
-      width: 34px;
-      height: 34px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 10px;
-      background: rgba(15, 23, 42, 0.9);
-      border: 1px solid rgba(255,255,255,0.08);
-      color: #cbd5e1;
-      transition: border-color 0.2s, color 0.2s, background 0.2s;
-    }
-    .header-icon-btn:hover { color: #fbbf24; border-color: rgba(251,191,36,0.3); }
-    .header-icon-btn .badge-dot {
-      position: absolute;
-      top: -3px;
-      right: -3px;
-      width: 15px;
-      height: 15px;
-      border-radius: 50%;
-      background: #fbbf24;
-      color: #000;
-      font-size: 9px;
-      font-weight: 800;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border: 2px solid #020617;
-    }
+      .header-icon-btn {
+        position: relative;
+        width: 34px;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: #cbd5e1;
+        transition:
+          border-color 0.2s,
+          color 0.2s,
+          background 0.2s;
+      }
+      .header-icon-btn:hover {
+        color: #fbbf24;
+        border-color: rgba(251, 191, 36, 0.3);
+      }
+      .header-icon-btn .badge-dot {
+        position: absolute;
+        top: -3px;
+        right: -3px;
+        width: 15px;
+        height: 15px;
+        border-radius: 50%;
+        background: #fbbf24;
+        color: #000;
+        font-size: 9px;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px solid #020617;
+      }
 
-    .feed-tabs-scroll { scroll-behavior: smooth; }
+      .feed-tabs-scroll {
+        scroll-behavior: smooth;
+      }
 
-    /* ── SEARCH ── */
-    .search-wrap { position: relative; margin-top: 10px; }
+      /* ── SEARCH ── */
+      .search-wrap {
+        position: relative;
+        margin-top: 10px;
+      }
 
-    .search-wrap i {
-      position: absolute;
-      left: 11px;
-      top: 50%;
-      transform: translateY(-50%);
-      font-size: 11px;
-      color: #64748b;
-      pointer-events: none;
+      .search-wrap i {
+        position: absolute;
+        left: 11px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 11px;
+        color: #64748b;
+        pointer-events: none;
+      }
 
-    }
+      .search-wrap input {
+        width: 100%;
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: #f1f5f9;
+        border-radius: 12px;
+        padding: 9px 14px 9px 32px;
+        font-size: 12px;
+        font-family: "Inter", sans-serif;
+        outline: none;
+        transition:
+          border-color 0.2s,
+          box-shadow 0.2s;
+      }
 
-    .search-wrap input {
-      width: 100%;
-      background: rgba(15, 23, 42, 0.9);
-      border: 1px solid rgba(255,255,255,0.08);
-      color: #f1f5f9;
-      border-radius: 12px;
-      padding: 9px 14px 9px 32px;
-      font-size: 12px;
-      font-family: 'Inter', sans-serif;
-      outline: none;
-      transition: border-color 0.2s, box-shadow 0.2s;
-    }
+      .search-wrap input::placeholder {
+        color: #475569;
+      }
 
-    .search-wrap input::placeholder { color: #475569; }
+      .search-wrap input:focus {
+        border-color: #fbbf24;
+        box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.1);
+      }
 
-    .search-wrap input:focus {
-      border-color: #fbbf24;
-      box-shadow: 0 0 0 3px rgba(251,191,36,0.1);
-    }
+      /* ── TABS ── */
+      .feed-tab-btn {
+        transition:
+          color 0.15s,
+          border-color 0.15s;
+      }
 
-    /* ── TABS ── */
-    .feed-tab-btn { transition: color 0.15s, border-color 0.15s; }
+      /* ── TIKTOK SCROLL FEED ── */
+      #posts-feed {
+        height: calc(100vh - 140px);
+        overflow-y: scroll;
+        scroll-snap-type: y mandatory;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+      }
+      #posts-feed::-webkit-scrollbar {
+        display: none;
+      }
 
-    /* ── TIKTOK SCROLL FEED ── */
-    #posts-feed {
-      height: calc(100vh - 140px);
-      overflow-y: scroll;
-      scroll-snap-type: y mandatory;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-    }
-    #posts-feed::-webkit-scrollbar { display: none; }
-
-    /* When Products tab renders a grid, disable snap-scroll behavior so
+      /* When Products tab renders a grid, disable snap-scroll behavior so
        the grid can scroll normally instead of snapping per-row. */
-    #posts-feed.grid-mode {
-      scroll-snap-type: none;
-      height: auto;
-      min-height: calc(100vh - 140px);
-      overflow-y: visible;
-    }
+      #posts-feed.grid-mode {
+        scroll-snap-type: none;
+        height: auto;
+        min-height: calc(100vh - 140px);
+        overflow-y: visible;
+      }
 
-    /* Reels: true full-bleed, fixed to the viewport so it's completely
+      /* Reels: true full-bleed, fixed to the viewport so it's completely
        independent of <main>'s padding/max-width (that's what was causing
        the top gap) and so it sits ABOVE the bottom nav bar instead of
        flowing underneath it. Each reel card is exactly one screen tall,
        viewport-height minus the bottom nav's real rendered height, so
        the snap-scroll lands perfectly and nothing is ever hidden behind
        the nav bar. */
-    #posts-feed.reels-mode {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      /* Fix: this used to run all the way to the bottom of the viewport
+      #posts-feed.reels-mode {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        /* Fix: this used to run all the way to the bottom of the viewport
          (bottom: 0), with the bottom nav (z-index: 50) drawn on top of
          it — so the actual video content underneath the nav bar was
          genuinely covered, not just visually layered.
@@ -191,29 +268,29 @@
          resize/orientation change, so this can never drift out of sync
          with reality again. The pixel fallback only matters for the
          first frame before that JS has run once. */
-      bottom: var(--real-nav-height, 88px);
-      height: auto;
-      margin: 0;
-      width: 100%;
-      max-width: 100%;
-      z-index: 30;
-    }
+        bottom: var(--real-nav-height, 88px);
+        height: auto;
+        margin: 0;
+        width: 100%;
+        max-width: 100%;
+        z-index: 30;
+      }
 
-    .reel-card {
-      position: relative;
-      scroll-snap-align: start;
-      scroll-snap-stop: always;
-      height: 100%;
-      width: 100%;
-      background: #000;
-      overflow: hidden;
-    }
+      .reel-card {
+        position: relative;
+        scroll-snap-align: start;
+        scroll-snap-stop: always;
+        height: 100%;
+        width: 100%;
+        background: #000;
+        overflow: hidden;
+      }
 
-    .reel-video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      /* Fix: video elements are frequently promoted to their own
+      .reel-video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        /* Fix: video elements are frequently promoted to their own
          hardware-accelerated compositing layer on mobile browsers, which
          can end up painting above absolutely-positioned siblings (like
          .reel-info's profile trigger / .reel-actions' buttons) even
@@ -222,1610 +299,2447 @@
          low z-index inside its own stacking context (.reel-card is
          position: relative) makes sure .reel-info/.reel-actions always
          win regardless of how the browser happens to composite video. */
-      position: relative;
-      z-index: 1;
-    }
+        position: relative;
+        z-index: 1;
+      }
 
-    .reel-actions {
-      position: absolute;
-      right: 12px;
-      /* posts-feed.reels-mode now already stops above the bottom nav
+      .reel-actions {
+        position: absolute;
+        right: 12px;
+        /* posts-feed.reels-mode now already stops above the bottom nav
          (see its bottom: calc(...) above), so this only needs its own
          small breathing room from the very edge of that shorter
          container — not a second nav-height compensation on top of it. */
-      bottom: 40px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 18px;
-      z-index: 5;
-    }
+        bottom: 40px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 18px;
+        z-index: 5;
+      }
 
-    .reel-action-btn {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      background: none;
-      border: none;
-      cursor: pointer;
-    }
+      .reel-action-btn {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        cursor: pointer;
+      }
 
-    .reel-info {
-      position: absolute;
-      left: 14px;
-      right: 80px;
-      bottom: 8px;
-      text-shadow: 0 1px 6px rgba(0,0,0,0.8);
-      z-index: 4;
-    }
+      .reel-info {
+        position: absolute;
+        left: 14px;
+        right: 80px;
+        bottom: 8px;
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+        z-index: 4;
+      }
 
-    /* TikTok-style bottom sheet comment panel: slides up from the bottom,
+      /* TikTok-style bottom sheet comment panel: slides up from the bottom,
        fixed to viewport (not clipped by the reel card), sits above
        everything else in the reel. */
-    .reel-comments {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      max-height: 60vh;
-      background: #1c1c1e;
-      padding: 0;
-      border-top-left-radius: 20px;
-      border-top-right-radius: 20px;
-      overflow: hidden;
-      z-index: 60;
-      display: flex;
-      flex-direction: column;
-      transform: translateY(100%);
-      transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
-      box-shadow: 0 -8px 40px rgba(0,0,0,0.5);
-    }
-    .reel-comments.comments-open {
-      transform: translateY(0);
-    }
-    .reel-comments .comments-header {
-      flex-shrink: 0;
-      text-align: center;
-      padding: 10px 14px 8px;
-      border-bottom: 1px solid rgba(255,255,255,0.08);
-      position: relative;
-    }
-    .reel-comments .comments-drag-handle {
-      width: 36px;
-      height: 4px;
-      border-radius: 999px;
-      background: rgba(255,255,255,0.25);
-      margin: 0 auto 8px;
-    }
-    .reel-comments .comments-close-btn {
-      position: absolute;
-      right: 10px;
-      top: 8px;
-      width: 26px;
-      height: 26px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.08);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #94a3b8;
-    }
-    .reel-comments .comments-scroll-area {
-      flex: 1;
-      overflow-y: auto;
-      padding: 10px 14px;
-      -webkit-overflow-scrolling: touch;
-    }
-    .reel-comments .comments-input-row {
-      flex-shrink: 0;
-      padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
-      border-top: 1px solid rgba(255,255,255,0.08);
-      background: #1c1c1e;
-    }
+      .reel-comments {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        max-height: 60vh;
+        background: #1c1c1e;
+        padding: 0;
+        border-top-left-radius: 20px;
+        border-top-right-radius: 20px;
+        overflow: hidden;
+        z-index: 60;
+        display: flex;
+        flex-direction: column;
+        transform: translateY(100%);
+        transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+        box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.5);
+      }
+      .reel-comments.comments-open {
+        transform: translateY(0);
+      }
+      .reel-comments .comments-header {
+        flex-shrink: 0;
+        text-align: center;
+        padding: 10px 14px 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        position: relative;
+      }
+      .reel-comments .comments-drag-handle {
+        width: 36px;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.25);
+        margin: 0 auto 8px;
+      }
+      .reel-comments .comments-close-btn {
+        position: absolute;
+        right: 10px;
+        top: 8px;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.08);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #94a3b8;
+      }
+      .reel-comments .comments-scroll-area {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px 14px;
+        -webkit-overflow-scrolling: touch;
+      }
+      .reel-comments .comments-input-row {
+        flex-shrink: 0;
+        padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        background: #1c1c1e;
+      }
 
-    /* Backdrop behind the comment sheet — click to dismiss */
-    .comments-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.4);
-      z-index: 59;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.25s ease;
-    }
-    .comments-backdrop.backdrop-open {
-      opacity: 1;
-      pointer-events: auto;
-    }
+      /* Backdrop behind the comment sheet — click to dismiss */
+      .comments-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+        z-index: 59;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s ease;
+      }
+      .comments-backdrop.backdrop-open {
+        opacity: 1;
+        pointer-events: auto;
+      }
 
-    .tiktok-card {
-      scroll-snap-align: start;
-      scroll-snap-stop: always;
-      height: calc(100vh - 140px);
-      display: flex;
-      flex-direction: column;
-      background: #0f172a;
-      border: 1px solid rgba(255,255,255,0.07);
-      overflow: hidden;
-      position: relative;
-    }
+      .tiktok-card {
+        scroll-snap-align: start;
+        scroll-snap-stop: always;
+        height: calc(100vh - 140px);
+        display: flex;
+        flex-direction: column;
+        background: #0f172a;
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        overflow: hidden;
+        position: relative;
+      }
 
-    .tiktok-card .card-media {
-      flex: 1;
-      min-height: 0;
-      overflow: hidden;
-      position: relative;
-    }
+      .tiktok-card .card-media {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        position: relative;
+      }
 
-    .tiktok-card .card-media img,
-    .tiktok-card .card-media video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
+      .tiktok-card .card-media img,
+      .tiktok-card .card-media video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
 
-    .tiktok-card .card-media::after {
-      content: '';
-      position: absolute;
-      bottom: 0; left: 0; right: 0;
-      height: 80px;
-      background: linear-gradient(to top, #0f172a, transparent);
-      pointer-events: none;
-    }
+      .tiktok-card .card-media::after {
+        content: "";
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 80px;
+        background: linear-gradient(to top, #0f172a, transparent);
+        pointer-events: none;
+      }
 
-    .tiktok-card .card-info {
-      padding: 10px 12px 6px;
-      flex-shrink: 0;
-    }
+      .tiktok-card .card-info {
+        padding: 10px 12px 6px;
+        flex-shrink: 0;
+      }
 
-    .tiktok-card .card-actions {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      justify-content: flex-start;
-      padding: 4px 12px 6px;
-      flex-shrink: 0;
-    }
+      .tiktok-card .card-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        justify-content: flex-start;
+        padding: 4px 12px 6px;
+        flex-shrink: 0;
+      }
 
-    .action-btn {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      color: #94a3b8;
-      font-size: 11px;
-      font-weight: 700;
-      padding: 6px 8px;
-      border-radius: 10px;
-      background: none;
-      border: none;
-      cursor: pointer;
-      transition: color 0.15s, background 0.15s;
-    }
-    .action-btn:hover { background: rgba(255,255,255,0.06); }
-    .action-btn i { font-size: 13px; }
+      .action-btn {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        color: #94a3b8;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 6px 8px;
+        border-radius: 10px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .action-btn:hover {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .action-btn i {
+        font-size: 13px;
+      }
 
-    .tiktok-card .card-cta {
-      padding: 6px 12px 10px;
-      flex-shrink: 0;
-    }
+      .tiktok-card .card-cta {
+        padding: 6px 12px 10px;
+        flex-shrink: 0;
+      }
 
-    /* ── SEARCH RESULT CARDS ── */
-    #search-results .post-card {
-      background: #0f172a;
-      border: 1px solid rgba(255,255,255,0.07);
-      border-radius: 20px;
-      overflow: hidden;
-      transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-      cursor: pointer;
-    }
+      /* ── SEARCH RESULT CARDS ── */
+      #search-results .post-card {
+        background: #0f172a;
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 20px;
+        overflow: hidden;
+        transition:
+          transform 0.18s ease,
+          box-shadow 0.18s ease,
+          border-color 0.18s ease;
+        cursor: pointer;
+      }
 
-    #search-results .post-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
-      border-color: rgba(251,191,36,0.15);
-    }
+      #search-results .post-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+        border-color: rgba(251, 191, 36, 0.15);
+      }
 
-    /* ── BOTTOM NAV ── */
-    .bottom-nav-container {
-      position: fixed;
-      bottom: 0; left: 0; right: 0;
-      background: rgba(2, 6, 23, 0.92);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border-top: 1px solid rgba(255,255,255,0.07);
-      padding: 8px 12px 20px;
-      z-index: 50;
-      transition: transform 0.3s ease;
-    }
+      /* ── BOTTOM NAV ── */
+      .bottom-nav-container {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(2, 6, 23, 0.92);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-top: 1px solid rgba(255, 255, 255, 0.07);
+        padding: 8px 12px 20px;
+        z-index: 50;
+        transition: transform 0.3s ease;
+      }
 
-    .bottom-nav {
-      max-width: 448px;
-      margin: 0 auto;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
+      .bottom-nav {
+        max-width: 448px;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
 
-    .bottom-nav button {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 3px;
-      font-size: 8.5px;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      transition: color 0.15s;
-      padding: 4px 6px;
-      border-radius: 10px;
-      background: none;
-      border: none;
-      cursor: pointer;
-      color: #64748b;
-      position: relative;
-    }
+      .bottom-nav button {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        font-size: 8.5px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        transition: color 0.15s;
+        padding: 4px 6px;
+        border-radius: 10px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: #64748b;
+        position: relative;
+      }
 
-    .bottom-nav button i {
-      font-size: 17px;
-      color: #64748b;
-      transition: color 0.15s;
-    }
-    .bottom-nav button span {
-      color: #64748b;
-      transition: color 0.15s;
-    }
+      .bottom-nav button i {
+        font-size: 17px;
+        color: #64748b;
+        transition: color 0.15s;
+      }
+      .bottom-nav button span {
+        color: #64748b;
+        transition: color 0.15s;
+      }
 
-    .bottom-nav button:hover i,
-    .bottom-nav button:hover span { color: #94a3b8; }
+      .bottom-nav button:hover i,
+      .bottom-nav button:hover span {
+        color: #94a3b8;
+      }
 
-    .bottom-nav button.nav-active i   { color: #fbbf24; }
-    .bottom-nav button.nav-active span { color: #ffffff; }
+      .bottom-nav button.nav-active i {
+        color: #fbbf24;
+      }
+      .bottom-nav button.nav-active span {
+        color: #ffffff;
+      }
 
-    .nav-cart-badge {
-      position: absolute;
-      top: -2px;
-      right: 2px;
-      min-width: 14px;
-      height: 14px;
-      padding: 0 3px;
-      border-radius: 999px;
-      background: #fbbf24;
-      color: #000;
-      font-size: 8px;
-      font-weight: 800;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
+      .nav-cart-badge {
+        position: absolute;
+        top: -2px;
+        right: 2px;
+        min-width: 14px;
+        height: 14px;
+        padding: 0 3px;
+        border-radius: 999px;
+        background: #fbbf24;
+        color: #000;
+        font-size: 8px;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
 
-    .nav-fab-btn {
-      width: 42px !important;
-      height: 42px !important;
-      background: linear-gradient(135deg, #fbbf24, #f59e0b) !important;
-      border-radius: 50% !important;
-      display: flex !important;
-      align-items: center !important;
-      justify-content: center !important;
-      box-shadow: 0 4px 20px rgba(251,191,36,0.4) !important;
-      transform: translateY(-6px) !important;
-      transition: box-shadow 0.15s, transform 0.15s !important;
-      padding: 0 !important;
-      gap: 0 !important;
-    }
+      .nav-fab-btn {
+        width: 42px !important;
+        height: 42px !important;
+        background: linear-gradient(135deg, #fbbf24, #f59e0b) !important;
+        border-radius: 50% !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-shadow: 0 4px 20px rgba(251, 191, 36, 0.4) !important;
+        transform: translateY(-6px) !important;
+        transition:
+          box-shadow 0.15s,
+          transform 0.15s !important;
+        padding: 0 !important;
+        gap: 0 !important;
+      }
 
-    .nav-fab-btn:hover {
-      box-shadow: 0 6px 28px rgba(251,191,36,0.6) !important;
-      transform: translateY(-8px) scale(1.05) !important;
-    }
+      .nav-fab-btn:hover {
+        box-shadow: 0 6px 28px rgba(251, 191, 36, 0.6) !important;
+        transform: translateY(-8px) scale(1.05) !important;
+      }
 
-    .nav-fab-btn i {
-      font-size: 15px !important;
-      color: #000 !important;
-    }
+      .nav-fab-btn i {
+        font-size: 15px !important;
+        color: #000 !important;
+      }
 
-    /* ── MODALS ── */
-    #post-modal .modal-inner,
-    #detail-modal .modal-inner,
-    #avatarModal .modal-inner,
-    #editMediaModal .modal-inner {
-      background: #0f172a;
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 24px;
-    }
+      /* ── MODALS ── */
+      #post-modal .modal-inner,
+      #detail-modal .modal-inner,
+      #avatarModal .modal-inner,
+      #editMediaModal .modal-inner {
+        background: #0f172a;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 24px;
+      }
 
-    #profile-container select,
-    #post-modal select,
-    #post-modal input[type="text"],
-    #post-modal input[type="number"],
-    #post-modal textarea {
-      transition: border-color 0.2s, box-shadow 0.2s;
-    }
+      #profile-container select,
+      #post-modal select,
+      #post-modal input[type="text"],
+      #post-modal input[type="number"],
+      #post-modal textarea {
+        transition:
+          border-color 0.2s,
+          box-shadow 0.2s;
+      }
 
-    #profile-container select:focus,
-    #post-modal select:focus,
-    #post-modal input:focus,
-    #post-modal textarea:focus {
-      box-shadow: 0 0 0 3px rgba(251,191,36,0.12);
-    }
+      #profile-container select:focus,
+      #post-modal select:focus,
+      #post-modal input:focus,
+      #post-modal textarea:focus {
+        box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.12);
+      }
 
-    /* ── LOGIN DIVIDER ── */
-    .login-divider {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      color: #475569;
-      font-size: 10px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-    .login-divider::before,
-    .login-divider::after {
-      content: '';
-      flex: 1;
-      height: 1px;
-      background: rgba(255,255,255,0.08);
-    }
+      /* ── LOGIN DIVIDER ── */
+      .login-divider {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #475569;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .login-divider::before,
+      .login-divider::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.08);
+      }
 
-    /* ── SCROLLBAR ── */
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+      /* ── SCROLLBAR ── */
+      ::-webkit-scrollbar {
+        width: 4px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #1e293b;
+        border-radius: 4px;
+      }
 
-    .no-scrollbar::-webkit-scrollbar { display: none; }
-    .no-scrollbar { scrollbar-width: none; }
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar {
+        scrollbar-width: none;
+      }
 
-    main { padding-bottom: 100px; }
+      main {
+        padding-bottom: 100px;
+      }
 
-    .bottom-nav-hidden { transform: translateY(100%); }
+      .bottom-nav-hidden {
+        transform: translateY(100%);
+      }
 
-    .no-browser-menu { -webkit-touch-callout: none; user-select: none; }
+      .no-browser-menu {
+        -webkit-touch-callout: none;
+        user-select: none;
+      }
 
-    .line-clamp-1 {
-      display: -webkit-box;
-      -webkit-line-clamp: 1;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-    .line-clamp-2 {
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
+      .line-clamp-1 {
+        display: -webkit-box;
+        -webkit-line-clamp: 1;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .line-clamp-2 {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
 
-    /* ── MEDIA EDIT PREVIEW GRID (WhatsApp-style) ── */
-    #editMediaModal .edit-thumb-strip {
-      display: flex;
-      gap: 8px;
-      overflow-x: auto;
-      padding: 4px 2px;
-    }
-    #editMediaModal .edit-thumb {
-      position: relative;
-      width: 56px;
-      height: 56px;
-      border-radius: 10px;
-      overflow: hidden;
-      flex-shrink: 0;
-      border: 2px solid transparent;
-      cursor: pointer;
-    }
-    #editMediaModal .edit-thumb.active-thumb { border-color: #fbbf24; }
-    #editMediaModal .edit-thumb img,
-    #editMediaModal .edit-thumb video {
-      width: 100%; height: 100%; object-fit: cover;
-    }
-    #editMediaModal .edit-thumb .remove-thumb-btn {
-      position: absolute;
-      top: 1px; right: 1px;
-      width: 16px; height: 16px;
-      border-radius: 50%;
-      background: rgba(0,0,0,0.7);
-      color: #fff;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 8px;
-    }
-    #editMediaModal .edit-main-preview {
-      width: 100%;
-      aspect-square: 1/1;
-      aspect-ratio: 1/1;
-      background: #000;
-      border-radius: 16px;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      position: relative;
-    }
-    #editMediaModal .edit-main-preview img,
-    #editMediaModal .edit-main-preview video {
-      width: 100%; height: 100%; object-fit: contain;
-    }
-    #editMediaModal .rotate-btn {
-      position: absolute;
-      top: 10px; right: 10px;
-      width: 34px; height: 34px;
-      border-radius: 50%;
-      background: rgba(0,0,0,0.55);
-      color: #fff;
-      display: flex; align-items: center; justify-content: center;
-    }
-    #editMediaModal .crop-btn {
-      position: absolute;
-      top: 10px; right: 54px;
-      width: 34px; height: 34px;
-      border-radius: 50%;
-      background: rgba(0,0,0,0.55);
-      color: #fff;
-      display: flex; align-items: center; justify-content: center;
-    }
+      /* ── MEDIA EDIT PREVIEW GRID (WhatsApp-style) ── */
+      #editMediaModal .edit-thumb-strip {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding: 4px 2px;
+      }
+      #editMediaModal .edit-thumb {
+        position: relative;
+        width: 56px;
+        height: 56px;
+        border-radius: 10px;
+        overflow: hidden;
+        flex-shrink: 0;
+        border: 2px solid transparent;
+        cursor: pointer;
+      }
+      #editMediaModal .edit-thumb.active-thumb {
+        border-color: #fbbf24;
+      }
+      #editMediaModal .edit-thumb img,
+      #editMediaModal .edit-thumb video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      #editMediaModal .edit-thumb .remove-thumb-btn {
+        position: absolute;
+        top: 1px;
+        right: 1px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.7);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 8px;
+      }
+      #editMediaModal .edit-main-preview {
+        width: 100%;
+        aspect-square: 1/1;
+        aspect-ratio: 1/1;
+        background: #000;
+        border-radius: 16px;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+      }
+      #editMediaModal .edit-main-preview img,
+      #editMediaModal .edit-main-preview video {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      #editMediaModal .rotate-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #editMediaModal .crop-btn {
+        position: absolute;
+        top: 10px;
+        right: 54px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
 
-    /* ── CROP OVERLAY ── */
-    /* A draggable/resizable box over the image preview. Percent-based
+      /* ── CROP OVERLAY ── */
+      /* A draggable/resizable box over the image preview. Percent-based
        positioning (not pixels) so the crop rect scales correctly if the
        preview element itself ever changes size (e.g. rotation), and so
        the stored crop rect is naturally resolution-independent — it maps
        directly onto the full-resolution source image at export time. */
-    #cropOverlay {
-      position: absolute;
-      inset: 0;
-      display: none;
-    }
-    #cropOverlay.crop-active { display: block; }
-    #cropOverlay .crop-dim {
-      position: absolute;
-      inset: 0;
-      background: rgba(0,0,0,0.55);
-      /* The actual "hole" is punched via a box-shadow spread on
+      #cropOverlay {
+        position: absolute;
+        inset: 0;
+        display: none;
+      }
+      #cropOverlay.crop-active {
+        display: block;
+      }
+      #cropOverlay .crop-dim {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+        /* The actual "hole" is punched via a box-shadow spread on
          .crop-box itself (see below) rather than clip-path, since that's
          far simpler to keep in sync with a dynamically resized box. */
-      pointer-events: none;
-    }
-    #cropOverlay .crop-box {
-      position: absolute;
-      border: 2px solid #fbbf24;
-      box-shadow: 0 0 0 9999px rgba(0,0,0,0.55);
-      touch-action: none;
-      cursor: move;
-    }
-    #cropOverlay .crop-box::before,
-    #cropOverlay .crop-box::after {
-      content: '';
-      position: absolute;
-      background: rgba(251,191,36,0.5);
-      pointer-events: none;
-    }
-    /* Rule-of-thirds guide lines */
-    #cropOverlay .crop-box::before {
-      left: 33.333%; right: 33.333%; top: 0; bottom: 0;
-      border-left: 1px solid rgba(255,255,255,0.35);
-      border-right: 1px solid rgba(255,255,255,0.35);
-      background: none;
-    }
-    #cropOverlay .crop-box::after {
-      top: 33.333%; bottom: 33.333%; left: 0; right: 0;
-      border-top: 1px solid rgba(255,255,255,0.35);
-      border-bottom: 1px solid rgba(255,255,255,0.35);
-      background: none;
-    }
-    #cropOverlay .crop-handle {
-      position: absolute;
-      width: 26px; height: 26px;
-      display: flex; align-items: center; justify-content: center;
-      touch-action: none;
-    }
-    #cropOverlay .crop-handle::after {
-      content: '';
-      width: 12px; height: 12px;
-      border-radius: 50%;
-      background: #fbbf24;
-      border: 2px solid #0b0f1a;
-    }
-    #cropOverlay .crop-handle.nw { top: -13px; left: -13px; cursor: nwse-resize; }
-    #cropOverlay .crop-handle.ne { top: -13px; right: -13px; cursor: nesw-resize; }
-    #cropOverlay .crop-handle.sw { bottom: -13px; left: -13px; cursor: nesw-resize; }
-    #cropOverlay .crop-handle.se { bottom: -13px; right: -13px; cursor: nwse-resize; }
+        pointer-events: none;
+      }
+      #cropOverlay .crop-box {
+        position: absolute;
+        border: 2px solid #fbbf24;
+        box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+        touch-action: none;
+        cursor: move;
+      }
+      #cropOverlay .crop-box::before,
+      #cropOverlay .crop-box::after {
+        content: "";
+        position: absolute;
+        background: rgba(251, 191, 36, 0.5);
+        pointer-events: none;
+      }
+      /* Rule-of-thirds guide lines */
+      #cropOverlay .crop-box::before {
+        left: 33.333%;
+        right: 33.333%;
+        top: 0;
+        bottom: 0;
+        border-left: 1px solid rgba(255, 255, 255, 0.35);
+        border-right: 1px solid rgba(255, 255, 255, 0.35);
+        background: none;
+      }
+      #cropOverlay .crop-box::after {
+        top: 33.333%;
+        bottom: 33.333%;
+        left: 0;
+        right: 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.35);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.35);
+        background: none;
+      }
+      #cropOverlay .crop-handle {
+        position: absolute;
+        width: 26px;
+        height: 26px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        touch-action: none;
+      }
+      #cropOverlay .crop-handle::after {
+        content: "";
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #fbbf24;
+        border: 2px solid #0b0f1a;
+      }
+      #cropOverlay .crop-handle.nw {
+        top: -13px;
+        left: -13px;
+        cursor: nwse-resize;
+      }
+      #cropOverlay .crop-handle.ne {
+        top: -13px;
+        right: -13px;
+        cursor: nesw-resize;
+      }
+      #cropOverlay .crop-handle.sw {
+        bottom: -13px;
+        left: -13px;
+        cursor: nesw-resize;
+      }
+      #cropOverlay .crop-handle.se {
+        bottom: -13px;
+        right: -13px;
+        cursor: nwse-resize;
+      }
 
-    #cropFooter {
-      display: none;
-      gap: 8px;
-    }
-    #cropFooter.crop-active { display: flex; }
-    #editMediaModal .edit-main-footer.crop-active-hide { display: none; }
+      #cropFooter {
+        display: none;
+        gap: 8px;
+      }
+      #cropFooter.crop-active {
+        display: flex;
+      }
+      #editMediaModal .edit-main-footer.crop-active-hide {
+        display: none;
+      }
 
-    /* ── OPTIONS MENU (3-dot action sheet) ──
+      /* ── OPTIONS MENU (3-dot action sheet) ──
        Reusable bottom-sheet style menu used for both post options
        (delete/report) and comment options (delete/report) — replaces
        the old always-visible trash-bin icon with a less alarming,
        more familiar "..." entry point, matching how Instagram/TikTok/
        WhatsApp surface destructive actions behind a menu instead of a
        bare delete button sitting in the open. */
-    .options-menu-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.5);
-      z-index: 90;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.2s ease;
-    }
-    .options-menu-backdrop.menu-open {
-      opacity: 1;
-      pointer-events: auto;
-    }
-    .options-menu-sheet {
-      position: fixed;
-      left: 0; right: 0; bottom: 0;
-      z-index: 91;
-      background: #161b29;
-      border-top-left-radius: 20px;
-      border-top-right-radius: 20px;
-      padding: 8px 0 calc(10px + env(safe-area-inset-bottom, 0px));
-      transform: translateY(100%);
-      transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
-      box-shadow: 0 -8px 32px rgba(0,0,0,0.45);
-    }
-    .options-menu-sheet.menu-open {
-      transform: translateY(0);
-    }
-    .options-menu-sheet .options-menu-handle {
-      width: 36px; height: 4px;
-      border-radius: 999px;
-      background: rgba(255,255,255,0.2);
-      margin: 4px auto 8px;
-    }
-    .options-menu-sheet button {
-      width: 100%;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 14px 20px;
-      font-size: 14px;
-      font-weight: 600;
-      color: #e2e8f0;
-      background: none;
-      border: none;
-      text-align: left;
-    }
-    .options-menu-sheet button:active {
-      background: rgba(255,255,255,0.06);
-    }
-    .options-menu-sheet button.danger {
-      color: #f87171;
-    }
-    .options-menu-sheet button i {
-      width: 18px;
-      text-align: center;
-      font-size: 15px;
-    }
-    .options-menu-sheet .options-menu-divider {
-      height: 1px;
-      background: rgba(255,255,255,0.06);
-      margin: 4px 0;
-    }
+      .options-menu-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 90;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+      }
+      .options-menu-backdrop.menu-open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .options-menu-sheet {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 91;
+        background: #161b29;
+        border-top-left-radius: 20px;
+        border-top-right-radius: 20px;
+        padding: 8px 0 calc(10px + env(safe-area-inset-bottom, 0px));
+        transform: translateY(100%);
+        transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+        box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.45);
+      }
+      .options-menu-sheet.menu-open {
+        transform: translateY(0);
+      }
+      .options-menu-sheet .options-menu-handle {
+        width: 36px;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.2);
+        margin: 4px auto 8px;
+      }
+      .options-menu-sheet button {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 20px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #e2e8f0;
+        background: none;
+        border: none;
+        text-align: left;
+      }
+      .options-menu-sheet button:active {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .options-menu-sheet button.danger {
+        color: #f87171;
+      }
+      .options-menu-sheet button i {
+        width: 18px;
+        text-align: center;
+        font-size: 15px;
+      }
+      .options-menu-sheet .options-menu-divider {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.06);
+        margin: 4px 0;
+      }
 
-    /* ── PREMIUM CAMPUS SETTINGS ── */
-    .settings-card {
-      background: linear-gradient(180deg, rgba(30,41,59,0.5) 0%, rgba(15,23,42,0.5) 100%);
-      border: 1px solid rgba(148,163,184,0.12);
-      border-radius: 20px;
-      overflow: hidden;
-    }
-    .settings-card + .settings-card { margin-top: 14px; }
-    .settings-card-header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 16px 16px 12px;
-    }
-    .settings-card-icon {
-      width: 30px; height: 30px;
-      border-radius: 9px;
-      display: flex; align-items: center; justify-content: center;
-      background: rgba(251,191,36,0.12);
-      color: #fbbf24;
-      font-size: 13px;
-      flex-shrink: 0;
-    }
-    .settings-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 13px 16px;
-      border-top: 1px solid rgba(148,163,184,0.08);
-    }
-    .settings-row:first-of-type { border-top: none; }
-    .settings-row-link {
-      width: 100%;
-      text-align: left;
-      color: #fff;
-      transition: background 0.15s;
-    }
-    .settings-row-link:active { background: rgba(255,255,255,0.04); }
-    .settings-row-link .chev { color: #475569; font-size: 11px; transition: transform 0.15s; }
+      /* ── PREMIUM CAMPUS SETTINGS ── */
+      .settings-card {
+        background: linear-gradient(
+          180deg,
+          rgba(30, 41, 59, 0.5) 0%,
+          rgba(15, 23, 42, 0.5) 100%
+        );
+        border: 1px solid rgba(148, 163, 184, 0.12);
+        border-radius: 20px;
+        overflow: hidden;
+      }
+      .settings-card + .settings-card {
+        margin-top: 14px;
+      }
+      .settings-card-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 16px 16px 12px;
+      }
+      .settings-card-icon {
+        width: 30px;
+        height: 30px;
+        border-radius: 9px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(251, 191, 36, 0.12);
+        color: #fbbf24;
+        font-size: 13px;
+        flex-shrink: 0;
+      }
+      .settings-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 13px 16px;
+        border-top: 1px solid rgba(148, 163, 184, 0.08);
+      }
+      .settings-row:first-of-type {
+        border-top: none;
+      }
+      .settings-row-link {
+        width: 100%;
+        text-align: left;
+        color: #fff;
+        transition: background 0.15s;
+      }
+      .settings-row-link:active {
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .settings-row-link .chev {
+        color: #475569;
+        font-size: 11px;
+        transition: transform 0.15s;
+      }
 
-    /* Styled switch used in place of raw checkboxes for a more premium feel */
-    .settings-switch {
-      position: relative;
-      width: 42px; height: 24px;
-      flex-shrink: 0;
-      appearance: none;
-      -webkit-appearance: none;
-      background: #334155;
-      border-radius: 999px;
-      cursor: pointer;
-      transition: background 0.2s;
-      outline: none;
-    }
-    .settings-switch:checked { background: #fbbf24; }
-    .settings-switch::before {
-      content: '';
-      position: absolute;
-      top: 3px; left: 3px;
-      width: 18px; height: 18px;
-      border-radius: 50%;
-      background: #fff;
-      transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
-      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-    }
-    .settings-switch:checked::before { transform: translateX(18px); }
+      /* Styled switch used in place of raw checkboxes for a more premium feel */
+      .settings-switch {
+        position: relative;
+        width: 42px;
+        height: 24px;
+        flex-shrink: 0;
+        appearance: none;
+        -webkit-appearance: none;
+        background: #334155;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: background 0.2s;
+        outline: none;
+      }
+      .settings-switch:checked {
+        background: #fbbf24;
+      }
+      .settings-switch::before {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #fff;
+        transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      }
+      .settings-switch:checked::before {
+        transform: translateX(18px);
+      }
 
-    .campus-id-strip {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 14px 16px;
-      border-radius: 18px;
-      background: linear-gradient(135deg, rgba(251,191,36,0.14) 0%, rgba(251,191,36,0.02) 100%);
-      border: 1px solid rgba(251,191,36,0.2);
-      margin-bottom: 14px;
-    }
-    .campus-id-strip .badge-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: #34d399;
-      box-shadow: 0 0 0 3px rgba(52,211,153,0.15);
-      flex-shrink: 0;
-    }
+      .campus-id-strip {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: linear-gradient(
+          135deg,
+          rgba(251, 191, 36, 0.14) 0%,
+          rgba(251, 191, 36, 0.02) 100%
+        );
+        border: 1px solid rgba(251, 191, 36, 0.2);
+        margin-bottom: 14px;
+      }
+      .campus-id-strip .badge-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #34d399;
+        box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
+        flex-shrink: 0;
+      }
 
-    /* ── INFO SHEET (Privacy Policy / Help & Support / Blocked Users) ── */
-    .info-sheet-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 95;
-      background: #0b0f1a;
-      display: flex;
-      flex-direction: column;
-      transform: translateX(100%);
-      transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
-    }
-    .info-sheet-overlay.sheet-open { transform: translateX(0); }
-    .info-sheet-header {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 16px;
-      padding-top: calc(16px + env(safe-area-inset-top, 0px));
-      border-bottom: 1px solid rgba(148,163,184,0.1);
-      flex-shrink: 0;
-    }
-    .info-sheet-back {
-      width: 34px; height: 34px;
-      border-radius: 10px;
-      background: rgba(255,255,255,0.06);
-      display: flex; align-items: center; justify-content: center;
-      color: #fff;
-      flex-shrink: 0;
-    }
-    .info-sheet-body {
-      flex: 1;
-      overflow-y: auto;
-      padding: 20px 20px calc(24px + env(safe-area-inset-bottom, 0px));
-    }
-    .info-sheet-body h4 {
-      color: #fbbf24;
-      font-weight: 800;
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      margin: 20px 0 8px;
-    }
-    .info-sheet-body h4:first-child { margin-top: 0; }
-    .info-sheet-body p {
-      color: #cbd5e1;
-      font-size: 13px;
-      line-height: 1.7;
-      margin-bottom: 10px;
-    }
-    .info-sheet-empty {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      padding: 60px 20px;
-      color: #64748b;
-    }
-    .blocked-user-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px 0;
-      border-bottom: 1px solid rgba(148,163,184,0.08);
-    }
-    .blocked-user-row img {
-      width: 40px; height: 40px;
-      border-radius: 50%;
-      object-fit: cover;
-    }
+      /* ── INFO SHEET (Privacy Policy / Help & Support / Blocked Users) ── */
+      .info-sheet-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 95;
+        background: #0b0f1a;
+        display: flex;
+        flex-direction: column;
+        transform: translateX(100%);
+        transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+      }
+      .info-sheet-overlay.sheet-open {
+        transform: translateX(0);
+      }
+      .info-sheet-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 16px;
+        padding-top: calc(16px + env(safe-area-inset-top, 0px));
+        border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        flex-shrink: 0;
+      }
+      .info-sheet-back {
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.06);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        flex-shrink: 0;
+      }
+      .info-sheet-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+      }
+      .info-sheet-body h4 {
+        color: #fbbf24;
+        font-weight: 800;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin: 20px 0 8px;
+      }
+      .info-sheet-body h4:first-child {
+        margin-top: 0;
+      }
+      .info-sheet-body p {
+        color: #cbd5e1;
+        font-size: 13px;
+        line-height: 1.7;
+        margin-bottom: 10px;
+      }
+      .info-sheet-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 60px 20px;
+        color: #64748b;
+      }
+      .blocked-user-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 0;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      }
+      .blocked-user-row img {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        object-fit: cover;
+      }
 
-    /* ── PUBLIC PROFILE (viewing someone else's page) ── */
-    .public-profile-header {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
-      padding: 12px 0 20px;
-    }
-    .public-profile-header img {
-      width: 84px; height: 84px;
-      border-radius: 50%;
-      object-fit: cover;
-      border: 3px solid rgba(251,191,36,0.4);
-    }
-    .public-profile-stats {
-      display: flex;
-      justify-content: center;
-      gap: 28px;
-      padding: 16px 0;
-      border-top: 1px solid rgba(148,163,184,0.1);
-      border-bottom: 1px solid rgba(148,163,184,0.1);
-      margin: 16px 0;
-    }
-    .public-profile-stats .stat-value {
-      color: #fff;
-      font-weight: 900;
-      font-size: 18px;
-      display: block;
-      text-align: center;
-    }
-    .public-profile-stats .stat-label {
-      color: #64748b;
-      font-size: 9px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
+      /* ── PUBLIC PROFILE (viewing someone else's page) ── */
+      .public-profile-header {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        padding: 12px 0 20px;
+      }
+      .public-profile-header img {
+        width: 84px;
+        height: 84px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 3px solid rgba(251, 191, 36, 0.4);
+      }
+      .public-profile-stats {
+        display: flex;
+        justify-content: center;
+        gap: 28px;
+        padding: 16px 0;
+        border-top: 1px solid rgba(148, 163, 184, 0.1);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        margin: 16px 0;
+      }
+      .public-profile-stats .stat-value {
+        color: #fff;
+        font-weight: 900;
+        font-size: 18px;
+        display: block;
+        text-align: center;
+      }
+      .public-profile-stats .stat-label {
+        color: #64748b;
+        font-size: 9px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
 
-    /* ── MY GIGS & POSTS — press-and-hold multi-select ── */
-    #grid-select-toolbar.select-mode-active { display: flex; }
-    .grid-tile.select-mode .grid-tile-check {
-      opacity: 1;
-      pointer-events: auto;
-    }
-    .grid-tile-check {
-      position: absolute;
-      top: 6px; left: 6px;
-      width: 22px; height: 22px;
-      border-radius: 50%;
-      background: rgba(15,23,42,0.75);
-      border: 2px solid rgba(255,255,255,0.55);
-      display: flex; align-items: center; justify-content: center;
-      color: transparent;
-      font-size: 11px;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.15s, background 0.15s, border-color 0.15s;
-      z-index: 2;
-    }
-    .grid-tile.tile-selected .grid-tile-check {
-      background: #fbbf24;
-      border-color: #fbbf24;
-      color: #0b0f1a;
-    }
-    .grid-tile.tile-selected {
-      outline: 2px solid #fbbf24;
-      outline-offset: -2px;
-    }
+      /* ── MY GIGS & POSTS — press-and-hold multi-select ── */
+      #grid-select-toolbar.select-mode-active {
+        display: flex;
+      }
+      .grid-tile.select-mode .grid-tile-check {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .grid-tile-check {
+        position: absolute;
+        top: 6px;
+        left: 6px;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: rgba(15, 23, 42, 0.75);
+        border: 2px solid rgba(255, 255, 255, 0.55);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: transparent;
+        font-size: 11px;
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          opacity 0.15s,
+          background 0.15s,
+          border-color 0.15s;
+        z-index: 2;
+      }
+      .grid-tile.tile-selected .grid-tile-check {
+        background: #fbbf24;
+        border-color: #fbbf24;
+        color: #0b0f1a;
+      }
+      .grid-tile.tile-selected {
+        outline: 2px solid #fbbf24;
+        outline-offset: -2px;
+      }
 
-    .post-options-trigger {
-      width: 30px; height: 30px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 50%;
-      color: #94a3b8;
-      background: none;
-      border: none;
-      transition: background 0.15s, color 0.15s;
-    }
-    .post-options-trigger:active {
-      background: rgba(255,255,255,0.08);
-      color: #fff;
-    }
-  </style>
-</head>
+      .post-options-trigger {
+        width: 30px;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        color: #94a3b8;
+        background: none;
+        border: none;
+        transition:
+          background 0.15s,
+          color 0.15s;
+      }
+      .post-options-trigger:active {
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+      }
+    </style>
+  </head>
 
-<body class="bg-[#020617] text-slate-100 min-h-screen antialiased">
+  <body class="bg-[#020617] text-slate-100 min-h-screen antialiased">
+    <!-- Wraps the entire visual app in a fixed-width column that gets
+       centered on anything wider than a phone (see the @media rule near
+       the top of this file). The transform on #app-shell there is what
+       makes position:fixed descendants (reels, bottom nav, every modal)
+       stay contained within this column instead of spanning the full
+       browser window on desktop. -->
+    <div id="app-shell">
+      <input
+        type="file"
+        id="mediaInput"
+        class="hidden"
+        accept="image/*,video/*"
+        multiple
+      />
 
-  <input type="file" id="mediaInput" class="hidden" accept="image/*,video/*" multiple />
-
-  <!-- Single merged header row: search toggle · scrollable tabs · saved icon.
+      <!-- Single merged header row: search toggle · scrollable tabs · saved icon.
        No wordmark — icons only, TikTok-style. Becomes fully transparent/
        overlay-only when the Reels tab is active (see .header-reels-mode). -->
-  <div class="site-header" id="site-header">
-    <div class="header-row">
-      <button class="header-icon-btn shrink-0" id="search-toggle-btn" onclick="window.toggleHeaderSearch()" aria-label="Search">
-        <i class="fas fa-search text-xs"></i>
-      </button>
+      <div class="site-header" id="site-header">
+        <div class="header-row">
+          <button
+            class="header-icon-btn shrink-0"
+            id="search-toggle-btn"
+            onclick="window.toggleHeaderSearch()"
+            aria-label="Search"
+          >
+            <i class="fas fa-search text-xs"></i>
+          </button>
 
-      <div id="feed-tabs" class="feed-tabs-scroll flex-1 flex items-center gap-4 overflow-x-auto no-scrollbar text-[11px] font-bold tracking-wider uppercase">
-        <button onclick="window.filterFeed('all', this)" data-tab="all" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">All</button>
-        <button onclick="window.filterFeed('reels', this)" data-tab="reels" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Reels</button>
-        <button onclick="window.filterFeed('following', this)" data-tab="following" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Following</button>
-        <button onclick="window.filterFeed('product', this)" data-tab="product" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Products</button>
-        <button onclick="window.filterFeed('skill', this)" data-tab="skill" class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300">Services</button>
+          <div
+            id="feed-tabs"
+            class="feed-tabs-scroll flex-1 flex items-center gap-4 overflow-x-auto no-scrollbar text-[11px] font-bold tracking-wider uppercase"
+          >
+            <button
+              onclick="window.filterFeed('all', this)"
+              data-tab="all"
+              class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+            >
+              All
+            </button>
+            <button
+              onclick="window.filterFeed('reels', this)"
+              data-tab="reels"
+              class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+            >
+              Reels
+            </button>
+            <button
+              onclick="window.filterFeed('following', this)"
+              data-tab="following"
+              class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+            >
+              Following
+            </button>
+            <button
+              onclick="window.filterFeed('product', this)"
+              data-tab="product"
+              class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+            >
+              Products
+            </button>
+            <button
+              onclick="window.filterFeed('skill', this)"
+              data-tab="skill"
+              class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+            >
+              Services
+            </button>
+          </div>
+          <script>
+            // Fix: the "All" tab used to be hardcoded as visually active
+            // directly in this markup, so on every refresh — even when the
+            // person was last viewing Reels/Products/Following/Services —
+            // the browser painted "All" as highlighted for a brief moment
+            // before app.js finished booting and corrected it. This tiny
+            // synchronous script runs immediately as the browser parses this
+            // exact spot in the HTML (before the rest of the page even
+            // renders), reading the same localStorage key app.js uses to
+            // restore the active feed tab, so the correct tab is already
+            // highlighted at first paint — no flash, and no dependency on
+            // app.js (a deferred module) finishing first.
+            (function () {
+              try {
+                const validTabs = [
+                  "all",
+                  "reels",
+                  "following",
+                  "product",
+                  "skill",
+                ];
+                const saved = localStorage.getItem("campus_market_feed_tab");
+                const activeTab = validTabs.includes(saved) ? saved : "all";
+                document
+                  .querySelectorAll("#feed-tabs .feed-tab-btn")
+                  .forEach((btn) => {
+                    const isActive = btn.dataset.tab === activeTab;
+                    btn.classList.toggle("text-amber-400", isActive);
+                    btn.classList.toggle("text-slate-500", !isActive);
+                    btn.classList.toggle("border-amber-400", isActive);
+                    btn.classList.toggle("border-transparent", !isActive);
+                  });
+              } catch (_) {
+                // localStorage can throw in some locked-down/private-browsing
+                // contexts — falling back to the default "All" highlight
+                // (already the else-branch above) is a fine degrade.
+              }
+            })();
+          </script>
+
+          <button
+            id="nav-btn-cart"
+            class="header-icon-btn shrink-0"
+            onclick="
+              window.navigateTo('cart', document.getElementById('nav-btn-cart'))
+            "
+            aria-label="Saved items"
+          >
+            <i class="fas fa-bookmark text-xs"></i>
+            <span id="header-cart-badge" class="badge-dot hidden">0</span>
+          </button>
+        </div>
+
+        <div class="search-wrap hidden" id="header-search-wrap">
+          <i class="fas fa-search"></i>
+          <label for="campus-global-search" class="sr-only"
+            >Search campus gigs or items</label
+          >
+          <input
+            type="text"
+            id="campus-global-search"
+            name="campus-global-search"
+            placeholder="Search campus gigs or items..."
+            oninput="window.runSearch(this.value)"
+          />
+        </div>
       </div>
-      <script>
-        // Fix: the "All" tab used to be hardcoded as visually active
-        // directly in this markup, so on every refresh — even when the
-        // person was last viewing Reels/Products/Following/Services —
-        // the browser painted "All" as highlighted for a brief moment
-        // before app.js finished booting and corrected it. This tiny
-        // synchronous script runs immediately as the browser parses this
-        // exact spot in the HTML (before the rest of the page even
-        // renders), reading the same localStorage key app.js uses to
-        // restore the active feed tab, so the correct tab is already
-        // highlighted at first paint — no flash, and no dependency on
-        // app.js (a deferred module) finishing first.
-        (function () {
-          try {
-            const validTabs = ['all', 'reels', 'following', 'product', 'skill'];
-            const saved = localStorage.getItem('campus_market_feed_tab');
-            const activeTab = validTabs.includes(saved) ? saved : 'all';
-            document.querySelectorAll('#feed-tabs .feed-tab-btn').forEach((btn) => {
-              const isActive = btn.dataset.tab === activeTab;
-              btn.classList.toggle('text-amber-400', isActive);
-              btn.classList.toggle('text-slate-500', !isActive);
-              btn.classList.toggle('border-amber-400', isActive);
-              btn.classList.toggle('border-transparent', !isActive);
-            });
-          } catch (_) {
-            // localStorage can throw in some locked-down/private-browsing
-            // contexts — falling back to the default "All" highlight
-            // (already the else-branch above) is a fine degrade.
-          }
-        })();
-      </script>
 
-      <button id="nav-btn-cart" class="header-icon-btn shrink-0" onclick="window.navigateTo('cart', document.getElementById('nav-btn-cart'))" aria-label="Saved items">
-        <i class="fas fa-bookmark text-xs"></i>
-        <span id="header-cart-badge" class="badge-dot hidden">0</span>
-      </button>
-    </div>
-
-    <div class="search-wrap hidden" id="header-search-wrap">
-      <i class="fas fa-search"></i>
-      <label for="campus-global-search" class="sr-only">Search campus gigs or items</label>
-      <input
-        type="text"
-        id="campus-global-search"
-        name="campus-global-search"
-        placeholder="Search campus gigs or items..."
-        oninput="window.runSearch(this.value)"
-      >
-    </div>
-  </div>
-
-  <main class="px-4 pt-4 max-w-md mx-auto">
-
-    <div id="feed-container" class="pb-24">
-      <!-- Campus scope banner: shows whether the feed is scoped to the
+      <main class="px-4 pt-4 max-w-md mx-auto">
+        <div id="feed-container" class="pb-24">
+          <!-- Campus scope banner: shows whether the feed is scoped to the
            person's own institution or opened up to everywhere, with a
            one-tap toggle. Hidden entirely on Reels (its own overlay
            header has no room, and reels are typically browsed more
            broadly anyway) and hidden for anyone without a saved
            institution yet (nothing to scope by). -->
-      <button
-        id="campus-scope-banner"
-        onclick="window.toggleCampusScope()"
-        class="hidden w-full flex items-center justify-between gap-2 bg-slate-900/70 border border-slate-800/60 rounded-2xl px-3.5 py-2.5 mb-3 text-left active:scale-[0.99] transition">
-        <div class="flex items-center gap-2 min-w-0">
-          <i class="fas fa-location-dot text-amber-400 text-xs shrink-0"></i>
-          <span id="campus-scope-label" class="text-white text-xs font-bold truncate">Your Campus</span>
-        </div>
-        <span class="text-amber-400 text-[10px] font-black uppercase tracking-wider shrink-0">Switch</span>
-      </button>
-
-      <div id="posts-feed"></div>
-    </div>
-
-    <div id="explore-container" class="hidden pb-24 space-y-4">
-      <div class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl">
-        <h2 class="text-white font-black text-sm uppercase tracking-wider mb-2">Discover Hub</h2>
-        <p class="text-slate-400 text-xs">Search results and specialized category parameters sync directly inside this viewport wrapper.</p>
-      </div>
-      <div id="search-results" class="space-y-4"></div>
-    </div>
-
-    <div id="dms-container" class="hidden pb-24 space-y-4">
-      <div id="dms-auth-gate" class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
-        <p class="text-3xl">🔐</p>
-        <p class="font-black text-white uppercase tracking-tight text-sm">Sign in to access DMs</p>
-        <p class="text-slate-500 text-xs max-w-xs mx-auto">Create an account or sign in to message vendors and student sellers directly.</p>
-        <button onclick="window.openLoginModal()" class="mt-2 bg-amber-400 text-black font-black px-6 py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
-          Sign In
-        </button>
-      </div>
-
-      <div id="dms-content" class="hidden space-y-4"></div>
-    </div>
-
-    <div id="cart-container" class="hidden pb-24 space-y-4">
-      <div class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl">
-        <h2 class="text-white font-black text-sm uppercase tracking-wider mb-1">Saved Items</h2>
-        <p class="text-slate-400 text-xs">Everything you've bookmarked across CampusMarket lives here.</p>
-      </div>
-      <div id="cart-items-wrapper" class="space-y-3"></div>
-    </div>
-
-    <div id="profile-container" class="hidden pb-24 space-y-6">
-      <div id="profile-auth-gate" class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
-        <p class="text-3xl">👤</p>
-        <p class="font-black text-white uppercase tracking-tight text-sm">Sign in to view your profile</p>
-        <p class="text-slate-500 text-xs max-w-xs mx-auto">Create an account to post listings, track followers, and manage your campus presence.</p>
-        <button onclick="window.openLoginModal()" class="mt-2 bg-amber-400 text-black font-black px-6 py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
-          Sign In
-        </button>
-      </div>
-
-      <div id="profile-content" class="hidden space-y-6">
-        <div class="flex items-center gap-4 bg-slate-900 border border-slate-800/60 p-5 rounded-3xl">
-          <div class="relative group cursor-pointer w-16 h-16 flex-shrink-0" onclick="document.getElementById('avatarFileInput').click()">
-            <img id="profile-ui-avatar" src="https://ui-avatars.com/api/?name=User"
-                 class="w-16 h-16 rounded-full border-2 border-amber-400 object-cover bg-slate-800 transition group-hover:opacity-75 no-browser-menu"
-                 style="-webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; pointer-events: auto;"
-                 draggable="false"
-                 oncontextmenu="return false;"
-                 alt="Avatar">
-            <div class="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition duration-150">
-              <i class="fas fa-camera text-white text-xs"></i>
+          <button
+            id="campus-scope-banner"
+            onclick="window.toggleCampusScope()"
+            class="hidden w-full flex items-center justify-between gap-2 bg-slate-900/70 border border-slate-800/60 rounded-2xl px-3.5 py-2.5 mb-3 text-left active:scale-[0.99] transition"
+          >
+            <div class="flex items-center gap-2 min-w-0">
+              <i
+                class="fas fa-location-dot text-amber-400 text-xs shrink-0"
+              ></i>
+              <span
+                id="campus-scope-label"
+                class="text-white text-xs font-bold truncate"
+                >Your Campus</span
+              >
             </div>
-            <label for="avatarFileInput" class="sr-only">Upload profile avatar</label>
-            <input type="file" id="avatarFileInput" name="avatarFileInput" accept="image/*" class="hidden" onchange="window.handleAvatarUpload && window.handleAvatarUpload(this)">
-          </div>
-          <div class="flex-1 min-w-0">
-            <h2 id="profile-ui-name" class="text-white font-black text-xl uppercase tracking-tight truncate">Campus Student</h2>
-            <p id="profile-ui-location" class="text-slate-400 text-xs truncate">Global Network</p>
-            <span class="inline-block mt-1.5 bg-amber-400/10 text-amber-400 border border-amber-400/20 text-[9px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded">Student Account</span>
-          </div>
+            <span
+              class="text-amber-400 text-[10px] font-black uppercase tracking-wider shrink-0"
+              >Switch</span
+            >
+          </button>
+
+          <div id="posts-feed"></div>
         </div>
 
-        <div class="grid grid-cols-3 gap-3 bg-slate-900/50 border border-slate-800/60 p-4 rounded-2xl text-center">
-          <div>
-            <span id="profile-posts-count" class="block text-lg font-black text-white">0</span>
-            <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Posts</span>
+        <div id="explore-container" class="hidden pb-24 space-y-4">
+          <div class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl">
+            <h2
+              class="text-white font-black text-sm uppercase tracking-wider mb-2"
+            >
+              Discover Hub
+            </h2>
+            <p class="text-slate-400 text-xs">
+              Search results and specialized category parameters sync directly
+              inside this viewport wrapper.
+            </p>
           </div>
-          <div>
-            <span id="profile-followers-count" class="block text-lg font-black text-white">0</span>
-            <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Followers</span>
-          </div>
-          <div>
-            <span id="profile-following-count" class="block text-lg font-black text-white">0</span>
-            <span class="text-[9px] uppercase tracking-wider font-bold text-slate-500">Following</span>
-          </div>
+          <div id="search-results" class="space-y-4"></div>
         </div>
 
-        <div class="flex border-b border-slate-900 text-sm">
-          <button onclick="window.switchProfileTab('posts', this)" class="profile-subtab-btn flex-1 py-3 text-center text-amber-400 font-bold border-b-2 border-amber-400 uppercase tracking-wider text-xs focus:outline-none">My Gigs & Posts</button>
-          <button onclick="window.switchProfileTab('settings', this)" class="profile-subtab-btn flex-1 py-3 text-center text-slate-500 font-bold border-b-2 border-transparent uppercase tracking-wider text-xs focus:outline-none hover:text-slate-300">Campus Settings</button>
-        </div>
-
-        <div class="profile-tab-contents">
-          <div id="profile-subview-posts" class="profile-subview">
-            <div id="grid-select-toolbar" class="hidden items-center justify-between mb-3 bg-slate-900 border border-slate-800 rounded-2xl px-4 py-2.5">
-              <button onclick="window.exitGridSelectMode()" class="text-slate-400 text-xs font-bold uppercase tracking-wider">Cancel</button>
-              <span id="grid-select-count" class="text-white text-xs font-bold">0 selected</span>
-              <div class="flex items-center gap-4">
-                <button onclick="window.shareSelectedGridItems()" class="text-amber-400 text-xs font-black uppercase tracking-wider flex items-center gap-1.5">
-                  <i class="fas fa-share-nodes"></i> Share
-                </button>
-                <button onclick="window.deleteSelectedGridItems()" class="text-red-400 text-xs font-black uppercase tracking-wider flex items-center gap-1.5">
-                  <i class="fas fa-trash-can"></i> Delete
-                </button>
-              </div>
-            </div>
-            <div id="profile-grid" class="grid grid-cols-3 gap-2"></div>
+        <div id="dms-container" class="hidden pb-24 space-y-4">
+          <div
+            id="dms-auth-gate"
+            class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6"
+          >
+            <p class="text-3xl">🔐</p>
+            <p class="font-black text-white uppercase tracking-tight text-sm">
+              Sign in to access DMs
+            </p>
+            <p class="text-slate-500 text-xs max-w-xs mx-auto">
+              Create an account or sign in to message vendors and student
+              sellers directly.
+            </p>
+            <button
+              onclick="window.openLoginModal()"
+              class="mt-2 bg-amber-400 text-black font-black px-6 py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
+            >
+              Sign In
+            </button>
           </div>
 
-          <div id="profile-subview-settings" class="profile-subview hidden">
+          <div id="dms-content" class="hidden space-y-4"></div>
+        </div>
 
-            <div class="campus-id-strip">
-              <span class="badge-dot"></span>
-              <div class="min-w-0">
-                <p class="text-white text-xs font-bold truncate" id="settingsCampusStripName">Campus Account</p>
-                <p class="text-slate-400 text-[11px] truncate" id="settingsCampusStripInst">Set your institution below</p>
+        <div id="cart-container" class="hidden pb-24 space-y-4">
+          <div class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl">
+            <h2
+              class="text-white font-black text-sm uppercase tracking-wider mb-1"
+            >
+              Saved Items
+            </h2>
+            <p class="text-slate-400 text-xs">
+              Everything you've bookmarked across CampusMarket lives here.
+            </p>
+          </div>
+          <div id="cart-items-wrapper" class="space-y-3"></div>
+        </div>
+
+        <div id="profile-container" class="hidden pb-24 space-y-6">
+          <div
+            id="profile-auth-gate"
+            class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6"
+          >
+            <p class="text-3xl">👤</p>
+            <p class="font-black text-white uppercase tracking-tight text-sm">
+              Sign in to view your profile
+            </p>
+            <p class="text-slate-500 text-xs max-w-xs mx-auto">
+              Create an account to post listings, track followers, and manage
+              your campus presence.
+            </p>
+            <button
+              onclick="window.openLoginModal()"
+              class="mt-2 bg-amber-400 text-black font-black px-6 py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
+            >
+              Sign In
+            </button>
+          </div>
+
+          <div id="profile-content" class="hidden space-y-6">
+            <div
+              class="flex items-center gap-4 bg-slate-900 border border-slate-800/60 p-5 rounded-3xl"
+            >
+              <div
+                class="relative group cursor-pointer w-16 h-16 flex-shrink-0"
+                onclick="document.getElementById('avatarFileInput').click()"
+              >
+                <img
+                  id="profile-ui-avatar"
+                  src="https://ui-avatars.com/api/?name=User"
+                  class="w-16 h-16 rounded-full border-2 border-amber-400 object-cover bg-slate-800 transition group-hover:opacity-75 no-browser-menu"
+                  style="
+                    -webkit-touch-callout: none;
+                    -webkit-user-select: none;
+                    user-select: none;
+                    -webkit-user-drag: none;
+                    pointer-events: auto;
+                  "
+                  draggable="false"
+                  oncontextmenu="return false;"
+                  alt="Avatar"
+                />
+                <div
+                  class="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition duration-150"
+                >
+                  <i class="fas fa-camera text-white text-xs"></i>
+                </div>
+                <label for="avatarFileInput" class="sr-only"
+                  >Upload profile avatar</label
+                >
+                <input
+                  type="file"
+                  id="avatarFileInput"
+                  name="avatarFileInput"
+                  accept="image/*"
+                  class="hidden"
+                  onchange="
+                    window.handleAvatarUpload && window.handleAvatarUpload(this)
+                  "
+                />
+              </div>
+              <div class="flex-1 min-w-0">
+                <h2
+                  id="profile-ui-name"
+                  class="text-white font-black text-xl uppercase tracking-tight truncate"
+                >
+                  Campus Student
+                </h2>
+                <p
+                  id="profile-ui-location"
+                  class="text-slate-400 text-xs truncate"
+                >
+                  Global Network
+                </p>
+                <span
+                  class="inline-block mt-1.5 bg-amber-400/10 text-amber-400 border border-amber-400/20 text-[9px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded"
+                  >Student Account</span
+                >
               </div>
             </div>
 
-            <div class="settings-card">
-              <div class="settings-card-header">
-                <span class="settings-card-icon"><i class="fas fa-user"></i></span>
-                <h3 class="text-white font-black text-xs uppercase tracking-widest">Account</h3>
-              </div>
-              <div class="px-4 pb-4 space-y-3">
-                <div>
-                  <label for="settingsDisplayName" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Display Name</label>
-                  <input type="text" id="settingsDisplayName" name="settingsDisplayName" placeholder="Your name" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400">
-                </div>
-                <div>
-                  <label for="settingsEmail" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Email</label>
-                  <input type="email" id="settingsEmail" name="settingsEmail" disabled class="w-full mt-1 bg-slate-950 border border-slate-800 text-slate-500 text-sm rounded-xl px-3 py-2.5 cursor-not-allowed">
-                </div>
-                <button id="saveAccountBtn" class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-2.5 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
-                  Save Name
-                </button>
-              </div>
-            </div>
-
-            <div class="settings-card">
-              <div class="settings-card-header">
-                <span class="settings-card-icon"><i class="fas fa-map-marker-alt"></i></span>
-                <h3 class="text-white font-black text-xs uppercase tracking-widest">Local Campus Selection</h3>
-              </div>
-              <div class="px-4 pb-4 space-y-3">
-                <div>
-                  <label for="profileRegion" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Region</label>
-                  <select id="profileRegion" name="profileRegion" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
-                </div>
-                <div>
-                  <label for="profileInstitution" class="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Your Institution</label>
-                  <select id="profileInstitution" name="profileInstitution" class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"></select>
-                </div>
-                <button id="saveLocationBtn" class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 mt-2 shadow-lg shadow-amber-400/10">
-                  Save Selection Changes
-                </button>
-              </div>
-            </div>
-
-            <div class="settings-card">
-              <div class="settings-card-header">
-                <span class="settings-card-icon"><i class="fas fa-wifi"></i></span>
-                <h3 class="text-white font-black text-xs uppercase tracking-widest">Data & Playback</h3>
+            <div
+              class="grid grid-cols-3 gap-3 bg-slate-900/50 border border-slate-800/60 p-4 rounded-2xl text-center"
+            >
+              <div>
+                <span
+                  id="profile-posts-count"
+                  class="block text-lg font-black text-white"
+                  >0</span
+                >
+                <span
+                  class="text-[9px] uppercase tracking-wider font-bold text-slate-500"
+                  >Posts</span
+                >
               </div>
               <div>
-                <label class="settings-row cursor-pointer">
-                  <div class="min-w-0">
-                    <p class="text-white text-xs font-bold">Data Saver Mode</p>
-                    <p class="text-slate-500 text-[10px] mt-0.5">Lower image/video quality to use less data</p>
-                  </div>
-                  <input type="checkbox" id="settingsDataSaver" class="settings-switch">
-                </label>
-                <label class="settings-row cursor-pointer">
-                  <div class="min-w-0">
-                    <p class="text-white text-xs font-bold">Autoplay Videos</p>
-                    <p class="text-slate-500 text-[10px] mt-0.5">Play videos automatically while scrolling</p>
-                  </div>
-                  <input type="checkbox" id="settingsAutoplay" checked class="settings-switch">
-                </label>
-              </div>
-            </div>
-
-            <div class="settings-card">
-              <div class="settings-card-header">
-                <span class="settings-card-icon"><i class="fas fa-bell"></i></span>
-                <h3 class="text-white font-black text-xs uppercase tracking-widest">Notifications</h3>
+                <span
+                  id="profile-followers-count"
+                  class="block text-lg font-black text-white"
+                  >0</span
+                >
+                <span
+                  class="text-[9px] uppercase tracking-wider font-bold text-slate-500"
+                  >Followers</span
+                >
               </div>
               <div>
-                <label class="settings-row cursor-pointer">
-                  <p class="text-white text-xs font-bold">Messages</p>
-                  <input type="checkbox" id="settingsNotifyMessages" checked class="settings-switch">
-                </label>
-                <label class="settings-row cursor-pointer">
-                  <p class="text-white text-xs font-bold">Likes & Comments</p>
-                  <input type="checkbox" id="settingsNotifyEngagement" checked class="settings-switch">
-                </label>
-                <label class="settings-row cursor-pointer">
-                  <p class="text-white text-xs font-bold">New Followers</p>
-                  <input type="checkbox" id="settingsNotifyFollows" checked class="settings-switch">
-                </label>
+                <span
+                  id="profile-following-count"
+                  class="block text-lg font-black text-white"
+                  >0</span
+                >
+                <span
+                  class="text-[9px] uppercase tracking-wider font-bold text-slate-500"
+                  >Following</span
+                >
               </div>
             </div>
 
-            <div class="settings-card">
-              <div class="settings-card-header">
-                <span class="settings-card-icon"><i class="fas fa-shield-halved"></i></span>
-                <h3 class="text-white font-black text-xs uppercase tracking-widest">Privacy & Support</h3>
-              </div>
-              <div>
-                <button onclick="window.openInfoSheet('blocked')" class="settings-row settings-row-link">
-                  <span class="text-xs font-bold">Blocked Users</span>
-                  <i class="fas fa-chevron-right chev"></i>
-                </button>
-                <button onclick="window.openInfoSheet('help')" class="settings-row settings-row-link">
-                  <span class="text-xs font-bold">Help & Support</span>
-                  <i class="fas fa-chevron-right chev"></i>
-                </button>
-                <button onclick="window.openInfoSheet('privacy')" class="settings-row settings-row-link">
-                  <span class="text-xs font-bold">Privacy Policy</span>
-                  <i class="fas fa-chevron-right chev"></i>
-                </button>
-              </div>
-            </div>
-
-            <div class="pt-2 space-y-2">
-              <button onclick="window.signOutUser()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
-                <i class="fas fa-sign-out-alt mr-2"></i>Sign Out
+            <div class="flex border-b border-slate-900 text-sm">
+              <button
+                onclick="window.switchProfileTab('posts', this)"
+                class="profile-subtab-btn flex-1 py-3 text-center text-amber-400 font-bold border-b-2 border-amber-400 uppercase tracking-wider text-xs focus:outline-none"
+              >
+                My Gigs & Posts
               </button>
-              <button onclick="window.confirmDeleteAccount && window.confirmDeleteAccount()" class="w-full bg-red-950/40 hover:bg-red-950/60 border border-red-900/50 text-red-400 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
-                <i class="fas fa-triangle-exclamation mr-2"></i>Delete Account
+              <button
+                onclick="window.switchProfileTab('settings', this)"
+                class="profile-subtab-btn flex-1 py-3 text-center text-slate-500 font-bold border-b-2 border-transparent uppercase tracking-wider text-xs focus:outline-none hover:text-slate-300"
+              >
+                Campus Settings
               </button>
-              <p class="text-center text-slate-600 text-[10px] pt-1">CampusMarket v1.0 · Ghana</p>
+            </div>
+
+            <div class="profile-tab-contents">
+              <div id="profile-subview-posts" class="profile-subview">
+                <div
+                  id="grid-select-toolbar"
+                  class="hidden items-center justify-between mb-3 bg-slate-900 border border-slate-800 rounded-2xl px-4 py-2.5"
+                >
+                  <button
+                    onclick="window.exitGridSelectMode()"
+                    class="text-slate-400 text-xs font-bold uppercase tracking-wider"
+                  >
+                    Cancel
+                  </button>
+                  <span
+                    id="grid-select-count"
+                    class="text-white text-xs font-bold"
+                    >0 selected</span
+                  >
+                  <div class="flex items-center gap-4">
+                    <button
+                      onclick="window.shareSelectedGridItems()"
+                      class="text-amber-400 text-xs font-black uppercase tracking-wider flex items-center gap-1.5"
+                    >
+                      <i class="fas fa-share-nodes"></i> Share
+                    </button>
+                    <button
+                      onclick="window.deleteSelectedGridItems()"
+                      class="text-red-400 text-xs font-black uppercase tracking-wider flex items-center gap-1.5"
+                    >
+                      <i class="fas fa-trash-can"></i> Delete
+                    </button>
+                  </div>
+                </div>
+                <div id="profile-grid" class="grid grid-cols-3 gap-2"></div>
+              </div>
+
+              <div id="profile-subview-settings" class="profile-subview hidden">
+                <div class="campus-id-strip">
+                  <span class="badge-dot"></span>
+                  <div class="min-w-0">
+                    <p
+                      class="text-white text-xs font-bold truncate"
+                      id="settingsCampusStripName"
+                    >
+                      Campus Account
+                    </p>
+                    <p
+                      class="text-slate-400 text-[11px] truncate"
+                      id="settingsCampusStripInst"
+                    >
+                      Set your institution below
+                    </p>
+                  </div>
+                </div>
+
+                <div class="settings-card">
+                  <div class="settings-card-header">
+                    <span class="settings-card-icon"
+                      ><i class="fas fa-user"></i
+                    ></span>
+                    <h3
+                      class="text-white font-black text-xs uppercase tracking-widest"
+                    >
+                      Account
+                    </h3>
+                  </div>
+                  <div class="px-4 pb-4 space-y-3">
+                    <div>
+                      <label
+                        for="settingsDisplayName"
+                        class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                        >Display Name</label
+                      >
+                      <input
+                        type="text"
+                        id="settingsDisplayName"
+                        name="settingsDisplayName"
+                        placeholder="Your name"
+                        class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        for="settingsEmail"
+                        class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                        >Email</label
+                      >
+                      <input
+                        type="email"
+                        id="settingsEmail"
+                        name="settingsEmail"
+                        disabled
+                        class="w-full mt-1 bg-slate-950 border border-slate-800 text-slate-500 text-sm rounded-xl px-3 py-2.5 cursor-not-allowed"
+                      />
+                    </div>
+                    <button
+                      id="saveAccountBtn"
+                      class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-2.5 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                    >
+                      Save Name
+                    </button>
+                  </div>
+                </div>
+
+                <div class="settings-card">
+                  <div class="settings-card-header">
+                    <span class="settings-card-icon"
+                      ><i class="fas fa-map-marker-alt"></i
+                    ></span>
+                    <h3
+                      class="text-white font-black text-xs uppercase tracking-widest"
+                    >
+                      Local Campus Selection
+                    </h3>
+                  </div>
+                  <div class="px-4 pb-4 space-y-3">
+                    <div>
+                      <label
+                        for="profileRegion"
+                        class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                        >Your Region</label
+                      >
+                      <select
+                        id="profileRegion"
+                        name="profileRegion"
+                        class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
+                      ></select>
+                    </div>
+                    <div>
+                      <label
+                        for="profileInstitution"
+                        class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                        >Your Institution</label
+                      >
+                      <select
+                        id="profileInstitution"
+                        name="profileInstitution"
+                        class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
+                      ></select>
+                    </div>
+                    <button
+                      id="saveLocationBtn"
+                      class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 mt-2 shadow-lg shadow-amber-400/10"
+                    >
+                      Save Selection Changes
+                    </button>
+                  </div>
+                </div>
+
+                <div class="settings-card">
+                  <div class="settings-card-header">
+                    <span class="settings-card-icon"
+                      ><i class="fas fa-wifi"></i
+                    ></span>
+                    <h3
+                      class="text-white font-black text-xs uppercase tracking-widest"
+                    >
+                      Data & Playback
+                    </h3>
+                  </div>
+                  <div>
+                    <label class="settings-row cursor-pointer">
+                      <div class="min-w-0">
+                        <p class="text-white text-xs font-bold">
+                          Data Saver Mode
+                        </p>
+                        <p class="text-slate-500 text-[10px] mt-0.5">
+                          Lower image/video quality to use less data
+                        </p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        id="settingsDataSaver"
+                        class="settings-switch"
+                      />
+                    </label>
+                    <label class="settings-row cursor-pointer">
+                      <div class="min-w-0">
+                        <p class="text-white text-xs font-bold">
+                          Autoplay Videos
+                        </p>
+                        <p class="text-slate-500 text-[10px] mt-0.5">
+                          Play videos automatically while scrolling
+                        </p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        id="settingsAutoplay"
+                        checked
+                        class="settings-switch"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div class="settings-card">
+                  <div class="settings-card-header">
+                    <span class="settings-card-icon"
+                      ><i class="fas fa-bell"></i
+                    ></span>
+                    <h3
+                      class="text-white font-black text-xs uppercase tracking-widest"
+                    >
+                      Notifications
+                    </h3>
+                  </div>
+                  <div>
+                    <label class="settings-row cursor-pointer">
+                      <p class="text-white text-xs font-bold">Messages</p>
+                      <input
+                        type="checkbox"
+                        id="settingsNotifyMessages"
+                        checked
+                        class="settings-switch"
+                      />
+                    </label>
+                    <label class="settings-row cursor-pointer">
+                      <p class="text-white text-xs font-bold">
+                        Likes & Comments
+                      </p>
+                      <input
+                        type="checkbox"
+                        id="settingsNotifyEngagement"
+                        checked
+                        class="settings-switch"
+                      />
+                    </label>
+                    <label class="settings-row cursor-pointer">
+                      <p class="text-white text-xs font-bold">New Followers</p>
+                      <input
+                        type="checkbox"
+                        id="settingsNotifyFollows"
+                        checked
+                        class="settings-switch"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div class="settings-card">
+                  <div class="settings-card-header">
+                    <span class="settings-card-icon"
+                      ><i class="fas fa-shield-halved"></i
+                    ></span>
+                    <h3
+                      class="text-white font-black text-xs uppercase tracking-widest"
+                    >
+                      Privacy & Support
+                    </h3>
+                  </div>
+                  <div>
+                    <button
+                      onclick="window.openInfoSheet('blocked')"
+                      class="settings-row settings-row-link"
+                    >
+                      <span class="text-xs font-bold">Blocked Users</span>
+                      <i class="fas fa-chevron-right chev"></i>
+                    </button>
+                    <button
+                      onclick="window.openInfoSheet('help')"
+                      class="settings-row settings-row-link"
+                    >
+                      <span class="text-xs font-bold">Help & Support</span>
+                      <i class="fas fa-chevron-right chev"></i>
+                    </button>
+                    <button
+                      onclick="window.openInfoSheet('privacy')"
+                      class="settings-row settings-row-link"
+                    >
+                      <span class="text-xs font-bold">Privacy Policy</span>
+                      <i class="fas fa-chevron-right chev"></i>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="pt-2 space-y-2">
+                  <button
+                    onclick="window.signOutUser()"
+                    class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                  >
+                    <i class="fas fa-sign-out-alt mr-2"></i>Sign Out
+                  </button>
+                  <button
+                    onclick="
+                      window.confirmDeleteAccount &&
+                        window.confirmDeleteAccount()
+                    "
+                    class="w-full bg-red-950/40 hover:bg-red-950/60 border border-red-900/50 text-red-400 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                  >
+                    <i class="fas fa-triangle-exclamation mr-2"></i>Delete
+                    Account
+                  </button>
+                  <p class="text-center text-slate-600 text-[10px] pt-1">
+                    CampusMarket v1.0 · Ghana
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    </div>
-  </main>
+      </main>
 
-  <!-- Info sheet: full-screen panel used for Privacy Policy, Help & Support,
+      <!-- Info sheet: full-screen panel used for Privacy Policy, Help & Support,
        and Blocked Users. Content is filled in by window.openInfoSheet(). -->
-  <div id="info-sheet-overlay" class="info-sheet-overlay">
-    <div class="info-sheet-header">
-      <button class="info-sheet-back" onclick="window.closeInfoSheet()" aria-label="Back">
-        <i class="fas fa-arrow-left"></i>
-      </button>
-      <h2 id="info-sheet-title" class="text-white font-black text-sm uppercase tracking-widest">Loading</h2>
-    </div>
-    <div id="info-sheet-body" class="info-sheet-body"></div>
-  </div>
+      <div id="info-sheet-overlay" class="info-sheet-overlay">
+        <div class="info-sheet-header">
+          <button
+            class="info-sheet-back"
+            onclick="window.closeInfoSheet()"
+            aria-label="Back"
+          >
+            <i class="fas fa-arrow-left"></i>
+          </button>
+          <h2
+            id="info-sheet-title"
+            class="text-white font-black text-sm uppercase tracking-widest"
+          >
+            Loading
+          </h2>
+        </div>
+        <div id="info-sheet-body" class="info-sheet-body"></div>
+      </div>
 
-  <!-- Public profile: someone ELSE's profile, opened by tapping their name/
+      <!-- Public profile: someone ELSE's profile, opened by tapping their name/
        avatar on a post. Distinct from #profile-container, which is always
        the signed-in person's own profile — that view has editable settings,
        account deletion, etc. that would never make sense here, so this is
        a separate, purpose-built read-only view rather than trying to
        repurpose the owner's profile screen for two different jobs. -->
-  <div id="public-profile-overlay" class="info-sheet-overlay">
-    <div class="info-sheet-header">
-      <button class="info-sheet-back" onclick="window.closePublicProfile()" aria-label="Back">
-        <i class="fas fa-arrow-left"></i>
-      </button>
-      <h2 id="public-profile-title" class="text-white font-black text-sm uppercase tracking-widest">Profile</h2>
-    </div>
-    <div id="public-profile-body" class="info-sheet-body"></div>
-  </div>
-
-  <div class="bottom-nav-container">
-    <nav class="bottom-nav">
-      <button id="nav-btn-feed" onclick="window.navigateTo('feed', this)">
-        <i class="fas fa-home"></i>
-        <span>Home</span>
-      </button>
-      <button id="nav-btn-explore" onclick="window.navigateTo('explore', this)">
-        <i class="fas fa-search"></i>
-        <span>Explore</span>
-      </button>
-      <button onclick="window.togglePostModal()" class="nav-fab-btn" aria-label="Create post">
-        <i class="fas fa-plus"></i>
-      </button>
-      <button id="nav-btn-dms" class="relative" onclick="window.navigateTo('dms', this)">
-        <i class="fas fa-envelope"></i>
-        <span>DMs</span>
-        <span id="dms-unread-badge" class="nav-cart-badge hidden">0</span>
-      </button>
-      <button id="auth-profile-nav" onclick="window.navigateTo('profile', this)">
-        <i class="fas fa-sign-in-alt"></i>
-        <span>Sign In</span>
-      </button>
-    </nav>
-  </div>
-
-  <div id="post-modal" class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl modal-inner">
-      <div class="flex justify-between items-center">
-        <h2 class="text-white font-black text-base uppercase tracking-tight">Create Listing</h2>
-        <button onclick="window.togglePostModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm" aria-label="Close modal">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-      <div class="space-y-3 text-xs">
-        <div>
-          <label for="postTitle" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Listing Title</label>
-          <input type="text" id="postTitle" name="postTitle" placeholder="e.g., Mini Fridge or Graphic Design" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs font-medium">
-        </div>
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label for="postType" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Type</label>
-            <select id="postType" name="postType" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs">
-              <option value="product">Product</option>
-              <option value="skill">Service / Gig</option>
-            </select>
-          </div>
-          <div>
-            <label for="postPrice" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Price (GH₵)</label>
-            <input type="number" id="postPrice" name="postPrice" placeholder="0.00" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs">
-          </div>
-        </div>
-        <div>
-          <label for="postDescription" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Description</label>
-          <textarea id="postDescription" name="postDescription" rows="2" placeholder="Describe your item or skill..." class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs resize-none"></textarea>
-        </div>
-        <div>
-          <span class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Media Showcase</span>
-          <button id="attachMediaBtn" onclick="document.getElementById('mediaInput').click()" type="button" class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-2">
-            <i class="fas fa-cloud-upload-alt text-amber-400"></i> Attach Images / Videos
+      <div id="public-profile-overlay" class="info-sheet-overlay">
+        <div class="info-sheet-header">
+          <button
+            class="info-sheet-back"
+            onclick="window.closePublicProfile()"
+            aria-label="Back"
+          >
+            <i class="fas fa-arrow-left"></i>
           </button>
-          <p id="mediaFileCount" class="text-[10px] text-slate-500 mt-1.5 text-center"></p>
+          <h2
+            id="public-profile-title"
+            class="text-white font-black text-sm uppercase tracking-widest"
+          >
+            Profile
+          </h2>
         </div>
-        <button id="publishPostBtn" onclick="window.handlePostSubmission()" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-2 transition active:scale-95 shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2">
-          <span id="publishPostBtnLabel">Publish Instantly</span>
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- WhatsApp-style pre-upload media edit modal: shows attached files with
-       a thumbnail strip + main preview, allows rotate/remove before the
-       listing is actually published. -->
-  <div id="editMediaModal" class="hidden fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/85 backdrop-blur-sm p-4">
-    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-4 w-full max-w-sm space-y-3 shadow-2xl modal-inner">
-      <div class="flex justify-between items-center px-1">
-        <h2 class="text-white font-black text-sm uppercase tracking-tight">Edit Media</h2>
-        <button onclick="window.closeEditMediaModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm" aria-label="Close">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-      <div class="edit-main-preview" id="editMainPreview"></div>
-      <div class="edit-thumb-strip no-scrollbar" id="editThumbStrip"></div>
-      <div id="editMainFooter" class="edit-main-footer">
-        <button onclick="window.confirmEditedMedia()" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-1 transition active:scale-95 shadow-lg shadow-amber-400/20">
-          Use These Files
-        </button>
-      </div>
-      <div id="cropFooter" class="mt-1">
-        <button onclick="window._cancelCrop()" class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95">
-          Cancel
-        </button>
-        <button onclick="window._applyCrop()" class="flex-1 bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 shadow-lg shadow-amber-400/20">
-          Apply Crop
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <div id="detail-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 overflow-y-auto">
-    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden relative my-auto shadow-2xl modal-inner">
-      <button onclick="window.closeDetailModal()" class="absolute top-4 right-4 z-50 bg-black/60 text-white w-8 h-8 rounded-full flex items-center justify-center hover:bg-black/80 transition focus:outline-none" aria-label="Close detail viewport">
-        <i class="fas fa-times text-xs"></i>
-      </button>
-      <div id="detail-content"></div>
-    </div>
-  </div>
-
-  <div id="avatarModal" class="hidden fixed inset-0 z-[300] flex items-end justify-center bg-black/70 backdrop-blur-sm p-4">
-    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden mb-4 shadow-2xl modal-inner">
-      <div class="flex justify-between items-center p-4 pb-2">
-        <h2 class="text-white font-black text-sm uppercase tracking-tight">Profile Photo Viewport</h2>
-        <button id="closeAvatarBtn" class="w-7 h-7 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 text-xs hover:text-white transition" aria-label="Close avatar panel">✕</button>
+        <div id="public-profile-body" class="info-sheet-body"></div>
       </div>
 
-      <img id="modalAvatarImg" src="" alt="Profile Avatar"
-           class="w-full aspect-square object-cover no-browser-menu select-none"
-           style="-webkit-touch-callout: none; user-select: none;">
-
-      <div class="flex gap-3 p-4">
-        <button id="copyImageBtn" class="flex-1 flex items-center justify-center gap-2 bg-slate-800 border border-slate-700 text-white font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
-          <i class="far fa-copy"></i> Copy
-        </button>
-        <button id="downloadImageBtn" class="flex-1 flex items-center justify-center gap-2 bg-amber-400 text-black font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
-          <i class="fas fa-download"></i> Save
-        </button>
-        <button id="confirmAvatarBtn" class="flex-1 flex items-center justify-center gap-2 bg-slate-800 border border-slate-700 text-emerald-400 font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition">
-          <i class="fas fa-check"></i> Apply
-        </button>
+      <div class="bottom-nav-container">
+        <nav class="bottom-nav">
+          <button id="nav-btn-feed" onclick="window.navigateTo('feed', this)">
+            <i class="fas fa-home"></i>
+            <span>Home</span>
+          </button>
+          <button
+            id="nav-btn-explore"
+            onclick="window.navigateTo('explore', this)"
+          >
+            <i class="fas fa-search"></i>
+            <span>Explore</span>
+          </button>
+          <button
+            onclick="window.togglePostModal()"
+            class="nav-fab-btn"
+            aria-label="Create post"
+          >
+            <i class="fas fa-plus"></i>
+          </button>
+          <button
+            id="nav-btn-dms"
+            class="relative"
+            onclick="window.navigateTo('dms', this)"
+          >
+            <i class="fas fa-envelope"></i>
+            <span>DMs</span>
+            <span id="dms-unread-badge" class="nav-cart-badge hidden">0</span>
+          </button>
+          <button
+            id="auth-profile-nav"
+            onclick="window.navigateTo('profile', this)"
+          >
+            <i class="fas fa-sign-in-alt"></i>
+            <span>Sign In</span>
+          </button>
+        </nav>
       </div>
-    </div>
-  </div>
 
-  <div id="login-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
-      <div class="flex justify-between items-center">
-        <h2 class="text-white font-black text-base uppercase tracking-tight">Access CampusMarket</h2>
-        <button onclick="window.closeLoginModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm" aria-label="Close modal">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-      <div class="text-center py-2 space-y-1">
-        <div class="text-3xl">🔐</div>
-        <p class="text-slate-300 text-xs">Sign in to create listings, message vendors, and personalise your feed.</p>
-      </div>
-      <button onclick="window.login()" class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md">
-        <i class="fab fa-google text-base text-red-500"></i>
-        Continue with Google
-      </button>
-      <div class="login-divider">or sign in with email</div>
-
-      <form onsubmit="event.preventDefault(); window.loginWithEmail();" class="space-y-3">
-        <div>
-          <label for="login-email" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Email Address</label>
-          <div class="relative">
-            <i class="fas fa-envelope absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
-            <input type="email" id="login-email" name="login-email" placeholder="student@university.edu.gh"
-              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium">
+      <div
+        id="post-modal"
+        class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+      >
+        <div
+          class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl modal-inner"
+        >
+          <div class="flex justify-between items-center">
+            <h2
+              class="text-white font-black text-base uppercase tracking-tight"
+            >
+              Create Listing
+            </h2>
+            <button
+              onclick="window.togglePostModal()"
+              class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm"
+              aria-label="Close modal"
+            >
+              <i class="fas fa-times"></i>
+            </button>
           </div>
-        </div>
-        <div>
-          <label for="login-password" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Password</label>
-          <div class="relative">
-            <i class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
-            <input type="password" id="login-password" name="login-password" placeholder="••••••••"
-              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-10 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium">
-            <button type="button" onclick="window.togglePasswordVisibility()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs" aria-label="Toggle password visibility">
-              <i id="pw-eye-icon" class="fas fa-eye"></i>
+          <div class="space-y-3 text-xs">
+            <div>
+              <label
+                for="postTitle"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                >Listing Title</label
+              >
+              <input
+                type="text"
+                id="postTitle"
+                name="postTitle"
+                placeholder="e.g., Mini Fridge or Graphic Design"
+                class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs font-medium"
+              />
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label
+                  for="postType"
+                  class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                  >Type</label
+                >
+                <select
+                  id="postType"
+                  name="postType"
+                  class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
+                >
+                  <option value="product">Product</option>
+                  <option value="skill">Service / Gig</option>
+                </select>
+              </div>
+              <div>
+                <label
+                  for="postPrice"
+                  class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                  >Price (GH₵)</label
+                >
+                <input
+                  type="number"
+                  id="postPrice"
+                  name="postPrice"
+                  placeholder="0.00"
+                  class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
+                />
+              </div>
+            </div>
+            <div>
+              <label
+                for="postDescription"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                >Description</label
+              >
+              <textarea
+                id="postDescription"
+                name="postDescription"
+                rows="2"
+                placeholder="Describe your item or skill..."
+                class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs resize-none"
+              ></textarea>
+            </div>
+            <div>
+              <span
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                >Media Showcase</span
+              >
+              <button
+                id="attachMediaBtn"
+                onclick="document.getElementById('mediaInput').click()"
+                type="button"
+                class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-2"
+              >
+                <i class="fas fa-cloud-upload-alt text-amber-400"></i> Attach
+                Images / Videos
+              </button>
+              <p
+                id="mediaFileCount"
+                class="text-[10px] text-slate-500 mt-1.5 text-center"
+              ></p>
+            </div>
+            <button
+              id="publishPostBtn"
+              onclick="window.handlePostSubmission()"
+              class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-2 transition active:scale-95 shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2"
+            >
+              <span id="publishPostBtnLabel">Publish Instantly</span>
             </button>
           </div>
         </div>
-        <button type="submit" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20">
-          Sign In
-        </button>
-      </form>
-
-      <p class="text-center text-[10px] text-slate-500">
-        No account? <button onclick="window.showSignupView()" class="text-amber-400 font-bold hover:underline">Create one free</button>
-      </p>
-    </div>
-  </div>
-
-  <div id="signup-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-    <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl">
-      <div class="flex justify-between items-center">
-        <h2 class="text-white font-black text-base uppercase tracking-tight">Create Account</h2>
-        <button onclick="window.closeSignupModal()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm" aria-label="Close modal">
-          <i class="fas fa-times"></i>
-        </button>
       </div>
-      <button onclick="window.login()" class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md">
-        <i class="fab fa-google text-base text-red-500"></i>
-        Sign up with Google
-      </button>
-      <div class="login-divider">or create with email</div>
 
-      <form onsubmit="event.preventDefault(); window.signUpWithEmail();" class="space-y-3">
-        <div>
-          <label for="signup-name" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Full Name</label>
-          <div class="relative">
-            <i class="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
-            <input type="text" id="signup-name" name="signup-name" placeholder="Your full name"
-              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium">
+      <!-- WhatsApp-style pre-upload media edit modal: shows attached files with
+       a thumbnail strip + main preview, allows rotate/remove before the
+       listing is actually published. -->
+      <div
+        id="editMediaModal"
+        class="hidden fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/85 backdrop-blur-sm p-4"
+      >
+        <div
+          class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-4 w-full max-w-sm space-y-3 shadow-2xl modal-inner"
+        >
+          <div class="flex justify-between items-center px-1">
+            <h2 class="text-white font-black text-sm uppercase tracking-tight">
+              Edit Media
+            </h2>
+            <button
+              onclick="window.closeEditMediaModal()"
+              class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm"
+              aria-label="Close"
+            >
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <div class="edit-main-preview" id="editMainPreview"></div>
+          <div class="edit-thumb-strip no-scrollbar" id="editThumbStrip"></div>
+          <div id="editMainFooter" class="edit-main-footer">
+            <button
+              onclick="window.confirmEditedMedia()"
+              class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-1 transition active:scale-95 shadow-lg shadow-amber-400/20"
+            >
+              Use These Files
+            </button>
+          </div>
+          <div id="cropFooter" class="mt-1">
+            <button
+              onclick="window._cancelCrop()"
+              class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+            >
+              Cancel
+            </button>
+            <button
+              onclick="window._applyCrop()"
+              class="flex-1 bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 shadow-lg shadow-amber-400/20"
+            >
+              Apply Crop
+            </button>
           </div>
         </div>
-        <div>
-          <label for="signup-email" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Email Address</label>
-          <div class="relative">
-            <i class="fas fa-envelope absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
-            <input type="email" id="signup-email" name="signup-email" placeholder="student@university.edu.gh"
-              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium">
+      </div>
+
+      <div
+        id="detail-modal"
+        class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 overflow-y-auto"
+      >
+        <div
+          class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden relative my-auto shadow-2xl modal-inner"
+        >
+          <button
+            onclick="window.closeDetailModal()"
+            class="absolute top-4 right-4 z-50 bg-black/60 text-white w-8 h-8 rounded-full flex items-center justify-center hover:bg-black/80 transition focus:outline-none"
+            aria-label="Close detail viewport"
+          >
+            <i class="fas fa-times text-xs"></i>
+          </button>
+          <div id="detail-content"></div>
+        </div>
+      </div>
+
+      <div
+        id="avatarModal"
+        class="hidden fixed inset-0 z-[300] flex items-end justify-center bg-black/70 backdrop-blur-sm p-4"
+      >
+        <div
+          class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden mb-4 shadow-2xl modal-inner"
+        >
+          <div class="flex justify-between items-center p-4 pb-2">
+            <h2 class="text-white font-black text-sm uppercase tracking-tight">
+              Profile Photo Viewport
+            </h2>
+            <button
+              id="closeAvatarBtn"
+              class="w-7 h-7 flex items-center justify-center rounded-full bg-slate-800 text-slate-400 text-xs hover:text-white transition"
+              aria-label="Close avatar panel"
+            >
+              ✕
+            </button>
+          </div>
+
+          <img
+            id="modalAvatarImg"
+            src=""
+            alt="Profile Avatar"
+            class="w-full aspect-square object-cover no-browser-menu select-none"
+            style="-webkit-touch-callout: none; user-select: none"
+          />
+
+          <div class="flex gap-3 p-4">
+            <button
+              id="copyImageBtn"
+              class="flex-1 flex items-center justify-center gap-2 bg-slate-800 border border-slate-700 text-white font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition"
+            >
+              <i class="far fa-copy"></i> Copy
+            </button>
+            <button
+              id="downloadImageBtn"
+              class="flex-1 flex items-center justify-center gap-2 bg-amber-400 text-black font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition"
+            >
+              <i class="fas fa-download"></i> Save
+            </button>
+            <button
+              id="confirmAvatarBtn"
+              class="flex-1 flex items-center justify-center gap-2 bg-slate-800 border border-slate-700 text-emerald-400 font-black text-xs uppercase tracking-wider py-3 rounded-2xl active:scale-95 transition"
+            >
+              <i class="fas fa-check"></i> Apply
+            </button>
           </div>
         </div>
-        <div>
-          <label for="signup-password" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Password</label>
-          <div class="relative">
-            <i class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
-            <input type="password" id="signup-password" name="signup-password" placeholder="Min 8 characters"
-              class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium">
+      </div>
+
+      <div
+        id="login-modal"
+        class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+      >
+        <div
+          class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl"
+        >
+          <div class="flex justify-between items-center">
+            <h2
+              class="text-white font-black text-base uppercase tracking-tight"
+            >
+              Access CampusMarket
+            </h2>
+            <button
+              onclick="window.closeLoginModal()"
+              class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm"
+              aria-label="Close modal"
+            >
+              <i class="fas fa-times"></i>
+            </button>
           </div>
+          <div class="text-center py-2 space-y-1">
+            <div class="text-3xl">🔐</div>
+            <p class="text-slate-300 text-xs">
+              Sign in to create listings, message vendors, and personalise your
+              feed.
+            </p>
+          </div>
+          <button
+            onclick="window.login()"
+            class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md"
+          >
+            <i class="fab fa-google text-base text-red-500"></i>
+            Continue with Google
+          </button>
+          <div class="login-divider">or sign in with email</div>
+
+          <form
+            onsubmit="
+              event.preventDefault();
+              window.loginWithEmail();
+            "
+            class="space-y-3"
+          >
+            <div>
+              <label
+                for="login-email"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                >Email Address</label
+              >
+              <div class="relative">
+                <i
+                  class="fas fa-envelope absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                ></i>
+                <input
+                  type="email"
+                  id="login-email"
+                  name="login-email"
+                  placeholder="student@university.edu.gh"
+                  class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+                />
+              </div>
+            </div>
+            <div>
+              <label
+                for="login-password"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                >Password</label
+              >
+              <div class="relative">
+                <i
+                  class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                ></i>
+                <input
+                  type="password"
+                  id="login-password"
+                  name="login-password"
+                  placeholder="••••••••"
+                  class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-10 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+                />
+                <button
+                  type="button"
+                  onclick="window.togglePasswordVisibility()"
+                  class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs"
+                  aria-label="Toggle password visibility"
+                >
+                  <i id="pw-eye-icon" class="fas fa-eye"></i>
+                </button>
+              </div>
+            </div>
+            <button
+              type="submit"
+              class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20"
+            >
+              Sign In
+            </button>
+          </form>
+
+          <p class="text-center text-[10px] text-slate-500">
+            No account?
+            <button
+              onclick="window.showSignupView()"
+              class="text-amber-400 font-bold hover:underline"
+            >
+              Create one free
+            </button>
+          </p>
         </div>
-        <button type="submit" class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20">
-          Create Account
-        </button>
-      </form>
+      </div>
 
-      <p class="text-center text-[10px] text-slate-500">
-        Already have an account? <button onclick="window.showLoginView()" class="text-amber-400 font-bold hover:underline">Sign in</button>
-      </p>
-    </div>
-  </div>
+      <div
+        id="signup-modal"
+        class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+      >
+        <div
+          class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl"
+        >
+          <div class="flex justify-between items-center">
+            <h2
+              class="text-white font-black text-base uppercase tracking-tight"
+            >
+              Create Account
+            </h2>
+            <button
+              onclick="window.closeSignupModal()"
+              class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm"
+              aria-label="Close modal"
+            >
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <button
+            onclick="window.login()"
+            class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md"
+          >
+            <i class="fab fa-google text-base text-red-500"></i>
+            Sign up with Google
+          </button>
+          <div class="login-divider">or create with email</div>
 
-  <script>
-    const _NAV_VIEWS = ['feed-container','explore-container','dms-container','profile-container','cart-container'];
+          <form
+            onsubmit="
+              event.preventDefault();
+              window.signUpWithEmail();
+            "
+            class="space-y-3"
+          >
+            <div>
+              <label
+                for="signup-name"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                >Full Name</label
+              >
+              <div class="relative">
+                <i
+                  class="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                ></i>
+                <input
+                  type="text"
+                  id="signup-name"
+                  name="signup-name"
+                  placeholder="Your full name"
+                  class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+                />
+              </div>
+            </div>
+            <div>
+              <label
+                for="signup-email"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                >Email Address</label
+              >
+              <div class="relative">
+                <i
+                  class="fas fa-envelope absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                ></i>
+                <input
+                  type="email"
+                  id="signup-email"
+                  name="signup-email"
+                  placeholder="student@university.edu.gh"
+                  class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+                />
+              </div>
+            </div>
+            <div>
+              <label
+                for="signup-password"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                >Password</label
+              >
+              <div class="relative">
+                <i
+                  class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                ></i>
+                <input
+                  type="password"
+                  id="signup-password"
+                  name="signup-password"
+                  placeholder="Min 8 characters"
+                  class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+                />
+              </div>
+            </div>
+            <button
+              type="submit"
+              class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20"
+            >
+              Create Account
+            </button>
+          </form>
 
-    function _setActiveNav(activeBtn) {
-      document.querySelectorAll('.bottom-nav button').forEach(btn => btn.classList.remove('nav-active'));
-      if (activeBtn) activeBtn.classList.add('nav-active');
-    }
+          <p class="text-center text-[10px] text-slate-500">
+            Already have an account?
+            <button
+              onclick="window.showLoginView()"
+              class="text-amber-400 font-bold hover:underline"
+            >
+              Sign in
+            </button>
+          </p>
+        </div>
+      </div>
 
-    window.togglePasswordVisibility = function() {
-      const pwInput = document.getElementById('login-password');
-      const icon    = document.getElementById('pw-eye-icon');
-      if (!pwInput) return;
-      if (pwInput.type === 'password') {
-        pwInput.type = 'text';
-        icon.className = 'fas fa-eye-slash';
-      } else {
-        pwInput.type = 'password';
-        icon.className = 'fas fa-eye';
-      }
-    };
+      <script>
+        const _NAV_VIEWS = [
+          "feed-container",
+          "explore-container",
+          "dms-container",
+          "profile-container",
+          "cart-container",
+        ];
 
-    window.loginWithEmail = async function() {
-      const email    = document.getElementById('login-email')?.value?.trim();
-      const password = document.getElementById('login-password')?.value;
-      if (!email || !password) { alert('Please enter your email and password.'); return; }
-      if (typeof window.signInWithEmailPassword === 'function') {
-        await window.signInWithEmailPassword(email, password);
-      } else {
-        alert('Email sign-in not yet wired.');
-      }
-    };
-
-    window.signUpWithEmail = async function() {
-      const name     = document.getElementById('signup-name')?.value?.trim();
-      const email    = document.getElementById('signup-email')?.value?.trim();
-      const password = document.getElementById('signup-password')?.value;
-      if (!name || !email || !password) { alert('Please fill in all fields.'); return; }
-      if (password.length < 8) { alert('Password must be at least 8 characters.'); return; }
-      if (typeof window.registerWithEmail === 'function') {
-        await window.registerWithEmail(name, email, password);
-      } else {
-        alert('Email sign-up not yet wired.');
-      }
-    };
-
-    window.showSignupView = function() {
-      document.getElementById('login-modal')?.classList.add('hidden');
-      document.getElementById('signup-modal')?.classList.remove('hidden');
-    };
-    window.showLoginView = function() {
-      document.getElementById('signup-modal')?.classList.add('hidden');
-      document.getElementById('login-modal')?.classList.remove('hidden');
-    };
-    window.closeSignupModal = function() {
-      document.getElementById('signup-modal')?.classList.add('hidden');
-    };
-
-    // Toggles the slide-down search input under the merged header row.
-    // Tapping the search icon reveals it and focuses the input; tapping
-    // again (or the icon while open) hides it.
-    window.toggleHeaderSearch = function() {
-      const wrap = document.getElementById('header-search-wrap');
-      const input = document.getElementById('campus-global-search');
-      if (!wrap) return;
-      const isHidden = wrap.classList.contains('hidden');
-      if (isHidden) {
-        wrap.classList.remove('hidden');
-        input?.focus();
-      } else {
-        window.closeHeaderSearch();
-      }
-    };
-
-    // Fix: the search bar only ever closed if the person tapped the
-    // search icon a second time — switching tabs (Feed/Explore/DMs/
-    // Profile/Cart) or opening a search result left it sitting open on
-    // screen until a full page refresh. navigateTo() and the search
-    // result tap handler both call this now so the bar always closes
-    // itself the moment it's no longer relevant, and the input/results
-    // are cleared so the next time it's opened it starts fresh instead
-    // of showing the last query.
-    window.closeHeaderSearch = function() {
-      const wrap = document.getElementById('header-search-wrap');
-      const input = document.getElementById('campus-global-search');
-      const results = document.getElementById('search-results');
-      if (wrap && !wrap.classList.contains('hidden')) {
-        wrap.classList.add('hidden');
-      }
-      if (input) input.value = '';
-      if (results) results.innerHTML = '';
-    };
-
-    // Live count of attached files for the "Create Listing" modal, and a
-    // running badge on the header/nav bookmark icons for saved-item count.
-    document.addEventListener('DOMContentLoaded', function() {
-      _setActiveNav(document.getElementById('nav-btn-feed'));
-
-      const mediaInput = document.getElementById('mediaInput');
-      mediaInput?.addEventListener('change', function() {
-        // Instead of immediately just showing a count, open the WhatsApp-style
-        // edit-before-upload modal so files can be reviewed/removed/rotated
-        // before they're attached to the listing.
-        if (mediaInput.files && mediaInput.files.length > 0 && typeof window.openEditMediaModal === 'function') {
-          window.openEditMediaModal(mediaInput.files);
+        function _setActiveNav(activeBtn) {
+          document
+            .querySelectorAll(".bottom-nav button")
+            .forEach((btn) => btn.classList.remove("nav-active"));
+          if (activeBtn) activeBtn.classList.add("nav-active");
         }
-      });
 
-      function refreshCartBadges() {
-        const list = window._userCartList || [];
-        const n = list.length;
-        const headerBadge = document.getElementById('header-cart-badge');
-        if (headerBadge) {
-          if (n > 0) { headerBadge.textContent = n > 99 ? '99+' : n; headerBadge.classList.remove('hidden'); }
-          else { headerBadge.classList.add('hidden'); }
-        }
-      }
-      refreshCartBadges();
-      setInterval(refreshCartBadges, 1500);
-    });
-
-    /* ── PROXY STUBS ── */
-    (function() {
-      const _queue = {};
-
-      function makeStub(name) {
-        _queue[name] = [];
-        window[name] = function() {
-          if (window['_real_' + name]) return window['_real_' + name].apply(this, arguments);
-          _queue[name].push(arguments);
+        window.togglePasswordVisibility = function () {
+          const pwInput = document.getElementById("login-password");
+          const icon = document.getElementById("pw-eye-icon");
+          if (!pwInput) return;
+          if (pwInput.type === "password") {
+            pwInput.type = "text";
+            icon.className = "fas fa-eye-slash";
+          } else {
+            pwInput.type = "password";
+            icon.className = "fas fa-eye";
+          }
         };
-      }
 
-      [
-        'filterFeed','switchProfileTab','togglePostModal','navigateTo',
-        'openDetail','closeDetailModal','openLoginModal','closeLoginModal',
-        'likePost','sharePost','contactSeller','toggleComments',
-        'postComment','toggleFollow','handlePostSubmission','handleAvatarUpload',
-        'login','logout','runSearch','saveOnboarding','onboardRegionChange',
-        'initProfileSelects','signOutUser','toggleSavePost','toggleCartItem',
-        'openDM','closeDMThread','sendChatMessage','openEditMediaModal',
-        'closeEditMediaModal','confirmEditedMedia'
-      ].forEach(makeStub);
+        window.loginWithEmail = async function () {
+          const email = document.getElementById("login-email")?.value?.trim();
+          const password = document.getElementById("login-password")?.value;
+          if (!email || !password) {
+            alert("Please enter your email and password.");
+            return;
+          }
+          if (typeof window.signInWithEmailPassword === "function") {
+            await window.signInWithEmailPassword(email, password);
+          } else {
+            alert("Email sign-in not yet wired.");
+          }
+        };
 
-      window._registerModuleFunction = function(name, fn) {
-        window['_real_' + name] = fn;
-        window[name] = fn;
-        if (_queue[name] && _queue[name].length) {
-          _queue[name].forEach(args => fn.apply(window, args));
-          _queue[name] = [];
-        }
-      };
-    })();
-  </script>
+        window.signUpWithEmail = async function () {
+          const name = document.getElementById("signup-name")?.value?.trim();
+          const email = document.getElementById("signup-email")?.value?.trim();
+          const password = document.getElementById("signup-password")?.value;
+          if (!name || !email || !password) {
+            alert("Please fill in all fields.");
+            return;
+          }
+          if (password.length < 8) {
+            alert("Password must be at least 8 characters.");
+            return;
+          }
+          if (typeof window.registerWithEmail === "function") {
+            await window.registerWithEmail(name, email, password);
+          } else {
+            alert("Email sign-up not yet wired.");
+          }
+        };
 
-  <script type="module" src="./app.js"></script>
+        window.showSignupView = function () {
+          document.getElementById("login-modal")?.classList.add("hidden");
+          document.getElementById("signup-modal")?.classList.remove("hidden");
+        };
+        window.showLoginView = function () {
+          document.getElementById("signup-modal")?.classList.add("hidden");
+          document.getElementById("login-modal")?.classList.remove("hidden");
+        };
+        window.closeSignupModal = function () {
+          document.getElementById("signup-modal")?.classList.add("hidden");
+        };
 
-  <script type="module">
-    const _moduleExports = [
-      'filterFeed','switchProfileTab','togglePostModal','navigateTo',
-      'openDetail','closeDetailModal','openLoginModal','closeLoginModal',
-      'likePost','sharePost','contactSeller','toggleComments',
-      'postComment','toggleFollow','handlePostSubmission','handleAvatarUpload',
-      'login','logout','runSearch','saveOnboarding','onboardRegionChange',
-      'initProfileSelects','signOutUser','toggleSavePost','toggleCartItem',
-      'openDM','closeDMThread','sendChatMessage','openEditMediaModal',
-      'closeEditMediaModal','confirmEditedMedia'
-    ];
+        // Toggles the slide-down search input under the merged header row.
+        // Tapping the search icon reveals it and focuses the input; tapping
+        // again (or the icon while open) hides it.
+        window.toggleHeaderSearch = function () {
+          const wrap = document.getElementById("header-search-wrap");
+          const input = document.getElementById("campus-global-search");
+          if (!wrap) return;
+          const isHidden = wrap.classList.contains("hidden");
+          if (isHidden) {
+            wrap.classList.remove("hidden");
+            input?.focus();
+          } else {
+            window.closeHeaderSearch();
+          }
+        };
 
-    _moduleExports.forEach(name => {
-      if (typeof window[name] === 'function' && typeof window._registerModuleFunction === 'function') {
-        window._registerModuleFunction(name, window[name]);
-      }
-    });
+        // Fix: the search bar only ever closed if the person tapped the
+        // search icon a second time — switching tabs (Feed/Explore/DMs/
+        // Profile/Cart) or opening a search result left it sitting open on
+        // screen until a full page refresh. navigateTo() and the search
+        // result tap handler both call this now so the bar always closes
+        // itself the moment it's no longer relevant, and the input/results
+        // are cleared so the next time it's opened it starts fresh instead
+        // of showing the last query.
+        window.closeHeaderSearch = function () {
+          const wrap = document.getElementById("header-search-wrap");
+          const input = document.getElementById("campus-global-search");
+          const results = document.getElementById("search-results");
+          if (wrap && !wrap.classList.contains("hidden")) {
+            wrap.classList.add("hidden");
+          }
+          if (input) input.value = "";
+          if (results) results.innerHTML = "";
+        };
 
-    if (typeof _setActiveNav === 'function') {
-      _setActiveNav(document.getElementById('nav-btn-feed'));
-    }
-  </script>
+        // Live count of attached files for the "Create Listing" modal, and a
+        // running badge on the header/nav bookmark icons for saved-item count.
+        document.addEventListener("DOMContentLoaded", function () {
+          _setActiveNav(document.getElementById("nav-btn-feed"));
 
-  <script>
-    // Registers the service worker that caches static app-shell assets
-    // (this HTML shell, app.js, Tailwind/FontAwesome/Google Fonts CDN
-    // scripts, web fonts) so repeat visits on the same campus Wi-Fi or
-    // mobile data don't re-download the same unchanging files every
-    // time. Live app data (posts, likes, DMs, media) is never cached —
-    // see sw.js for exactly what is and isn't touched.
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(() => {
-          // Registration can fail (e.g. served over plain HTTP in some
-          // dev setups) — the app works fine without it, just without
-          // the data savings, so this is intentionally silent.
+          const mediaInput = document.getElementById("mediaInput");
+          mediaInput?.addEventListener("change", function () {
+            // Instead of immediately just showing a count, open the WhatsApp-style
+            // edit-before-upload modal so files can be reviewed/removed/rotated
+            // before they're attached to the listing.
+            if (
+              mediaInput.files &&
+              mediaInput.files.length > 0 &&
+              typeof window.openEditMediaModal === "function"
+            ) {
+              window.openEditMediaModal(mediaInput.files);
+            }
+          });
+
+          function refreshCartBadges() {
+            const list = window._userCartList || [];
+            const n = list.length;
+            const headerBadge = document.getElementById("header-cart-badge");
+            if (headerBadge) {
+              if (n > 0) {
+                headerBadge.textContent = n > 99 ? "99+" : n;
+                headerBadge.classList.remove("hidden");
+              } else {
+                headerBadge.classList.add("hidden");
+              }
+            }
+          }
+          refreshCartBadges();
+          setInterval(refreshCartBadges, 1500);
         });
-      });
-    }
-  </script>
 
-</body>
+        /* ── PROXY STUBS ── */
+        (function () {
+          const _queue = {};
+
+          function makeStub(name) {
+            _queue[name] = [];
+            window[name] = function () {
+              if (window["_real_" + name])
+                return window["_real_" + name].apply(this, arguments);
+              _queue[name].push(arguments);
+            };
+          }
+
+          [
+            "filterFeed",
+            "switchProfileTab",
+            "togglePostModal",
+            "navigateTo",
+            "openDetail",
+            "closeDetailModal",
+            "openLoginModal",
+            "closeLoginModal",
+            "likePost",
+            "sharePost",
+            "contactSeller",
+            "toggleComments",
+            "postComment",
+            "toggleFollow",
+            "handlePostSubmission",
+            "handleAvatarUpload",
+            "login",
+            "logout",
+            "runSearch",
+            "saveOnboarding",
+            "onboardRegionChange",
+            "initProfileSelects",
+            "signOutUser",
+            "toggleSavePost",
+            "toggleCartItem",
+            "openDM",
+            "closeDMThread",
+            "sendChatMessage",
+            "openEditMediaModal",
+            "closeEditMediaModal",
+            "confirmEditedMedia",
+          ].forEach(makeStub);
+
+          window._registerModuleFunction = function (name, fn) {
+            window["_real_" + name] = fn;
+            window[name] = fn;
+            if (_queue[name] && _queue[name].length) {
+              _queue[name].forEach((args) => fn.apply(window, args));
+              _queue[name] = [];
+            }
+          };
+        })();
+      </script>
+
+      <script type="module" src="./app.js"></script>
+
+      <script type="module">
+        const _moduleExports = [
+          "filterFeed",
+          "switchProfileTab",
+          "togglePostModal",
+          "navigateTo",
+          "openDetail",
+          "closeDetailModal",
+          "openLoginModal",
+          "closeLoginModal",
+          "likePost",
+          "sharePost",
+          "contactSeller",
+          "toggleComments",
+          "postComment",
+          "toggleFollow",
+          "handlePostSubmission",
+          "handleAvatarUpload",
+          "login",
+          "logout",
+          "runSearch",
+          "saveOnboarding",
+          "onboardRegionChange",
+          "initProfileSelects",
+          "signOutUser",
+          "toggleSavePost",
+          "toggleCartItem",
+          "openDM",
+          "closeDMThread",
+          "sendChatMessage",
+          "openEditMediaModal",
+          "closeEditMediaModal",
+          "confirmEditedMedia",
+        ];
+
+        _moduleExports.forEach((name) => {
+          if (
+            typeof window[name] === "function" &&
+            typeof window._registerModuleFunction === "function"
+          ) {
+            window._registerModuleFunction(name, window[name]);
+          }
+        });
+
+        if (typeof _setActiveNav === "function") {
+          _setActiveNav(document.getElementById("nav-btn-feed"));
+        }
+      </script>
+    </div>
+    <!-- /#app-shell -->
+
+    <script>
+      // Registers the service worker that caches static app-shell assets
+      // (this HTML shell, app.js, Tailwind/FontAwesome/Google Fonts CDN
+      // scripts, web fonts) so repeat visits on the same campus Wi-Fi or
+      // mobile data don't re-download the same unchanging files every
+      // time. Live app data (posts, likes, DMs, media) is never cached —
+      // see sw.js for exactly what is and isn't touched.
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("./sw.js").catch(() => {
+            // Registration can fail (e.g. served over plain HTTP in some
+            // dev setups) — the app works fine without it, just without
+            // the data savings, so this is intentionally silent.
+          });
+        });
+      }
+    </script>
+  </body>
 </html>
