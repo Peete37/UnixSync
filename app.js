@@ -164,6 +164,14 @@ let userCartList = JSON.parse(localStorage.getItem("campus_market_cart") || "[]"
 
 Object.defineProperty(window, '_currentUser',   { get: () => currentUserData });
 Object.defineProperty(window, '_userCartList',  { get: () => userCartList });
+// Debug helper: likedPostIds is a module-scoped const, so it's private
+// to this module and was never reachable from the browser console
+// directly (typing `likedPostIds` there throws "not defined" — that's
+// expected JS module behavior, not a bug). Exposing it read-only here,
+// the same way _currentUser/_userCartList already are, so it can
+// actually be inspected: type `[..._likedPostIds]` in the console to
+// see its contents as a plain array.
+Object.defineProperty(window, '_likedPostIds', { get: () => likedPostIds });
 
 // ─── 3b. MEDIA EDIT MODAL STATE (WhatsApp-style edit before upload) ──────────
 // Files staged for review in the "Edit Media" modal before they're actually
