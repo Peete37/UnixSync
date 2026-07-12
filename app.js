@@ -2191,16 +2191,43 @@ window.likeComment = async function (commentId, btn) {
     if (countEl) countEl.textContent = count;
     localStorage.setItem('campus_market_comment_likes', JSON.stringify([...likedCommentIds]));
 
+    // Fix: this used to swallow every failure into a console.warn with
+    // no toast and no UI rollback — meaning if this insert/delete ever
+    // failed for any reason (including the exact same kind of orphaned-
+    // row duplicate-key conflict that turned out to be the real post-
+    // likes bug), nobody would ever see it happen. "Comment likes work
+    // well" may partly reflect that failures here were simply invisible
+    // rather than genuinely rarer. Real failures now roll back the
+    // optimistic UI and show a toast, matching likePost's behavior.
     try {
         if (liked) {
-            await supabase.from('comment_likes').delete().eq('comment_id', commentId).eq('user_id', currentUserData.id);
-            await supabase.rpc('decrement_comment_likes', { comment_id_input: commentId });
+            const { error } = await supabase.from('comment_likes').delete().eq('comment_id', commentId).eq('user_id', currentUserData.id);
+            if (error) throw error;
+            const { error: decErr } = await supabase.rpc('decrement_comment_likes', { comment_id_input: commentId });
+            if (decErr) throw decErr;
         } else {
             const { error } = await supabase.from('comment_likes').insert({ comment_id: commentId, user_id: currentUserData.id });
-            if (!error) await supabase.rpc('increment_comment_likes', { comment_id_input: commentId });
+            const isDuplicate = error && error.code === '23505';
+            if (error && !isDuplicate) throw error;
+            if (!error) {
+                const { error: incErr } = await supabase.rpc('increment_comment_likes', { comment_id_input: commentId });
+                if (incErr) throw incErr;
+            }
         }
     } catch (e) {
-        console.warn("Comment like sync delayed:", e);
+        console.error("Comment like sync failed — reverting:", e);
+        if (liked) {
+            likedCommentIds.add(key);
+            icon.className = 'fas fa-heart text-rose-500';
+            count = count + 1;
+        } else {
+            likedCommentIds.delete(key);
+            icon.className = 'far fa-heart text-slate-400';
+            count = Math.max(0, count - 1);
+        }
+        if (countEl) countEl.textContent = count;
+        localStorage.setItem('campus_market_comment_likes', JSON.stringify([...likedCommentIds]));
+        showToast("Couldn't save your like — please try again.");
     }
 };
 
@@ -6152,4 +6179,3 @@ window.deleteSelectedGridItems = function () {
 };
 
 
-  
