@@ -1844,12 +1844,12 @@ function waitForOnline(timeoutMs) {
         window.addEventListener('online', handler);
     });
 }
-
 // ─── 12. CARD RENDERERS ───────────────────────────────────────────────────────
 // Tracks posts currently mid-like-toggle so a rapid double-tap can't fire
 // two overlapping insert/delete calls racing each other against the same
 // row (which could otherwise leave the DB counter and the UI disagreeing).
 const likeInFlight = new Set();
+
 
 window.likePost = async function (postId, btn) {
     if (!currentUserData) {
@@ -1861,6 +1861,7 @@ window.likePost = async function (postId, btn) {
         return;
     }
 
+
     // Normalize once: postId arrives as a string (it's read out of an HTML
     // attribute), but everywhere else in the app (allCachedPosts, the RPC
     // calls, etc.) may hold it as the raw bigint number from the DB. Doing
@@ -1870,10 +1871,12 @@ window.likePost = async function (postId, btn) {
     if (likeInFlight.has(key)) return;
     likeInFlight.add(key);
 
+
     const liked   = likedPostIds.has(key);
     const countEl = btn.querySelector('.like-count');
     const icon    = btn.querySelector('i');
     let currentCount = parseInt(countEl?.textContent || 0);
+
 
     // 1. Optimistic UI update
     if (liked) {
@@ -1888,8 +1891,10 @@ window.likePost = async function (postId, btn) {
         currentCount = currentCount + 1;
     }
 
+
     if (countEl) countEl.textContent = currentCount;
     localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
+
 
     // Keep the in-memory cache in sync so a re-render (tab switch, search,
     // etc.) before the next DB refresh doesn't show a stale count. Compare
@@ -1897,6 +1902,7 @@ window.likePost = async function (postId, btn) {
     // (numbers for a bigint column) while postId here is a string.
     const cachedEntry = allCachedPosts.find(p => idKey(p.id) === key);
     if (cachedEntry?.data) cachedEntry.data.likes_count = currentCount;
+
 
     // 2. Execute Backend sync — this is what makes likes survive reload.
     // Uses atomic RPC counters (increment_post_likes / decrement_post_likes)
@@ -1917,7 +1923,9 @@ window.likePost = async function (postId, btn) {
                 .eq("post_id", postId)
                 .eq("user_id", currentUserData.id);
 
+
             if (deleteErr) throw deleteErr;
+
 
             // Fix: this RPC's error was never checked — if it failed (wrong
             // argument name, RPC not deployed, permissions issue, etc.) the
@@ -1938,6 +1946,7 @@ window.likePost = async function (postId, btn) {
                     post_id: postId,
                     user_id: currentUserData.id
                 });
+
 
             // A unique-constraint violation just means this like already
             // existed in the database (e.g. a stale/incomplete local
@@ -1963,6 +1972,7 @@ window.likePost = async function (postId, btn) {
     } catch (e) {
         console.error("Like sync failed — reverting UI to match database:", e);
 
+
         // Roll back the optimistic UI exactly, since the write did not
         // actually persist.
         if (liked) {
@@ -1980,11 +1990,13 @@ window.likePost = async function (postId, btn) {
         localStorage.setItem('campus_market_likes', JSON.stringify([...likedPostIds]));
         if (cachedEntry?.data) cachedEntry.data.likes_count = currentCount;
 
+
         showToast("Couldn't save your like — please try again.");
     } finally {
         likeInFlight.delete(key);
     }
 };
+
 
 window.sharePost = function (postId, title) {
     const text = `Check out "${title}" on CampusMarket!`;
@@ -1996,10 +2008,12 @@ window.sharePost = function (postId, title) {
     }
 };
 
+
 // downloadMedia was removed entirely — post media (photos/videos) is no
 // longer downloadable from anywhere in the app. This is separate from the
 // avatar long-press "Save" button, which only ever lets someone save
 // their OWN profile picture and is unaffected by this change.
+
 
 // Opens a real DM thread with the seller AND shares a small preview of the
 // exact listing the person tapped "Contact" on, so the seller immediately
@@ -2018,8 +2032,10 @@ window.contactSeller = function (sellerId, userName, sellerAvatar, postTitle, po
     window.openDM(sellerId, userName, sellerAvatar, postContext);
 };
 
+
 // ─── Comment count tracking (keeps counters accurate without a full re-fetch) ──
 const commentCountCache = {}; // postId -> count
+
 
 function updateCommentCountUI(postId, count) {
     commentCountCache[postId] = count;
@@ -2027,6 +2043,7 @@ function updateCommentCountUI(postId, count) {
         el.textContent = count;
     });
 }
+
 
 async function fetchAndCacheCommentCount(postId) {
     try {
@@ -2038,6 +2055,7 @@ async function fetchAndCacheCommentCount(postId) {
     } catch (_) {}
 }
 
+
 // Simple client-side cooldown against accidental rapid-fire comment
 // spam (e.g. holding Enter, a stuck keypress, an eager double-tap).
 // IMPORTANT: this is a UX safeguard only, not real security — anyone
@@ -2047,9 +2065,11 @@ async function fetchAndCacheCommentCount(postId) {
 let lastCommentPostedAt = 0;
 const COMMENT_COOLDOWN_MS = 2000;
 
+
 window.postComment = async function(postId, inputEl, parentCommentId = null) {
     const text = inputEl.value.trim();
     if (!text || !currentUserData) return;
+
 
     const now = Date.now();
     if (now - lastCommentPostedAt < COMMENT_COOLDOWN_MS) {
@@ -2058,8 +2078,10 @@ window.postComment = async function(postId, inputEl, parentCommentId = null) {
     }
     lastCommentPostedAt = now;
 
+
     inputEl.value = '';
     window._syncCommentSendState(postId, inputEl);
+
 
     // Fix: posting used to clear the input and then just wait silently for
     // the realtime echo to repaint the list — on any network lag it looked
@@ -2091,6 +2113,7 @@ window.postComment = async function(postId, inputEl, parentCommentId = null) {
         list.scrollTop = list.scrollHeight;
     }
 
+
     try {
         const metadata = currentUserData.user_metadata || {};
         const insertPayload = {
@@ -2119,10 +2142,12 @@ window.postComment = async function(postId, inputEl, parentCommentId = null) {
     }
 };
 
+
 // Tracks which comment (if any) is currently being replied to, per post,
 // so the reply target is visible and Enter posts as a reply not a new
 // top-level comment.
 const activeReplyTarget = {};
+
 
 window.startCommentReply = function (postId, commentId, commentAuthor) {
     activeReplyTarget[postId] = commentId;
@@ -2136,6 +2161,7 @@ window.startCommentReply = function (postId, commentId, commentAuthor) {
     if (cancelBtn) cancelBtn.classList.remove('hidden');
 };
 
+
 window.cancelCommentReply = function (postId) {
     delete activeReplyTarget[postId];
     const input = document.querySelector(`#comments-${CSS.escape(postId)} input[type="text"]`);
@@ -2147,6 +2173,7 @@ window.cancelCommentReply = function (postId) {
     if (cancelBtn) cancelBtn.classList.add('hidden');
 };
 
+
 // Wraps postComment so the comment input's Enter key correctly posts as a
 // reply when a reply target is active, then clears the reply state.
 window.submitCommentFromInput = function (postId, inputEl) {
@@ -2155,6 +2182,7 @@ window.submitCommentFromInput = function (postId, inputEl) {
     if (parentId) window.cancelCommentReply(postId);
 };
 
+
 // Enables/disables the paper-plane send button based on whether there's
 // actual (trimmed) text to send — mirrors the disabled feel of iMessage/
 // WhatsApp send buttons rather than always looking tappable.
@@ -2162,6 +2190,7 @@ window._syncCommentSendState = function (postId, inputEl) {
     const sendBtn = document.getElementById(`comment-send-${postId}`);
     if (sendBtn) sendBtn.disabled = inputEl.value.trim().length === 0;
 };
+
 
 // The Send button doesn't have a direct reference to its input the way
 // the onkeydown handler does, so it looks the input up by shared
@@ -2172,20 +2201,24 @@ window._submitFromSendBtn = function (postId) {
     if (input) window.submitCommentFromInput(postId, input);
 };
 
+
 // Same string/number id mismatch as posts (comments.id is also a bigint
 // primary key) — normalized through idKey for the same reason.
 const likedCommentIds = new Set(
     JSON.parse(localStorage.getItem('campus_market_comment_likes') || '[]').map(idKey)
 );
 
+
 window.likeComment = async function (commentId, btn) {
     if (!currentUserData) { showToast("Please sign in to like comments."); return; }
+
 
     const key = idKey(commentId);
     const liked = likedCommentIds.has(key);
     const countEl = btn.querySelector('.comment-like-count');
     const icon = btn.querySelector('i');
     let count = parseInt(countEl?.textContent || 0);
+
 
     if (liked) {
         likedCommentIds.delete(key);
@@ -2198,6 +2231,7 @@ window.likeComment = async function (commentId, btn) {
     }
     if (countEl) countEl.textContent = count;
     localStorage.setItem('campus_market_comment_likes', JSON.stringify([...likedCommentIds]));
+
 
     // Fix: this used to swallow every failure into a console.warn with
     // no toast and no UI rollback — meaning if this insert/delete ever
@@ -2239,12 +2273,14 @@ window.likeComment = async function (commentId, btn) {
     }
 };
 
+
 // Fixed: previously scoped to .eq('user_id', ...) which silently failed
 // whenever RLS/user id mismatched in any way and gave no feedback. Now we
 // check ownership up front, surface real errors, and always refresh the
 // count after a successful delete.
 window.deleteComment = function (commentId, postId) {
     if (!currentUserData) { showToast('Please sign in.'); return; }
+
 
     showConfirmDialog({
         title: 'Delete this comment?',
@@ -2260,15 +2296,19 @@ window.deleteComment = function (commentId, postId) {
                     .eq('user_id', currentUserData.id)
                     .select();
 
+
                 if (error) throw error;
+
 
                 if (!data || data.length === 0) {
                     showToast("You can only delete your own comments.");
                     return;
                 }
 
+
                 document.querySelectorAll(`[id="comment-item-${commentId}"]`).forEach(el => el.remove());
                 showToast("Comment deleted");
+
 
                 const newCount = Math.max(0, (commentCountCache[postId] ?? 1) - 1);
                 updateCommentCountUI(postId, newCount);
@@ -2280,6 +2320,7 @@ window.deleteComment = function (commentId, postId) {
     });
 };
 
+
 // Expands a collapsed reply group (see fetchAndRender inside
 // toggleComments) and hides the "View N more replies" toggle that
 // revealed it.
@@ -2287,6 +2328,7 @@ window._expandReplies = function (groupId) {
     document.getElementById(groupId)?.classList.remove('hidden');
     document.getElementById(`toggle-${groupId}`)?.classList.add('hidden');
 };
+
 
 function renderCommentItem(c, postId) {
     const isLiked = likedCommentIds.has(idKey(c.id));
@@ -2297,6 +2339,7 @@ function renderCommentItem(c, postId) {
     const bubbleClass = isOwn
         ? 'bg-amber-400/10 border-amber-400/25'
         : 'bg-slate-800 border-slate-700/20';
+
 
     return `
         <div class="flex gap-2 items-start text-left mt-2.5 ${indentClass}" id="comment-item-${escAttr(c.id)}">
@@ -2328,6 +2371,7 @@ function renderCommentItem(c, postId) {
         </div>`;
 }
 
+
 // TikTok-style comment sheet: works for both the inline feed card comment
 // panel and the fixed bottom-sheet used on Reels (markup differs slightly
 // but both use #comments-{id}, #comment-list-{id}).
@@ -2336,8 +2380,10 @@ window.toggleComments = async function (postId) {
     const list           = document.getElementById(`comment-list-${postId}`);
     if (!commentSection || !list) return;
 
+
     const isReelSheet = commentSection.classList.contains('reel-comments');
     const backdrop    = document.getElementById('comments-global-backdrop');
+
 
     // Fix: on some mobile WebKit browsers, a `position: fixed` element
     // nested inside an `overflow: hidden` ancestor that also sits in a
@@ -2352,19 +2398,23 @@ window.toggleComments = async function (postId) {
         document.body.appendChild(commentSection);
     }
 
+
     const isOpen = isReelSheet
         ? commentSection.classList.contains('comments-open')
         : !commentSection.classList.contains('hidden');
+
 
     if (isOpen) {
         window._closeCommentSheet(postId, true);
         return;
     }
 
+
     // Close any other open reel comment sheet first
     document.querySelectorAll('.reel-comments.comments-open').forEach(el => {
         if (el.id !== `comments-${postId}`) el.classList.remove('comments-open');
     });
+
 
     if (isReelSheet) {
         commentSection.classList.remove('hidden');
@@ -2376,9 +2426,12 @@ window.toggleComments = async function (postId) {
         pushUiState(`comments-${postId}`, () => window._closeCommentSheet(postId, true));
     }
 
+
     openCommentIds.add(postId);
 
+
     list.innerHTML = `<p class="text-[10px] text-slate-500 animate-pulse py-2 pl-1">Loading comments...</p>`;
+
 
     const fetchAndRender = async () => {
         const { data: comments, error, count } = await supabase
@@ -2387,10 +2440,13 @@ window.toggleComments = async function (postId) {
             .eq('post_id', postId)
             .order('created_at', { ascending: true });
 
+
         if (error) throw error;
         list.innerHTML = '';
 
+
         updateCommentCountUI(postId, count ?? (comments ? comments.length : 0));
+
 
         if (!comments || comments.length === 0) {
             list.innerHTML = `
@@ -2402,6 +2458,7 @@ window.toggleComments = async function (postId) {
             return;
         }
 
+
         // Top-level comments first, replies immediately after their parent.
         // idKey() here matters for the same reason it does everywhere else
         // in the app — comment ids are bigints from the DB, and comparing
@@ -2410,15 +2467,18 @@ window.toggleComments = async function (postId) {
         const replies  = comments.filter(c => c.parent_comment_id);
         const REPLY_PREVIEW_COUNT = 2;
 
+
         topLevel.forEach(c => {
             list.innerHTML += renderCommentItem(c, postId);
             const childReplies = replies.filter(r => idKey(r.parent_comment_id) === idKey(c.id));
             if (childReplies.length === 0) return;
 
+
             if (childReplies.length <= REPLY_PREVIEW_COUNT) {
                 childReplies.forEach(r => { list.innerHTML += renderCommentItem(r, postId); });
                 return;
             }
+
 
             // Long threads start collapsed to a couple of replies with a
             // "View N more replies" toggle, instead of always dumping every
@@ -2440,6 +2500,7 @@ window.toggleComments = async function (postId) {
         });
     };
 
+
     try {
         await fetchAndRender();
     } catch (err) {
@@ -2448,13 +2509,16 @@ window.toggleComments = async function (postId) {
         return;
     }
 
+
     const chanId = `comments-live-${postId}`;
     if (currentCommentsChan?._topic === chanId) return;
+
 
     if (currentCommentsChan) {
         supabase.removeChannel(currentCommentsChan);
         currentCommentsChan = null;
     }
+
 
     currentCommentsChan = supabase
         .channel(chanId)
@@ -2464,11 +2528,13 @@ window.toggleComments = async function (postId) {
         .subscribe();
 };
 
+
 // Shared close routine for both inline and bottom-sheet comment views.
 window._closeCommentSheet = function (postId, fromPop = false) {
     const commentSection = document.getElementById(`comments-${postId}`);
     const backdrop = document.getElementById('comments-global-backdrop');
     if (!commentSection) return;
+
 
     if (commentSection.classList.contains('reel-comments')) {
         commentSection.classList.remove('comments-open');
@@ -2480,6 +2546,7 @@ window._closeCommentSheet = function (postId, fromPop = false) {
     openCommentIds.delete(postId);
     if (!fromPop) popUiState(`comments-${postId}`);
 };
+
 
 // Global backdrop click dismisses whichever reel comment sheet is open.
 // Measures the ACTUAL rendered height of the bottom nav bar (icons +
@@ -2501,6 +2568,7 @@ function measureBottomNavHeight() {
     }
 }
 
+
 document.addEventListener('DOMContentLoaded', () => {
     measureBottomNavHeight();
     // A second pass shortly after load catches any late font-swap or
@@ -2510,6 +2578,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 window.addEventListener('resize', measureBottomNavHeight);
 window.addEventListener('orientationchange', () => setTimeout(measureBottomNavHeight, 200));
+
 
 document.addEventListener('DOMContentLoaded', () => {
     if (!document.getElementById('comments-global-backdrop')) {
@@ -2526,6 +2595,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.appendChild(backdrop);
     }
 });
+
 
 // ─── OPTIONS MENU (3-dot action sheet) ───────────────────────────────────────
 // Replaces the old always-visible trash-bin delete icon on posts and the
@@ -2545,6 +2615,7 @@ function showConfirmDialog({ title, message, confirmLabel = 'Delete', danger = t
         document.body.appendChild(modal);
     }
 
+
     modal.innerHTML = `
         <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-5 w-full max-w-xs space-y-4 shadow-2xl">
             <div class="text-center space-y-1.5">
@@ -2561,8 +2632,10 @@ function showConfirmDialog({ title, message, confirmLabel = 'Delete', danger = t
             </div>
         </div>`;
 
+
     modal.classList.remove('hidden');
     pushUiState('confirm-dialog', () => closeConfirmDialog(true));
+
 
     document.getElementById('confirm-dialog-cancel').onclick = () => closeConfirmDialog();
     document.getElementById('confirm-dialog-confirm').onclick = () => {
@@ -2571,27 +2644,33 @@ function showConfirmDialog({ title, message, confirmLabel = 'Delete', danger = t
     };
 }
 
+
 function closeConfirmDialog(fromPop = false) {
     document.getElementById('confirm-dialog-modal')?.classList.add('hidden');
     if (!fromPop) popUiState('confirm-dialog');
 }
 
+
 function ensureOptionsMenuDom() {
     if (document.getElementById('options-menu-backdrop')) return;
+
 
     const backdrop = document.createElement('div');
     backdrop.id = 'options-menu-backdrop';
     backdrop.className = 'options-menu-backdrop';
     backdrop.addEventListener('click', closeOptionsMenu);
 
+
     const sheet = document.createElement('div');
     sheet.id = 'options-menu-sheet';
     sheet.className = 'options-menu-sheet';
     sheet.innerHTML = `<div class="options-menu-handle"></div><div id="options-menu-items"></div>`;
 
+
     document.body.appendChild(backdrop);
     document.body.appendChild(sheet);
 }
+
 
 function openOptionsMenu(items) {
     ensureOptionsMenuDom();
@@ -2599,6 +2678,7 @@ function openOptionsMenu(items) {
     const sheet    = document.getElementById('options-menu-sheet');
     const itemsEl  = document.getElementById('options-menu-items');
     if (!backdrop || !sheet || !itemsEl) return;
+
 
     itemsEl.innerHTML = items.map((item, i) => {
         if (item.divider) return `<div class="options-menu-divider"></div>`;
@@ -2608,18 +2688,22 @@ function openOptionsMenu(items) {
             </button>`;
     }).join('');
 
+
     window._optionsMenuActions = items.map(item => item.action || null);
+
 
     backdrop.classList.add('menu-open');
     requestAnimationFrame(() => sheet.classList.add('menu-open'));
     pushUiState('options-menu', () => closeOptionsMenu(true));
 }
 
+
 function closeOptionsMenu(fromPop = false) {
     document.getElementById('options-menu-backdrop')?.classList.remove('menu-open');
     document.getElementById('options-menu-sheet')?.classList.remove('menu-open');
     if (!fromPop) popUiState('options-menu');
 }
+
 
 window._runOptionsMenuAction = function (index) {
     const action = window._optionsMenuActions?.[index];
@@ -2631,6 +2715,7 @@ window._runOptionsMenuAction = function (index) {
     }
 };
 
+
 // ─── BLOCKING ───────────────────────────────────────────────────────────────
 // Blocking a person hides their posts from your feed and hides/prevents
 // DMs with them — it does NOT delete anything they've already posted or
@@ -2638,21 +2723,6 @@ window._runOptionsMenuAction = function (index) {
 // if a `blocked_users` table isn't set up yet in Supabase, blocks are kept
 // in localStorage on this device so the feature still works end-to-end
 // (including unblocking) rather than being a dead end.
-//
-// Suggested table (create this in Supabase for the block to sync across
-// devices and actually filter server-side data other people send you):
-//   create table blocked_users (
-//     id bigint generated always as identity primary key,
-//     blocker_id uuid not null references auth.users(id),
-//     blocked_id uuid not null references auth.users(id),
-//     blocked_name text,
-//     created_at timestamptz not null default now(),
-//     unique (blocker_id, blocked_id)
-//   );
-//   alter table blocked_users enable row level security;
-//   create policy "read own blocks" on blocked_users for select using (auth.uid() = blocker_id);
-//   create policy "insert own blocks" on blocked_users for insert with check (auth.uid() = blocker_id);
-//   create policy "delete own blocks" on blocked_users for delete using (auth.uid() = blocker_id);
 const blockedUserIds = new Set(
     JSON.parse(localStorage.getItem('campus_market_blocked_users') || '[]').map(idKey)
 );
@@ -2661,10 +2731,12 @@ const blockedUserIds = new Set(
 // would otherwise require a join back to `profiles` to get a name).
 let blockedUserNames = JSON.parse(localStorage.getItem('campus_market_blocked_names') || '{}');
 
+
 function _persistBlockedLocally() {
     localStorage.setItem('campus_market_blocked_users', JSON.stringify([...blockedUserIds]));
     localStorage.setItem('campus_market_blocked_names', JSON.stringify(blockedUserNames));
 }
+
 
 // Pulls the signed-in person's block list from Supabase (if the table
 // exists) so blocks made on another device are respected here too, then
@@ -2677,6 +2749,7 @@ async function syncBlockedUsers() {
             .select('blocked_id, blocked_name')
             .eq('blocker_id', currentUserData.id);
         if (error) throw error;
+
 
         blockedUserIds.clear();
         blockedUserNames = {};
@@ -2693,10 +2766,12 @@ async function syncBlockedUsers() {
     }
 }
 
+
 window.blockUser = function (userId, userName = 'this student') {
     if (!currentUserData) { showToast('Please sign in to block someone.'); return; }
     if (!userId) { showToast("Couldn't identify this user — please try again."); return; }
     if (idKey(userId) === idKey(currentUserData.id)) return;
+
 
     showConfirmDialog({
         title: `Block ${userName}?`,
@@ -2709,6 +2784,7 @@ window.blockUser = function (userId, userName = 'this student') {
             blockedUserNames[key] = userName;
             _persistBlockedLocally();
 
+
             // A blocked person's existing posts/threads are already on
             // screen in some cases (feed cache, open inbox) — refresh
             // whatever's currently visible so the block takes effect
@@ -2718,6 +2794,7 @@ window.blockUser = function (userId, userName = 'this student') {
             if (activeConversationPeer && idKey(activeConversationPeer.id) === key) {
                 window.closeDMThread();
             }
+
 
             try {
                 const { error } = await supabase.from('blocked_users').insert({
@@ -2729,6 +2806,7 @@ window.blockUser = function (userId, userName = 'this student') {
             } catch (err) {
                 console.warn('Block insert failed, kept locally only:', err);
             }
+
 
             // Blocking someone also breaks any follow relationship between
             // you two, in either direction — matches what people expect
@@ -2743,13 +2821,16 @@ window.blockUser = function (userId, userName = 'this student') {
                 console.warn('Follow cleanup on block failed:', err);
             }
 
+
             showToast(`${userName} is blocked.`);
         }
     });
 };
 
+
 window.unblockUser = function (userId, userName = 'this student') {
     const key = idKey(userId);
+
 
     showConfirmDialog({
         title: `Unblock ${userName}?`,
@@ -2761,10 +2842,12 @@ window.unblockUser = function (userId, userName = 'this student') {
             delete blockedUserNames[key];
             _persistBlockedLocally();
 
+
             try { renderFeedFromCache(); } catch (_) {}
             if (document.getElementById('info-sheet-overlay')?.classList.contains('sheet-open')) {
                 window.openInfoSheet('blocked');
             }
+
 
             try {
                 await supabase.from('blocked_users')
@@ -2775,10 +2858,12 @@ window.unblockUser = function (userId, userName = 'this student') {
                 console.warn('Unblock delete failed remotely, removed locally only:', err);
             }
 
+
             showToast(`${userName} unblocked.`);
         }
     });
 };
+
 
 // ─── REPORTING ────────────────────────────────────────────────────────────────
 // Previously "Report" just showed a toast and did nothing at all — no
@@ -2795,6 +2880,7 @@ async function submitReport(targetType, targetId, reason = 'unspecified') {
         return;
     }
 
+
     const payload = {
         target_type: targetType, // 'post' | 'comment'
         target_id: targetId,
@@ -2802,6 +2888,7 @@ async function submitReport(targetType, targetId, reason = 'unspecified') {
         reason,
         created_at: new Date().toISOString()
     };
+
 
     try {
         const { error } = await supabase.from('reports').insert(payload);
@@ -2819,6 +2906,7 @@ async function submitReport(targetType, targetId, reason = 'unspecified') {
     }
 }
 
+
 // Post options: only the owner gets a real "Delete listing"; everyone
 // else gets "Report" (persists — see submitReport above) and "Block
 // user" (hides this person's posts and DMs — see blockUser above).
@@ -2835,6 +2923,7 @@ window.openPostOptionsMenu = function (postId, isOwn, authorId = null, authorNam
     openOptionsMenu(items);
 };
 
+
 // Comment options: owner gets Delete; everyone else gets Report + Block.
 window.openCommentOptionsMenu = function (commentId, postId, isOwn, authorId = null, authorName = 'this student') {
     const items = isOwn
@@ -2849,10 +2938,12 @@ window.openCommentOptionsMenu = function (commentId, postId, isOwn, authorId = n
     openOptionsMenu(items);
 };
 
-function renderFeedCard(id, d) {
+
+window.renderFeedCard = function(id, d) {
     const viewer     = currentUserData;
     const showFollow = viewer && d.user_id !== viewer.id;
     const isOwnPost  = viewer && d.user_id === viewer.id;
+
 
     let mediaUrls = [];
     if (d.media_url) {
@@ -2862,6 +2953,7 @@ function renderFeedCard(id, d) {
             mediaUrls = [d.media_url];
         }
     }
+
 
     // Feed card media now uses a taller 4:5 ratio (Instagram-style) instead
     // of a hard square crop, since most phone-shot photos/videos are
@@ -2896,6 +2988,7 @@ function renderFeedCard(id, d) {
                </div>`;
     }
 
+
     const followBlock = showFollow ? `
         <button
             class="follow-btn px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700 ml-2"
@@ -2905,6 +2998,7 @@ function renderFeedCard(id, d) {
             + Follow
         </button>` : '';
 
+
     const deleteBlock = `
         <button
             onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? 'true' : 'false'}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')"
@@ -2913,22 +3007,28 @@ function renderFeedCard(id, d) {
             <i class="fas fa-ellipsis-vertical"></i>
         </button>`;
 
+
     const isLiked       = likedPostIds.has(idKey(id));
     const heartClass    = isLiked ? 'fas fa-heart text-rose-500' : 'far fa-heart text-slate-300';
     const likedData     = isLiked ? 'true' : 'false';
+
 
     // likes_count now comes straight from the DB and is kept accurate via
     // the RPC counters, so this reflects the true persisted count on load.
     const displayLikes  = parseInt(d.likes_count || 0);
     const displayComments = commentCountCache[id] ?? parseInt(d.comments_count || 0);
 
+
     const isAddedToCart  = userCartList.some(item => idKey(item.id) === idKey(id));
     const bookmarkClass  = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-slate-300";
 
+
     registerPostContext(id, d, mediaUrls[0] || '');
+
 
     return `
     <div class="bg-slate-900 border-b border-slate-800/60 w-full" id="feed-card-${escAttr(id)}">
+
 
         <div class="flex items-center justify-between px-3 py-2.5">
             <div class="feed-profile-trigger flex items-center gap-2.5 min-w-0 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
@@ -2944,7 +3044,9 @@ function renderFeedCard(id, d) {
             </div>
         </div>
 
+
         ${mediaBlock}
+
 
         <div class="px-3 pt-2.5 pb-1 flex items-center justify-between">
             <div class="flex items-center gap-4">
@@ -2967,6 +3069,7 @@ function renderFeedCard(id, d) {
             </div>
         </div>
 
+
         <div class="px-3 pb-1">
             <div class="flex items-baseline gap-2 flex-wrap">
                 <span class="text-amber-400 font-black text-sm">GH₵${esc(String(d.price || 0))}</span>
@@ -2975,6 +3078,7 @@ function renderFeedCard(id, d) {
             <p class="text-white text-[13px] font-semibold mt-0.5 leading-snug line-clamp-2">${esc(d.title)}</p>
         </div>
 
+
         <div class="px-3 pb-3">
             <button
                 onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}', '${escAttr(id)}')"
@@ -2982,6 +3086,7 @@ function renderFeedCard(id, d) {
                 <i class="fas fa-bolt text-[10px]"></i> ${d.type === 'skill' ? 'Contact' : 'Contact Seller'}
             </button>
         </div>
+
 
         <div id="comments-${escAttr(id)}" class="hidden px-3 pb-3 space-y-2 border-t border-slate-800/60 pt-2">
             <div class="flex items-center gap-1.5">
@@ -3008,7 +3113,7 @@ function renderFeedCard(id, d) {
             <div id="comment-list-${escAttr(id)}" class="max-h-36 overflow-y-auto space-y-1.5 custom-scrollbar"></div>
         </div>
     </div>`;
-}
+};
 
 // ─── 12c. PRODUCT GRID RENDERER (4-square style, Products tab only) ──────────
 function renderProductGridCard(id, d) {
