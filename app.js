@@ -1907,14 +1907,6 @@ window.likePost = async function (postId, btn) {
     // 2. Execute Backend sync — this is what makes likes survive reload.
     // Uses atomic RPC counters (increment_post_likes / decrement_post_likes)
     // defined in migration.sql so concurrent likes never clobber each other.
-    //
-    // Fix: previously an insert/delete failure into the `likes` table was
-    // swallowed silently (error checked but never surfaced or acted on),
-    // so the heart stayed optimistically "liked" in the UI while nothing
-    // was actually saved server-side — the exact cause of likes vanishing
-    // on refresh. Now any real failure rolls the UI back to its prior
-    // state and tells the person, instead of drifting out of sync with
-    // the database until the next reload silently corrects it.
     try {
         if (liked) {
             const { error: deleteErr } = await supabase
@@ -1927,16 +1919,6 @@ window.likePost = async function (postId, btn) {
             if (deleteErr) throw deleteErr;
 
 
-            // Fix: this RPC's error was never checked — if it failed (wrong
-            // argument name, RPC not deployed, permissions issue, etc.) the
-            // `likes` row was still deleted correctly, but posts.likes_count
-            // silently never decremented in the database. The heart would
-            // then look right after a refresh (correctly unliked, since
-            // that's read from the `likes` table) while the count itself
-            // drifted or reverted, which is exactly the "likes keep
-            // disappearing/count is wrong" symptom. Now a real RPC failure
-            // throws and rolls back the whole optimistic update below,
-            // instead of leaving the two tables out of sync forever.
             const { error: decErr } = await supabase.rpc('decrement_post_likes', { post_id_input: postId });
             if (decErr) throw decErr;
         } else {
@@ -1948,20 +1930,6 @@ window.likePost = async function (postId, btn) {
                 });
 
 
-            // A unique-constraint violation just means this like already
-            // existed in the database (e.g. a stale/incomplete local
-            // likedPostIds cache thought you hadn't liked this post yet,
-            // tried to insert, and got rejected because you actually
-            // already had). Treat that as a harmless no-op for THIS
-            // action, not a failure — the row already existing means the
-            // like itself is fine; we just don't know here whether
-            // posts.likes_count was already correctly incremented for it
-            // previously or not, so guessing and incrementing again here
-            // risks double-counting instead of fixing anything. The real
-            // fix for any drift that's already happened is a one-time
-            // server-side reconciliation (recompute likes_count from an
-            // actual count of matching rows in the likes table) rather
-            // than a client-side guess — see recompute_likes_counts.sql.
             const isDuplicate = insertErr && insertErr.code === '23505';
             if (insertErr && !isDuplicate) throw insertErr;
             if (!insertErr) {
@@ -1993,7 +1961,10 @@ window.likePost = async function (postId, btn) {
 
         showToast("Couldn't save your like — please try again.");
     } finally {
-        likeInFlight.delete(key);
+        // Delayed removal outlasts the 400ms feed refresh debounce window safely
+        setTimeout(() => {
+            likeInFlight.delete(key);
+        }, 800);
     }
 };
 
@@ -2009,16 +1980,8 @@ window.sharePost = function (postId, title) {
 };
 
 
-// downloadMedia was removed entirely — post media (photos/videos) is no
-// longer downloadable from anywhere in the app. This is separate from the
-// avatar long-press "Save" button, which only ever lets someone save
-// their OWN profile picture and is unaffected by this change.
-
-
 // Opens a real DM thread with the seller AND shares a small preview of the
-// exact listing the person tapped "Contact" on, so the seller immediately
-// sees which item/service the conversation is about instead of a blank
-// chat with no context.
+// exact listing the person tapped "Contact" on...
 window.contactSeller = function (sellerId, userName, sellerAvatar, postTitle, postId = null) {
     if (!currentUserData) {
         showToast('Please sign in to contact the seller.');
@@ -2056,12 +2019,6 @@ async function fetchAndCacheCommentCount(postId) {
 }
 
 
-// Simple client-side cooldown against accidental rapid-fire comment
-// spam (e.g. holding Enter, a stuck keypress, an eager double-tap).
-// IMPORTANT: this is a UX safeguard only, not real security — anyone
-// bypassing the UI and calling the API directly isn't affected by this.
-// Real abuse prevention belongs at the database/RLS or Supabase project
-// level (e.g. rate-limited RPC, or Supabase's own abuse protections).
 let lastCommentPostedAt = 0;
 const COMMENT_COOLDOWN_MS = 2000;
 
@@ -2083,13 +2040,6 @@ window.postComment = async function(postId, inputEl, parentCommentId = null) {
     window._syncCommentSendState(postId, inputEl);
 
 
-    // Fix: posting used to clear the input and then just wait silently for
-    // the realtime echo to repaint the list — on any network lag it looked
-    // like the tap did nothing. This appends an immediate "sending…"
-    // placeholder bubble so the comment appears the instant it's sent; the
-    // next realtime-triggered fetchAndRender() (see toggleComments) does a
-    // full re-render from the DB and naturally replaces this placeholder
-    // with the real row, so there's no separate cleanup or dedupe needed.
     const list = document.getElementById(`comment-list-${postId}`);
     const emptyState = list?.querySelector('.far.fa-comment-dots')?.closest('div');
     if (emptyState) emptyState.remove();
@@ -2129,11 +2079,6 @@ window.postComment = async function(postId, inputEl, parentCommentId = null) {
         if (error) throw error;
     } catch(err) {
         console.error("Comment submission error:", err);
-        // RLS policies added for blocking (see blocked_users_rls.sql) reject
-        // the insert outright if either person has blocked the other —
-        // this is the only way to know that happened when it's the OTHER
-        // person who blocked you, since your local blockedUserIds set has
-        // no way of knowing about a block made from their side.
         const isBlockRejection = err?.code === '42501' || /row-level security/i.test(err?.message || '');
         showToast(isBlockRejection
             ? "This comment couldn't be posted."
@@ -2143,9 +2088,6 @@ window.postComment = async function(postId, inputEl, parentCommentId = null) {
 };
 
 
-// Tracks which comment (if any) is currently being replied to, per post,
-// so the reply target is visible and Enter posts as a reply not a new
-// top-level comment.
 const activeReplyTarget = {};
 
 
@@ -2174,8 +2116,6 @@ window.cancelCommentReply = function (postId) {
 };
 
 
-// Wraps postComment so the comment input's Enter key correctly posts as a
-// reply when a reply target is active, then clears the reply state.
 window.submitCommentFromInput = function (postId, inputEl) {
     const parentId = inputEl.dataset.replyTo || null;
     window.postComment(postId, inputEl, parentId);
@@ -2183,27 +2123,18 @@ window.submitCommentFromInput = function (postId, inputEl) {
 };
 
 
-// Enables/disables the paper-plane send button based on whether there's
-// actual (trimmed) text to send — mirrors the disabled feel of iMessage/
-// WhatsApp send buttons rather than always looking tappable.
 window._syncCommentSendState = function (postId, inputEl) {
     const sendBtn = document.getElementById(`comment-send-${postId}`);
     if (sendBtn) sendBtn.disabled = inputEl.value.trim().length === 0;
 };
 
 
-// The Send button doesn't have a direct reference to its input the way
-// the onkeydown handler does, so it looks the input up by shared
-// container instead of relying on DOM sibling order (which would break
-// silently if the markup around it ever changes).
 window._submitFromSendBtn = function (postId) {
     const input = document.querySelector(`#comments-${CSS.escape(postId)} .comment-input-field`);
     if (input) window.submitCommentFromInput(postId, input);
 };
 
 
-// Same string/number id mismatch as posts (comments.id is also a bigint
-// primary key) — normalized through idKey for the same reason.
 const likedCommentIds = new Set(
     JSON.parse(localStorage.getItem('campus_market_comment_likes') || '[]').map(idKey)
 );
@@ -2233,14 +2164,6 @@ window.likeComment = async function (commentId, btn) {
     localStorage.setItem('campus_market_comment_likes', JSON.stringify([...likedCommentIds]));
 
 
-    // Fix: this used to swallow every failure into a console.warn with
-    // no toast and no UI rollback — meaning if this insert/delete ever
-    // failed for any reason (including the exact same kind of orphaned-
-    // row duplicate-key conflict that turned out to be the real post-
-    // likes bug), nobody would ever see it happen. "Comment likes work
-    // well" may partly reflect that failures here were simply invisible
-    // rather than genuinely rarer. Real failures now roll back the
-    // optimistic UI and show a toast, matching likePost's behavior.
     try {
         if (liked) {
             const { error } = await supabase.from('comment_likes').delete().eq('comment_id', commentId).eq('user_id', currentUserData.id);
@@ -2274,10 +2197,6 @@ window.likeComment = async function (commentId, btn) {
 };
 
 
-// Fixed: previously scoped to .eq('user_id', ...) which silently failed
-// whenever RLS/user id mismatched in any way and gave no feedback. Now we
-// check ownership up front, surface real errors, and always refresh the
-// count after a successful delete.
 window.deleteComment = function (commentId, postId) {
     if (!currentUserData) { showToast('Please sign in.'); return; }
 
@@ -2321,9 +2240,6 @@ window.deleteComment = function (commentId, postId) {
 };
 
 
-// Expands a collapsed reply group (see fetchAndRender inside
-// toggleComments) and hides the "View N more replies" toggle that
-// revealed it.
 window._expandReplies = function (groupId) {
     document.getElementById(groupId)?.classList.remove('hidden');
     document.getElementById(`toggle-${groupId}`)?.classList.add('hidden');
@@ -2372,9 +2288,6 @@ function renderCommentItem(c, postId) {
 }
 
 
-// TikTok-style comment sheet: works for both the inline feed card comment
-// panel and the fixed bottom-sheet used on Reels (markup differs slightly
-// but both use #comments-{id}, #comment-list-{id}).
 window.toggleComments = async function (postId) {
     const commentSection = document.getElementById(`comments-${postId}`);
     const list           = document.getElementById(`comment-list-${postId}`);
@@ -2385,15 +2298,6 @@ window.toggleComments = async function (postId) {
     const backdrop    = document.getElementById('comments-global-backdrop');
 
 
-    // Fix: on some mobile WebKit browsers, a `position: fixed` element
-    // nested inside an `overflow: hidden` ancestor that also sits in a
-    // CSS scroll-snap container (exactly what .reel-card is) gets
-    // silently clipped/never actually renders on screen, even though the
-    // element's "hidden" class was correctly removed and its open-state
-    // class correctly added — the panel opens logically but never
-    // becomes visible. Moving the sheet to be a direct child of <body>
-    // the first time it opens sidesteps that clipping entirely, since it
-    // no longer has any scroll-snap/overflow ancestor to be clipped by.
     if (isReelSheet && commentSection.parentElement !== document.body) {
         document.body.appendChild(commentSection);
     }
@@ -2410,7 +2314,6 @@ window.toggleComments = async function (postId) {
     }
 
 
-    // Close any other open reel comment sheet first
     document.querySelectorAll('.reel-comments.comments-open').forEach(el => {
         if (el.id !== `comments-${postId}`) el.classList.remove('comments-open');
     });
@@ -2428,8 +2331,6 @@ window.toggleComments = async function (postId) {
 
 
     openCommentIds.add(postId);
-
-
     list.innerHTML = `<p class="text-[10px] text-slate-500 animate-pulse py-2 pl-1">Loading comments...</p>`;
 
 
@@ -2459,10 +2360,6 @@ window.toggleComments = async function (postId) {
         }
 
 
-        // Top-level comments first, replies immediately after their parent.
-        // idKey() here matters for the same reason it does everywhere else
-        // in the app — comment ids are bigints from the DB, and comparing
-        // them without normalizing types silently drops replies from view.
         const topLevel = comments.filter(c => !c.parent_comment_id);
         const replies  = comments.filter(c => c.parent_comment_id);
         const REPLY_PREVIEW_COUNT = 2;
@@ -2480,9 +2377,6 @@ window.toggleComments = async function (postId) {
             }
 
 
-            // Long threads start collapsed to a couple of replies with a
-            // "View N more replies" toggle, instead of always dumping every
-            // reply into view — keeps a busy thread scannable.
             const groupId = `replies-${idKey(c.id)}`;
             childReplies.slice(0, REPLY_PREVIEW_COUNT).forEach(r => { list.innerHTML += renderCommentItem(r, postId); });
             list.innerHTML += `
@@ -2529,7 +2423,6 @@ window.toggleComments = async function (postId) {
 };
 
 
-// Shared close routine for both inline and bottom-sheet comment views.
 window._closeCommentSheet = function (postId, fromPop = false) {
     const commentSection = document.getElementById(`comments-${postId}`);
     const backdrop = document.getElementById('comments-global-backdrop');
@@ -2548,17 +2441,6 @@ window._closeCommentSheet = function (postId, fromPop = false) {
 };
 
 
-// Global backdrop click dismisses whichever reel comment sheet is open.
-// Measures the ACTUAL rendered height of the bottom nav bar (icons +
-// labels + its own padding, all of which can vary by device font
-// rendering, safe-area insets, etc.) and stores it as a CSS custom
-// property so #posts-feed.reels-mode's bottom inset is always exactly
-// right instead of relying on a guessed pixel constant that can drift
-// out of sync with reality and leave a sliver of video peeking out from
-// under the nav. Re-measures on resize/orientation change since mobile
-// browsers frequently resize the visual viewport when their address bar
-// shows/hides, which can also change how much of the safe-area inset is
-// actually reserved.
 function measureBottomNavHeight() {
     const nav = document.querySelector('.bottom-nav-container');
     if (!nav) return;
@@ -2571,9 +2453,6 @@ function measureBottomNavHeight() {
 
 document.addEventListener('DOMContentLoaded', () => {
     measureBottomNavHeight();
-    // A second pass shortly after load catches any late font-swap or
-    // layout shift that changed the nav's rendered height after the
-    // very first measurement.
     setTimeout(measureBottomNavHeight, 300);
 });
 window.addEventListener('resize', measureBottomNavHeight);
@@ -2597,15 +2476,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
-// ─── OPTIONS MENU (3-dot action sheet) ───────────────────────────────────────
-// Replaces the old always-visible trash-bin delete icon on posts and the
-// bare "Delete" text link on comments with a single "..." entry point that
-// opens a small bottom-sheet menu — the same pattern Instagram, TikTok, and
-// WhatsApp use so a destructive action isn't sitting exposed at a glance.
-// ─── IN-APP CONFIRM DIALOG ────────────────────────────────────────────────────
-// Replaces the browser's native window.confirm() for destructive actions
-// with a dialog styled to match the rest of the app, consistent with how
-// the options menu above also avoids native browser chrome.
 function showConfirmDialog({ title, message, confirmLabel = 'Delete', danger = true, onConfirm }) {
     let modal = document.getElementById('confirm-dialog-modal');
     if (!modal) {
@@ -2709,26 +2579,14 @@ window._runOptionsMenuAction = function (index) {
     const action = window._optionsMenuActions?.[index];
     closeOptionsMenu();
     if (typeof action === 'function') {
-        // Small delay so the sheet's close animation isn't interrupted by
-        // whatever the action does next (e.g. an immediate confirm dialog).
         setTimeout(action, 200);
     }
 };
 
 
-// ─── BLOCKING ───────────────────────────────────────────────────────────────
-// Blocking a person hides their posts from your feed and hides/prevents
-// DMs with them — it does NOT delete anything they've already posted or
-// notify them in any way. Mirrors the `reports` table's fallback pattern:
-// if a `blocked_users` table isn't set up yet in Supabase, blocks are kept
-// in localStorage on this device so the feature still works end-to-end
-// (including unblocking) rather than being a dead end.
 const blockedUserIds = new Set(
     JSON.parse(localStorage.getItem('campus_market_blocked_users') || '[]').map(idKey)
 );
-// Keeps display names alongside ids so the Blocked Users settings list has
-// something to show even before/without a `blocked_users` table (which
-// would otherwise require a join back to `profiles` to get a name).
 let blockedUserNames = JSON.parse(localStorage.getItem('campus_market_blocked_names') || '{}');
 
 
@@ -2738,9 +2596,6 @@ function _persistBlockedLocally() {
 }
 
 
-// Pulls the signed-in person's block list from Supabase (if the table
-// exists) so blocks made on another device are respected here too, then
-// falls back to whatever's in localStorage if the table isn't there yet.
 async function syncBlockedUsers() {
     if (!currentUserData) return;
     try {
@@ -2760,8 +2615,6 @@ async function syncBlockedUsers() {
         });
         _persistBlockedLocally();
     } catch (err) {
-        // No table yet (or RLS not set up) — silently keep using whatever
-        // is already in localStorage from a previous local-only block.
         console.warn('Blocked-users sync skipped (using local list):', err);
     }
 }
@@ -2785,10 +2638,6 @@ window.blockUser = function (userId, userName = 'this student') {
             _persistBlockedLocally();
 
 
-            // A blocked person's existing posts/threads are already on
-            // screen in some cases (feed cache, open inbox) — refresh
-            // whatever's currently visible so the block takes effect
-            // immediately instead of only on next reload.
             try { renderFeedFromCache(); } catch (_) {}
             try { if (document.getElementById('dms-content') && !activeConversationId) renderInboxList(); } catch (_) {}
             if (activeConversationPeer && idKey(activeConversationPeer.id) === key) {
@@ -2808,15 +2657,9 @@ window.blockUser = function (userId, userName = 'this student') {
             }
 
 
-            // Blocking someone also breaks any follow relationship between
-            // you two, in either direction — matches what people expect
-            // from blocking on other apps, and avoids the odd state of
-            // still "following" someone you've just blocked.
             try {
-                await supabase.from('follows').delete()
-                    .eq('follower_id', currentUserData.id).eq('following_id', userId);
-                await supabase.from('follows').delete()
-                    .eq('follower_id', userId).eq('following_id', currentUserData.id);
+                await supabase.from('follows').delete().eq('follower_id', currentUserData.id).eq('following_id', userId);
+                await supabase.from('follows').delete().eq('follower_id', userId).eq('following_id', currentUserData.id);
             } catch (err) {
                 console.warn('Follow cleanup on block failed:', err);
             }
@@ -2850,10 +2693,7 @@ window.unblockUser = function (userId, userName = 'this student') {
 
 
             try {
-                await supabase.from('blocked_users')
-                    .delete()
-                    .eq('blocker_id', currentUserData.id)
-                    .eq('blocked_id', userId);
+                await supabase.from('blocked_users').delete().eq('blocker_id', currentUserData.id).eq('blocked_id', userId);
             } catch (err) {
                 console.warn('Unblock delete failed remotely, removed locally only:', err);
             }
@@ -2865,15 +2705,6 @@ window.unblockUser = function (userId, userName = 'this student') {
 };
 
 
-// ─── REPORTING ────────────────────────────────────────────────────────────────
-// Previously "Report" just showed a toast and did nothing at all — no
-// record was kept anywhere, so it was a dead end dressed up as a real
-// feature. This writes to a `reports` table if one exists in your
-// Supabase project (target_type/target_id/reporter_id/reason/created_at).
-// If that table doesn't exist yet, reports are queued in localStorage
-// instead of silently vanishing, and the person is told plainly that
-// their report was saved locally pending a moderation table — rather
-// than pretending it was received by a backend that isn't there.
 async function submitReport(targetType, targetId, reason = 'unspecified') {
     if (!currentUserData) {
         showToast('Please sign in to report content.');
@@ -2882,7 +2713,7 @@ async function submitReport(targetType, targetId, reason = 'unspecified') {
 
 
     const payload = {
-        target_type: targetType, // 'post' | 'comment'
+        target_type: targetType,
         target_id: targetId,
         reporter_id: currentUserData.id,
         reason,
@@ -2895,9 +2726,6 @@ async function submitReport(targetType, targetId, reason = 'unspecified') {
         if (error) throw error;
         showToast('Report submitted — thank you for flagging this.');
     } catch (err) {
-        // Table likely doesn't exist yet (or an RLS policy blocks it) —
-        // queue locally so the report isn't just lost, and be upfront
-        // that it hasn't reached a real moderation backend yet.
         console.warn('Report insert failed, queuing locally:', err);
         const queued = JSON.parse(localStorage.getItem('campus_market_pending_reports') || '[]');
         queued.push(payload);
@@ -2907,9 +2735,6 @@ async function submitReport(targetType, targetId, reason = 'unspecified') {
 }
 
 
-// Post options: only the owner gets a real "Delete listing"; everyone
-// else gets "Report" (persists — see submitReport above) and "Block
-// user" (hides this person's posts and DMs — see blockUser above).
 window.openPostOptionsMenu = function (postId, isOwn, authorId = null, authorName = 'this student') {
     const items = isOwn
         ? [
@@ -2924,7 +2749,6 @@ window.openPostOptionsMenu = function (postId, isOwn, authorId = null, authorNam
 };
 
 
-// Comment options: owner gets Delete; everyone else gets Report + Block.
 window.openCommentOptionsMenu = function (commentId, postId, isOwn, authorId = null, authorName = 'this student') {
     const items = isOwn
         ? [
@@ -2939,7 +2763,7 @@ window.openCommentOptionsMenu = function (commentId, postId, isOwn, authorId = n
 };
 
 
-window.renderFeedCard = function(id, d) {
+function renderFeedCard(id, d) {
     const viewer     = currentUserData;
     const showFollow = viewer && d.user_id !== viewer.id;
     const isOwnPost  = viewer && d.user_id === viewer.id;
@@ -2955,13 +2779,6 @@ window.renderFeedCard = function(id, d) {
     }
 
 
-    // Feed card media now uses a taller 4:5 ratio (Instagram-style) instead
-    // of a hard square crop, since most phone-shot photos/videos are
-    // portrait and a 1:1 crop was cutting off large parts of the frame.
-    // Videos also drop eager autoplay/preload here — they're lazy-played
-    // only when scrolled into view (see setupFeedVideoObserver), which
-    // meaningfully cuts data usage since off-screen cards no longer
-    // silently download their full video.
     let mediaBlock = '';
     if (mediaUrls.length > 1) {
         const slides = mediaUrls.map((url, i) =>
@@ -3013,8 +2830,6 @@ window.renderFeedCard = function(id, d) {
     const likedData     = isLiked ? 'true' : 'false';
 
 
-    // likes_count now comes straight from the DB and is kept accurate via
-    // the RPC counters, so this reflects the true persisted count on load.
     const displayLikes  = parseInt(d.likes_count || 0);
     const displayComments = commentCountCache[id] ?? parseInt(d.comments_count || 0);
 
@@ -3113,7 +2928,7 @@ window.renderFeedCard = function(id, d) {
             <div id="comment-list-${escAttr(id)}" class="max-h-36 overflow-y-auto space-y-1.5 custom-scrollbar"></div>
         </div>
     </div>`;
-};
+}
 
 // ─── 12c. PRODUCT GRID RENDERER (4-square style, Products tab only) ──────────
 function renderProductGridCard(id, d) {
