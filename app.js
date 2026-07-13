@@ -231,6 +231,14 @@ let userCartList = JSON.parse(
 
 Object.defineProperty(window, "_currentUser", { get: () => currentUserData });
 Object.defineProperty(window, "_userCartList", { get: () => userCartList });
+// Debug helper: likedPostIds is a module-scoped const, so it's private
+// to this module and was never reachable from the browser console
+// directly (typing `likedPostIds` there throws "not defined" — that's
+// expected JS module behavior, not a bug). Exposing it read-only here,
+// the same way _currentUser/_userCartList already are, so it can
+// actually be inspected: type `[..._likedPostIds]` in the console to
+// see its contents as a plain array.
+Object.defineProperty(window, "_likedPostIds", { get: () => likedPostIds });
 
 // ─── 3b. MEDIA EDIT MODAL STATE (WhatsApp-style edit before upload) ──────────
 // Files staged for review in the "Edit Media" modal before they're actually
@@ -2238,16 +2246,30 @@ window.likePost = async function (postId, btn) {
   if (cachedEntry?.data) cachedEntry.data.likes_count = currentCount;
 
   // 2. Execute Backend sync — this is what makes likes survive reload.
-  // Uses atomic RPC counters (increment_post_likes / decrement_post_likes)
-  // defined in migration.sql so concurrent likes never clobber each other.
   //
-  // Fix: previously an insert/delete failure into the `likes` table was
-  // swallowed silently (error checked but never surfaced or acted on),
-  // so the heart stayed optimistically "liked" in the UI while nothing
-  // was actually saved server-side — the exact cause of likes vanishing
-  // on refresh. Now any real failure rolls the UI back to its prior
-  // state and tells the person, instead of drifting out of sync with
-  // the database until the next reload silently corrects it.
+  // Fix: this used to also call increment_post_likes/decrement_post_likes
+  // RPCs after the insert/delete succeeded, to keep posts.likes_count
+  // up to date. That's now redundant and was actually a source of
+  // unnecessary fragility: the likes_count_sync trigger (added
+  // separately, directly on the likes table) already recalculates
+  // posts.likes_count from a real COUNT(*) on every insert/delete,
+  // automatically, with no RPC involved — so the count was already
+  // being kept correct by the time this RPC call ran. Keeping the RPC
+  // around meant a single network hiccup or naming mismatch on THAT
+  // call alone could throw and roll back an otherwise fully successful
+  // like/unlike action, even though the actual likes row (and the
+  // trigger-maintained count) were already correct. Removing it
+  // matches the simpler, standard pattern most apps use: write the
+  // row, let the database keep the derived count in sync — nothing
+  // else needed.
+  //
+  // Also fixed previously: an insert/delete failure into the `likes`
+  // table used to be swallowed silently (error checked but never
+  // surfaced or acted on), so the heart stayed optimistically "liked"
+  // in the UI while nothing was actually saved server-side. Any real
+  // failure now rolls the UI back to its prior state and tells the
+  // person, instead of drifting out of sync with the database until
+  // the next reload silently corrects it.
   try {
     if (liked) {
       const { error: deleteErr } = await supabase
@@ -2257,21 +2279,6 @@ window.likePost = async function (postId, btn) {
         .eq("user_id", currentUserData.id);
 
       if (deleteErr) throw deleteErr;
-
-      // Fix: this RPC's error was never checked — if it failed (wrong
-      // argument name, RPC not deployed, permissions issue, etc.) the
-      // `likes` row was still deleted correctly, but posts.likes_count
-      // silently never decremented in the database. The heart would
-      // then look right after a refresh (correctly unliked, since
-      // that's read from the `likes` table) while the count itself
-      // drifted or reverted, which is exactly the "likes keep
-      // disappearing/count is wrong" symptom. Now a real RPC failure
-      // throws and rolls back the whole optimistic update below,
-      // instead of leaving the two tables out of sync forever.
-      const { error: decErr } = await supabase.rpc("decrement_post_likes", {
-        post_id_input: postId,
-      });
-      if (decErr) throw decErr;
     } else {
       const { error: insertErr } = await supabase.from("likes").insert({
         post_id: postId,
@@ -2284,22 +2291,11 @@ window.likePost = async function (postId, btn) {
       // tried to insert, and got rejected because you actually
       // already had). Treat that as a harmless no-op for THIS
       // action, not a failure — the row already existing means the
-      // like itself is fine; we just don't know here whether
-      // posts.likes_count was already correctly incremented for it
-      // previously or not, so guessing and incrementing again here
-      // risks double-counting instead of fixing anything. The real
-      // fix for any drift that's already happened is a one-time
-      // server-side reconciliation (recompute likes_count from an
-      // actual count of matching rows in the likes table) rather
-      // than a client-side guess — see recompute_likes_counts.sql.
+      // like itself is fine, and the trigger-maintained count is
+      // already correct regardless of which specific action put
+      // that row there.
       const isDuplicate = insertErr && insertErr.code === "23505";
       if (insertErr && !isDuplicate) throw insertErr;
-      if (!insertErr) {
-        const { error: incErr } = await supabase.rpc("increment_post_likes", {
-          post_id_input: postId,
-        });
-        if (incErr) throw incErr;
-      }
     }
   } catch (e) {
     console.error("Like sync failed — reverting UI to match database:", e);
@@ -3471,6 +3467,7 @@ function renderFeedCard(id, d) {
 
   return `
     <div class="bg-slate-900 border-b border-slate-800/60 w-full" id="feed-card-${escAttr(id)}">
+
 
         <div class="flex items-center justify-between px-3 py-2.5">
             <div class="feed-profile-trigger flex items-center gap-2.5 min-w-0 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
