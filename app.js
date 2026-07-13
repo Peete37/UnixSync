@@ -2285,17 +2285,29 @@ window.likePost = async function (postId, btn) {
         user_id: currentUserData.id,
       });
 
-      // A unique-constraint violation just means this like already
-      // existed in the database (e.g. a stale/incomplete local
-      // likedPostIds cache thought you hadn't liked this post yet,
-      // tried to insert, and got rejected because you actually
-      // already had). Treat that as a harmless no-op for THIS
-      // action, not a failure — the row already existing means the
-      // like itself is fine, and the trigger-maintained count is
-      // already correct regardless of which specific action put
-      // that row there.
+      // A 23505 conflict is only harmless if the exact same
+      // (user_id, post_id) like row already exists. If the likes
+      // table was accidentally given a wrong unique constraint
+      // (for example UNIQUE(user_id) instead of UNIQUE(user_id,
+      // post_id)), then liking a *different* post would also throw
+      // 23505 — and treating every duplicate as success would make
+      // the UI look liked even though the new row was never saved.
+      // So on conflict we verify that THIS specific like row exists;
+      // otherwise we surface the error and roll the optimistic UI
+      // back.
       const isDuplicate = insertErr && insertErr.code === "23505";
-      if (insertErr && !isDuplicate) throw insertErr;
+      if (insertErr) {
+        if (!isDuplicate) throw insertErr;
+
+        const { data: existingLike, error: verifyErr } = await supabase
+          .from("likes")
+          .select("post_id")
+          .eq("user_id", currentUserData.id)
+          .eq("post_id", postId)
+          .maybeSingle();
+
+        if (verifyErr || !existingLike) throw insertErr;
+      }
     }
   } catch (e) {
     console.error("Like sync failed — reverting UI to match database:", e);
