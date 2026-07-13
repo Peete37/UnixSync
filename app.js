@@ -90,32 +90,8 @@ let currentFeedChan = null;
 let currentCommentsChan = null;
 let allCachedPosts = [];
 let isAuthInitialized = false;
-// Fix: Supabase's onAuthStateChange can legitimately fire more than once
-// for a single page load (INITIAL_SESSION, then SIGNED_IN, sometimes
-// TOKEN_REFRESHED) — every one of those events used to re-run the ENTIRE
-// signed-in boot sequence below (re-fetching the profile, re-syncing
-// blocked users, and critically, re-calling filterFeed -> subscribeFeed,
-// which re-ran the whole likes-table sync and re-subscribed to
-// realtime). Confirmed directly in the Network tab: a single refresh
-// produced SIX separate GET requests to the likes table and THREE
-// duplicate-key 409 Conflicts on POST to likes, all within about a
-// second of each other — exactly what repeated boot runs would produce.
-// This flag ensures the expensive one-time boot work only ever runs
-// once per real page load, regardless of how many auth events fire.
-let hasBootedFeedForSession = false;
 let isOnline = navigator.onLine;
-// Fix: this used to be hardcoded to 'all', so any refresh silently
-// bounced the person back to the All tab no matter what they were
-// viewing (Reels, Products, Services, Following). Restoring it from
-// localStorage here means the boot sequence below (which calls
-// filterFeed(currentFeedType, ...)) naturally lands back on the right
-// tab. Falls back to 'all' for first-ever visits or an unrecognized
-// stored value.
-const _validFeedTabs = ["all", "reels", "following", "product", "skill"];
-const _savedFeedTab = localStorage.getItem("campus_market_feed_tab");
-let currentFeedType = _validFeedTabs.includes(_savedFeedTab)
-  ? _savedFeedTab
-  : "all"; // tracks active tab: all | reels | following | product | skill
+let currentFeedType = "all"; // tracks active tab: all | following | product | skill
 
 // ─── CAMPUS SCOPE STATE ────────────────────────────────────────────────────────
 // Previously institution/region were pure display metadata — every tab
@@ -124,24 +100,9 @@ let currentFeedType = _validFeedTabs.includes(_savedFeedTab)
 // past a fridge for sale in Tamale they can't realistically go pick up).
 // Now the All/Products/Services tabs default to "mine" — the signed-in
 // person's own institution — with an easy one-tap switch to "everywhere"
-// Three-tier feed scope: 'institution' (the person's own campus, the
-// tightest/default view) -> 'region' (their wider region, e.g. all of
-// Greater Accra) -> 'everywhere' (nationwide, no scope at all). Each tier
-// is explicit and persisted, rather than silently auto-expanding — the
-// person always knows which one they're looking at and chose to move to
-// a wider one themselves, whether via the banner toggle or the
-// end-of-feed "want to see more?" prompt.
-const _validCampusScopes = ["institution", "region", "everywhere"];
-const _savedCampusScope = localStorage.getItem("campus_market_scope");
-// 'mine' was the old value from before region scoping existed — treat it
-// as 'institution' so anyone's existing saved preference still maps
-// sensibly instead of silently resetting.
-let currentCampusScope =
-  _savedCampusScope === "mine"
-    ? "institution"
-    : _validCampusScopes.includes(_savedCampusScope)
-      ? _savedCampusScope
-      : "institution";
+// for anyone who wants the full nationwide feed. Persisted so the choice
+// survives a reload rather than resetting every visit.
+let currentCampusScope = localStorage.getItem("campus_market_scope") || "mine"; // 'mine' | 'everywhere'
 
 // ─── PAGINATION STATE ─────────────────────────────────────────────────────────
 // Fix: the feed previously had a single hard cap (FEED_LIMIT posts) with
@@ -206,22 +167,9 @@ function updateDmUnreadBadge() {
   }
 }
 
-// Fix: post ids come back from Supabase as a JS `number` (posts.id is
-// bigint), but the same id also flows through HTML onclick attributes
-// (e.g. onclick="likePost('123', this)") which always stringifies it to
-// "123". Set membership is strict-equality based, so 123 !== "123" and a
-// Set mixing both types silently fails half its lookups — this was the
-// real cause of likes (and bookmarks) reading as "unliked"/"unsaved"
-// after a refresh or a fresh scroll-in render even though the DB had the
-// like recorded correctly. Every id is now funneled through this helper
-// before being stored in or checked against an id-keyed Set, so
-// comparisons are always string-to-string regardless of where the id
-// originated.
-const idKey = (id) => String(id);
-
 // Persistent state maps that survive feed re-renders
 const likedPostIds = new Set(
-  JSON.parse(localStorage.getItem("campus_market_likes") || "[]").map(idKey),
+  JSON.parse(localStorage.getItem("campus_market_likes") || "[]"),
 );
 const openCommentIds = new Set(); // tracks which comment sections are open
 
@@ -231,14 +179,6 @@ let userCartList = JSON.parse(
 
 Object.defineProperty(window, "_currentUser", { get: () => currentUserData });
 Object.defineProperty(window, "_userCartList", { get: () => userCartList });
-// Debug helper: likedPostIds is a module-scoped const, so it's private
-// to this module and was never reachable from the browser console
-// directly (typing `likedPostIds` there throws "not defined" — that's
-// expected JS module behavior, not a bug). Exposing it read-only here,
-// the same way _currentUser/_userCartList already are, so it can
-// actually be inspected: type `[..._likedPostIds]` in the console to
-// see its contents as a plain array.
-Object.defineProperty(window, "_likedPostIds", { get: () => likedPostIds });
 
 // ─── 3b. MEDIA EDIT MODAL STATE (WhatsApp-style edit before upload) ──────────
 // Files staged for review in the "Edit Media" modal before they're actually
@@ -589,19 +529,12 @@ async function subscribeFeed(baseFilter = null) {
         .eq("user_id", currentUserData.id);
 
       if (remoteSaves) {
-        // Same string/number mismatch as likes (posts.id is bigint,
-        // but ids flowing through onclick attributes are strings) —
-        // normalize both sides through idKey so a saved item never
-        // silently reads as "not bookmarked" after a refresh.
-        const savedIds = remoteSaves.map((s) => idKey(s.post_id));
+        const savedIds = remoteSaves.map((s) => s.post_id);
         userCartList = userCartList.filter((item) =>
-          savedIds.includes(idKey(item.id)),
+          savedIds.includes(item.id),
         );
         allCachedPosts.forEach(({ id, data: d }) => {
-          if (
-            savedIds.includes(idKey(id)) &&
-            !userCartList.some((c) => idKey(c.id) === idKey(id))
-          ) {
+          if (savedIds.includes(id) && !userCartList.some((c) => c.id === id)) {
             userCartList.push({
               id,
               title: d.title,
@@ -628,33 +561,21 @@ async function subscribeFeed(baseFilter = null) {
       // so the heart state always matches the database, not just
       // whatever happened to survive in this browser's storage.
       try {
-        const { data: remoteLikes, error: likesFetchErr } = await supabase
+        const { data: remoteLikes } = await supabase
           .from("likes")
           .select("post_id")
           .eq("user_id", currentUserData.id);
 
-        if (likesFetchErr) {
-          // Surfacing this (rather than swallowing it) matters:
-          // if this query errors — e.g. an RLS policy blocking
-          // the read, or a column type mismatch on the likes
-          // table — likedPostIds silently keeps whatever was
-          // last in localStorage instead of actually
-          // reconciling with the database, which can look
-          // exactly like "likes disappearing on refresh" when
-          // the real problem is this sync failing every time.
-          console.error("Likes sync query failed:", likesFetchErr);
-        }
-
         if (remoteLikes) {
           likedPostIds.clear();
-          remoteLikes.forEach((l) => likedPostIds.add(idKey(l.post_id)));
+          remoteLikes.forEach((l) => likedPostIds.add(l.post_id));
           localStorage.setItem(
             "campus_market_likes",
             JSON.stringify([...likedPostIds]),
           );
         }
       } catch (likeSyncErr) {
-        console.error(
+        console.warn(
           "Likes sync failed, falling back to local cache:",
           likeSyncErr,
         );
@@ -695,33 +616,7 @@ async function subscribeFeed(baseFilter = null) {
             const data = await fetchFeedSnapshot(() =>
               buildFeedQuery(baseFilter, 0, currentCount - 1),
             );
-
-            // Fix: liking a post writes to posts.likes_count via
-            // increment_post_likes, which itself fires THIS very
-            // listener. If that refresh's fresh fetch lands before
-            // your own increment has actually committed server-side,
-            // it would silently overwrite your optimistic count with
-            // the stale pre-like number — which is exactly why likes
-            // could appear to "revert" seemingly at random shortly
-            // after tapping them. Any post with a like operation
-            // still in flight (see likeInFlight, set/cleared in
-            // likePost) keeps whatever likes_count is already showing
-            // locally instead of being blindly replaced here.
-            const previousById = new Map(
-              allCachedPosts.map((p) => [idKey(p.id), p.data]),
-            );
-            allCachedPosts = data.map((item) => {
-              if (likeInFlight.has(idKey(item.id))) {
-                const prev = previousById.get(idKey(item.id));
-                if (prev)
-                  return {
-                    id: item.id,
-                    data: { ...item, likes_count: prev.likes_count },
-                  };
-              }
-              return { id: item.id, data: item };
-            });
-
+            allCachedPosts = data.map((item) => ({ id: item.id, data: item }));
             feedLoadedCount = data.length;
             feedHasMore = data.length >= currentCount;
             renderFeedFromCache();
@@ -851,36 +746,10 @@ function setNavHighlight(btn, viewId) {
 }
 
 window.navigateTo = function (viewId, btn = null) {
-  // Fix: the header search bar (and its results) used to stay open on
-  // screen after switching tabs — the only thing that closed it was
-  // tapping the search icon a second time. Closing it here means
-  // moving to Feed/Explore/DMs/Profile/Cart always leaves a clean
-  // header behind. _runSearchImmediate() also routes through
-  // navigateTo('explore') on every keystroke to show results, so we
-  // skip the auto-close in that one case — otherwise it would wipe
-  // out the query the person is still typing.
-  if (
-    typeof window.closeHeaderSearch === "function" &&
-    !window._searchNavInProgress
-  ) {
-    window.closeHeaderSearch();
-  }
-
   // Stop all reel video audio whenever we leave the feed entirely, so
   // switching to Profile/DMs/etc never leaves background audio playing.
   if (viewId !== "feed") {
     pauseAllReelVideos();
-
-    // A reel's comment sheet is moved to document.body the first time
-    // it opens (see toggleComments — this sidesteps a WebKit clipping
-    // bug), which means it's no longer inside feed-container and
-    // won't get hidden by the container toggle below. Close it
-    // explicitly so switching to Profile/DMs/etc never leaves it
-    // floating on screen over whatever view comes next.
-    document.querySelectorAll(".reel-comments.comments-open").forEach((el) => {
-      const reelId = el.id.replace("comments-", "");
-      window._closeCommentSheet(reelId);
-    });
   }
 
   [
@@ -1060,9 +929,7 @@ window.openDetail = async function (postId) {
             </button>`
         : "";
 
-    const isAddedToCart = userCartList.some(
-      (item) => idKey(item.id) === idKey(d.id),
-    );
+    const isAddedToCart = userCartList.some((item) => item.id === d.id);
     const cartText = isAddedToCart ? "✓ Added to Chart" : "Add to Chart List";
     const cartColorClass = isAddedToCart
       ? "bg-slate-800 border border-slate-700 text-slate-400"
@@ -1085,7 +952,7 @@ window.openDetail = async function (postId) {
                     <span class="bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700 capitalize">${esc(d.type) || "product"}</span>
                 </div>
                 <div class="flex items-center justify-between gap-3 p-3 bg-slate-900 rounded-xl border border-slate-800">
-                    <div class="feed-profile-trigger flex items-center gap-3 min-w-0 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
+                    <div class="flex items-center gap-3 min-w-0">
                         <img src="${esc(d.user_avatar) || "https://ui-avatars.com/api/?name=User"}" data-avatar-for="${escAttr(d.user_id)}" class="w-10 h-10 rounded-full border border-amber-400 object-cover" alt="Avatar">
                         <div class="min-w-0">
                             <p class="text-xs text-slate-500 uppercase">Provider</p>
@@ -1564,24 +1431,12 @@ function renderEditMediaModal() {
   const active = stagedMediaFiles[activeStagedIndex];
 
   const rotationStyle = `transform: rotate(${active.rotation}deg);`;
-  const cropOverlayHtml = `
-        <div id="cropOverlay">
-          <div class="crop-dim"></div>
-          <div class="crop-box" id="cropBox">
-            <div class="crop-handle nw" data-handle="nw"></div>
-            <div class="crop-handle ne" data-handle="ne"></div>
-            <div class="crop-handle sw" data-handle="sw"></div>
-            <div class="crop-handle se" data-handle="se"></div>
-          </div>
-        </div>`;
   mainPreview.innerHTML =
     active.type === "video"
       ? `<video src="${active.url}" style="${rotationStyle}" controls muted></video>
            <button class="rotate-btn" onclick="window._rotateStagedMedia()"><i class="fas fa-rotate-right text-sm"></i></button>`
-      : `<img id="editPreviewImg" src="${active.url}" style="${rotationStyle}" alt="Preview">
-           <button class="crop-btn" onclick="window._toggleCropMode()" aria-label="Crop"><i class="fas fa-crop-simple text-sm"></i></button>
-           <button class="rotate-btn" onclick="window._rotateStagedMedia()"><i class="fas fa-rotate-right text-sm"></i></button>
-           ${cropOverlayHtml}`;
+      : `<img src="${active.url}" style="${rotationStyle}" alt="Preview">
+           <button class="rotate-btn" onclick="window._rotateStagedMedia()"><i class="fas fa-rotate-right text-sm"></i></button>`;
 
   thumbStrip.innerHTML = stagedMediaFiles
     .map(
@@ -1601,11 +1456,6 @@ function renderEditMediaModal() {
 
 window._selectStagedMedia = function (i) {
   activeStagedIndex = i;
-  // renderEditMediaModal() rebuilds the preview (including cropOverlay)
-  // from scratch, which naturally drops crop mode for the OLD image —
-  // but the footer buttons live outside that rebuilt subtree, so their
-  // crop-mode classes need to be reset explicitly here too.
-  window._cancelCrop();
   renderEditMediaModal();
 };
 
@@ -1613,288 +1463,8 @@ window._rotateStagedMedia = function () {
   if (!stagedMediaFiles[activeStagedIndex]) return;
   stagedMediaFiles[activeStagedIndex].rotation =
     (stagedMediaFiles[activeStagedIndex].rotation + 90) % 360;
-  // Rotating invalidates any crop the person already drew, since the
-  // rect was drawn against the old orientation — simplest and least
-  // surprising is to just clear it rather than try to remap coordinates
-  // through a rotation.
-  delete stagedMediaFiles[activeStagedIndex].cropRect;
   renderEditMediaModal();
 };
-
-// ─── CROP ───────────────────────────────────────────────────────────────────
-// A lightweight, dependency-free crop tool: drag inside the box to move
-// it, drag a corner handle to resize it. The crop rect is stored as
-// fractions of the image's natural (rotated) dimensions (0–1 for
-// x/y/width/height), not pixels — that way it's completely independent
-// of whatever size the preview happens to be rendered at on screen, and
-// maps directly onto the full-resolution source image when actually
-// applying the crop in confirmEditedMedia.
-let _cropDragState = null; // { mode: 'move'|'resize', handle, startX, startY, startRect }
-
-window._toggleCropMode = function () {
-  const item = stagedMediaFiles[activeStagedIndex];
-  if (!item || item.type !== "image") return;
-
-  const overlay = document.getElementById("cropOverlay");
-  const footer = document.getElementById("editMainFooter");
-  const cropFooter = document.getElementById("cropFooter");
-  if (!overlay) return;
-
-  const enteringCropMode = !overlay.classList.contains("crop-active");
-  overlay.classList.toggle("crop-active", enteringCropMode);
-  footer?.classList.toggle("crop-active-hide", enteringCropMode);
-  cropFooter?.classList.toggle("crop-active", enteringCropMode);
-
-  if (enteringCropMode) {
-    // Start from whatever crop was previously set for this image, or
-    // default to a centered 80% box so there's immediately something
-    // visible and adjustable rather than a jarring full-bleed box.
-    const rect = item.cropRect || { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
-    _setCropBoxRect(rect);
-    _wireCropHandlers();
-  }
-};
-
-window._cancelCrop = function () {
-  document.getElementById("cropOverlay")?.classList.remove("crop-active");
-  document
-    .getElementById("editMainFooter")
-    ?.classList.remove("crop-active-hide");
-  document.getElementById("cropFooter")?.classList.remove("crop-active");
-};
-
-window._applyCrop = function () {
-  const item = stagedMediaFiles[activeStagedIndex];
-  const box = document.getElementById("cropBox");
-  const overlay = document.getElementById("cropOverlay");
-  if (item && box && overlay) {
-    const rect = _readCropBoxRect(box, overlay);
-    // Ignore a crop that's barely different from "no crop" (e.g. a
-    // tiny accidental drag) so we don't force a needless re-encode.
-    const isNoOp =
-      rect.x < 0.01 && rect.y < 0.01 && rect.width > 0.98 && rect.height > 0.98;
-    item.cropRect = isNoOp ? null : rect;
-  }
-  window._cancelCrop();
-  renderEditMediaModal();
-};
-
-// Fix: #editMainPreview is a fixed 1:1 square with object-fit: contain,
-// so any non-square photo is letterboxed inside it — the actual pixels
-// only occupy part of that square, with black bars filling the rest.
-// The crop overlay spans the FULL square container, so without this
-// correction, a percentage-based crop rect computed against the overlay
-// would be calibrated against empty letterbox space for part of its
-// range, producing a crop that's shifted/wrong-sized relative to what
-// the person visually saw and dragged over. This computes the real
-// visible image rect (in the same coordinate space as the overlay) so
-// both reading and writing the crop box can be anchored to actual image
-// pixels, not the surrounding square.
-function _getRenderedImageRect(overlay) {
-  const img = overlay.parentElement?.querySelector("img");
-  const overlayRect = overlay.getBoundingClientRect();
-  if (!img || !img.naturalWidth || !img.naturalHeight) {
-    // No image to measure against (shouldn't normally happen since
-    // crop mode only opens for images) — fall back to treating the
-    // whole overlay as the image area rather than crashing.
-    return {
-      left: overlayRect.left,
-      top: overlayRect.top,
-      width: overlayRect.width,
-      height: overlayRect.height,
-    };
-  }
-
-  const containerRatio = overlayRect.width / overlayRect.height;
-  const imageRatio = img.naturalWidth / img.naturalHeight;
-
-  let renderedWidth, renderedHeight;
-  if (imageRatio > containerRatio) {
-    // Image is wider than the container: full width, letterboxed
-    // top/bottom.
-    renderedWidth = overlayRect.width;
-    renderedHeight = overlayRect.width / imageRatio;
-  } else {
-    // Image is taller than (or equal to) the container: full height,
-    // letterboxed left/right.
-    renderedHeight = overlayRect.height;
-    renderedWidth = overlayRect.height * imageRatio;
-  }
-
-  return {
-    left: overlayRect.left + (overlayRect.width - renderedWidth) / 2,
-    top: overlayRect.top + (overlayRect.height - renderedHeight) / 2,
-    width: renderedWidth,
-    height: renderedHeight,
-  };
-}
-
-function _setCropBoxRect(rect) {
-  const box = document.getElementById("cropBox");
-  const overlay = document.getElementById("cropOverlay");
-  if (!box || !overlay) return;
-
-  // Convert the image-relative fraction back into overlay-relative
-  // percentages, since that's the coordinate space box.style.left/top
-  // actually operates in (it's a child of the overlay, not the image).
-  const overlayRect = overlay.getBoundingClientRect();
-  const imgRect = _getRenderedImageRect(overlay);
-
-  const leftPx = imgRect.left - overlayRect.left + rect.x * imgRect.width;
-  const topPx = imgRect.top - overlayRect.top + rect.y * imgRect.height;
-  const widthPx = rect.width * imgRect.width;
-  const heightPx = rect.height * imgRect.height;
-
-  box.style.left = `${(leftPx / overlayRect.width) * 100}%`;
-  box.style.top = `${(topPx / overlayRect.height) * 100}%`;
-  box.style.width = `${(widthPx / overlayRect.width) * 100}%`;
-  box.style.height = `${(heightPx / overlayRect.height) * 100}%`;
-}
-
-function _readCropBoxRect(box, overlay) {
-  const boxRect = box.getBoundingClientRect();
-  const imgRect = _getRenderedImageRect(overlay);
-
-  // Express the box's position/size as fractions of the ACTUAL visible
-  // image area, not the surrounding square — this is what
-  // cropImageFile's rect.x/y/width/height are documented to mean (see
-  // its own comment), and now they actually are.
-  return {
-    x: (boxRect.left - imgRect.left) / imgRect.width,
-    y: (boxRect.top - imgRect.top) / imgRect.height,
-    width: boxRect.width / imgRect.width,
-    height: boxRect.height / imgRect.height,
-  };
-}
-
-const CROP_MIN_SIZE_FRACTION = 0.12; // don't allow shrinking below 12% of the image in either axis
-
-function _wireCropHandlers() {
-  const overlay = document.getElementById("cropOverlay");
-  const box = document.getElementById("cropBox");
-  if (!overlay || !box) return;
-
-  // Re-query handles fresh each time since renderEditMediaModal rebuilds
-  // this DOM subtree from scratch on every render.
-  const handles = box.querySelectorAll(".crop-handle");
-
-  const onPointerDown = (e, mode, handle = null) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const imgRect = _getRenderedImageRect(overlay);
-    _cropDragState = {
-      mode,
-      handle,
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      // Deltas need to be expressed as fractions of the actual
-      // visible image, matching the coordinate space startRect is
-      // already in (see _readCropBoxRect) — using the full,
-      // possibly-letterboxed overlay dimensions here instead would
-      // make the box drift out of sync with the cursor on any
-      // non-square photo.
-      imageWidth: imgRect.width,
-      imageHeight: imgRect.height,
-      startRect: _readCropBoxRect(box, overlay),
-    };
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp, { once: true });
-  };
-
-  const onPointerMove = (e) => {
-    if (!_cropDragState) return;
-    const dxFrac =
-      (e.clientX - _cropDragState.startClientX) / _cropDragState.imageWidth;
-    const dyFrac =
-      (e.clientY - _cropDragState.startClientY) / _cropDragState.imageHeight;
-    const { startRect, mode, handle } = _cropDragState;
-
-    if (mode === "move") {
-      const newX = _clamp(startRect.x + dxFrac, 0, 1 - startRect.width);
-      const newY = _clamp(startRect.y + dyFrac, 0, 1 - startRect.height);
-      _setCropBoxRect({ ...startRect, x: newX, y: newY });
-      return;
-    }
-
-    // Resize: each corner drags its own two edges, clamped so the box
-    // never shrinks below the minimum or crosses outside the image.
-    let { x, y, width, height } = startRect;
-    if (handle === "se") {
-      width = _clamp(
-        startRect.width + dxFrac,
-        CROP_MIN_SIZE_FRACTION,
-        1 - startRect.x,
-      );
-      height = _clamp(
-        startRect.height + dyFrac,
-        CROP_MIN_SIZE_FRACTION,
-        1 - startRect.y,
-      );
-    } else if (handle === "sw") {
-      const newWidth = _clamp(
-        startRect.width - dxFrac,
-        CROP_MIN_SIZE_FRACTION,
-        startRect.x + startRect.width,
-      );
-      x = startRect.x + startRect.width - newWidth;
-      width = newWidth;
-      height = _clamp(
-        startRect.height + dyFrac,
-        CROP_MIN_SIZE_FRACTION,
-        1 - startRect.y,
-      );
-    } else if (handle === "ne") {
-      width = _clamp(
-        startRect.width + dxFrac,
-        CROP_MIN_SIZE_FRACTION,
-        1 - startRect.x,
-      );
-      const newHeight = _clamp(
-        startRect.height - dyFrac,
-        CROP_MIN_SIZE_FRACTION,
-        startRect.y + startRect.height,
-      );
-      y = startRect.y + startRect.height - newHeight;
-      height = newHeight;
-    } else if (handle === "nw") {
-      const newWidth = _clamp(
-        startRect.width - dxFrac,
-        CROP_MIN_SIZE_FRACTION,
-        startRect.x + startRect.width,
-      );
-      const newHeight = _clamp(
-        startRect.height - dyFrac,
-        CROP_MIN_SIZE_FRACTION,
-        startRect.y + startRect.height,
-      );
-      x = startRect.x + startRect.width - newWidth;
-      y = startRect.y + startRect.height - newHeight;
-      width = newWidth;
-      height = newHeight;
-    }
-    _setCropBoxRect({ x, y, width, height });
-  };
-
-  const onPointerUp = () => {
-    _cropDragState = null;
-    window.removeEventListener("pointermove", onPointerMove);
-  };
-
-  box.addEventListener("pointerdown", (e) => {
-    if (e.target.closest(".crop-handle")) return; // handles have their own listener below
-    onPointerDown(e, "move");
-  });
-
-  handles.forEach((h) => {
-    h.addEventListener("pointerdown", (e) =>
-      onPointerDown(e, "resize", h.dataset.handle),
-    );
-  });
-}
-
-function _clamp(val, min, max) {
-  return Math.max(min, Math.min(max, val));
-}
 
 window._removeStagedMedia = function (i) {
   const removed = stagedMediaFiles.splice(i, 1)[0];
@@ -1905,7 +1475,6 @@ window._removeStagedMedia = function (i) {
   }
   if (activeStagedIndex >= stagedMediaFiles.length)
     activeStagedIndex = Math.max(0, stagedMediaFiles.length - 1);
-  window._cancelCrop();
   renderEditMediaModal();
   if (stagedMediaFiles.length === 0) {
     const countEl = document.getElementById("mediaFileCount");
@@ -1955,22 +1524,13 @@ window.confirmEditedMedia = async function () {
         if (item.rotation !== 0) {
           workingFile = await rotateImageFile(workingFile, item.rotation);
         }
-        // Crop is applied after rotation (the stored cropRect is
-        // relative to the rotated image, matching what the person
-        // actually saw and dragged the box over) and before
-        // compression, so the final encode only has to happen
-        // once on the already-cropped pixels rather than cropping
-        // a full-size image and re-encoding twice.
-        if (item.cropRect) {
-          workingFile = await cropImageFile(workingFile, item.cropRect);
-        }
         const compressedFile = await compressImageFile(
           workingFile,
           compressionOptions,
         );
         processed.push(compressedFile);
       } catch (e) {
-        console.warn("Rotate/crop/compress failed, using original file:", e);
+        console.warn("Rotate/compress failed, using original file:", e);
         processed.push(item.file);
       }
     } else {
@@ -2002,46 +1562,6 @@ function rotateImageFile(file, degrees) {
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.rotate((degrees * Math.PI) / 180);
       ctx.drawImage(img, -img.width / 2, -img.height / 2);
-      canvas.toBlob(
-        (blob) => {
-          URL.revokeObjectURL(objUrl);
-          if (!blob) {
-            reject(new Error("Canvas toBlob failed"));
-            return;
-          }
-          resolve(
-            new File([blob], file.name, { type: file.type || "image/jpeg" }),
-          );
-        },
-        file.type || "image/jpeg",
-        0.92,
-      );
-    };
-    img.onerror = reject;
-    img.src = objUrl;
-  });
-}
-
-// Crops an image to the given rect, where rect.x/y/width/height are all
-// fractions (0–1) of the image's own natural dimensions — the same
-// resolution-independent format the crop UI in _readCropBoxRect stores,
-// so this works correctly regardless of what size the crop box preview
-// was actually displayed at on screen.
-function cropImageFile(file, rect) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const objUrl = URL.createObjectURL(file);
-    img.onload = () => {
-      const sx = rect.x * img.width;
-      const sy = rect.y * img.height;
-      const sw = rect.width * img.width;
-      const sh = rect.height * img.height;
-
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(sw));
-      canvas.height = Math.max(1, Math.round(sh));
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
       canvas.toBlob(
         (blob) => {
           URL.revokeObjectURL(objUrl);
@@ -2204,29 +1724,22 @@ window.likePost = async function (postId, btn) {
     showToast("Error: Missing Post Identifier");
     return;
   }
+  if (likeInFlight.has(postId)) return;
+  likeInFlight.add(postId);
 
-  // Normalize once: postId arrives as a string (it's read out of an HTML
-  // attribute), but everywhere else in the app (allCachedPosts, the RPC
-  // calls, etc.) may hold it as the raw bigint number from the DB. Doing
-  // every lookup/comparison through the same string key keeps this
-  // function's behavior consistent regardless of which type shows up.
-  const key = idKey(postId);
-  if (likeInFlight.has(key)) return;
-  likeInFlight.add(key);
-
-  const liked = likedPostIds.has(key);
+  const liked = likedPostIds.has(postId);
   const countEl = btn.querySelector(".like-count");
   const icon = btn.querySelector("i");
   let currentCount = parseInt(countEl?.textContent || 0);
 
   // 1. Optimistic UI update
   if (liked) {
-    likedPostIds.delete(key);
+    likedPostIds.delete(postId);
     icon.className = "far fa-heart text-slate-300";
     btn.classList.remove("text-rose-500");
     currentCount = Math.max(0, currentCount - 1);
   } else {
-    likedPostIds.add(key);
+    likedPostIds.add(postId);
     icon.className = "fas fa-heart text-rose-500";
     btn.classList.add("text-rose-500");
     currentCount = currentCount + 1;
@@ -2239,37 +1752,21 @@ window.likePost = async function (postId, btn) {
   );
 
   // Keep the in-memory cache in sync so a re-render (tab switch, search,
-  // etc.) before the next DB refresh doesn't show a stale count. Compare
-  // via idKey too, since allCachedPosts ids come straight from Supabase
-  // (numbers for a bigint column) while postId here is a string.
-  const cachedEntry = allCachedPosts.find((p) => idKey(p.id) === key);
+  // etc.) before the next DB refresh doesn't show a stale count.
+  const cachedEntry = allCachedPosts.find((p) => p.id === postId);
   if (cachedEntry?.data) cachedEntry.data.likes_count = currentCount;
 
   // 2. Execute Backend sync — this is what makes likes survive reload.
+  // Uses atomic RPC counters (increment_post_likes / decrement_post_likes)
+  // defined in migration.sql so concurrent likes never clobber each other.
   //
-  // Fix: this used to also call increment_post_likes/decrement_post_likes
-  // RPCs after the insert/delete succeeded, to keep posts.likes_count
-  // up to date. That's now redundant and was actually a source of
-  // unnecessary fragility: the likes_count_sync trigger (added
-  // separately, directly on the likes table) already recalculates
-  // posts.likes_count from a real COUNT(*) on every insert/delete,
-  // automatically, with no RPC involved — so the count was already
-  // being kept correct by the time this RPC call ran. Keeping the RPC
-  // around meant a single network hiccup or naming mismatch on THAT
-  // call alone could throw and roll back an otherwise fully successful
-  // like/unlike action, even though the actual likes row (and the
-  // trigger-maintained count) were already correct. Removing it
-  // matches the simpler, standard pattern most apps use: write the
-  // row, let the database keep the derived count in sync — nothing
-  // else needed.
-  //
-  // Also fixed previously: an insert/delete failure into the `likes`
-  // table used to be swallowed silently (error checked but never
-  // surfaced or acted on), so the heart stayed optimistically "liked"
-  // in the UI while nothing was actually saved server-side. Any real
-  // failure now rolls the UI back to its prior state and tells the
-  // person, instead of drifting out of sync with the database until
-  // the next reload silently corrects it.
+  // Fix: previously an insert/delete failure into the `likes` table was
+  // swallowed silently (error checked but never surfaced or acted on),
+  // so the heart stayed optimistically "liked" in the UI while nothing
+  // was actually saved server-side — the exact cause of likes vanishing
+  // on refresh. Now any real failure rolls the UI back to its prior
+  // state and tells the person, instead of drifting out of sync with
+  // the database until the next reload silently corrects it.
   try {
     if (liked) {
       const { error: deleteErr } = await supabase
@@ -2279,6 +1776,7 @@ window.likePost = async function (postId, btn) {
         .eq("user_id", currentUserData.id);
 
       if (deleteErr) throw deleteErr;
+      await supabase.rpc("decrement_post_likes", { post_id_input: postId });
     } else {
       const { error: insertErr } = await supabase.from("likes").insert({
         post_id: postId,
@@ -2286,16 +1784,14 @@ window.likePost = async function (postId, btn) {
       });
 
       // A unique-constraint violation just means this like already
-      // existed in the database (e.g. a stale/incomplete local
-      // likedPostIds cache thought you hadn't liked this post yet,
-      // tried to insert, and got rejected because you actually
-      // already had). Treat that as a harmless no-op for THIS
-      // action, not a failure — the row already existing means the
-      // like itself is fine, and the trigger-maintained count is
-      // already correct regardless of which specific action put
-      // that row there.
+      // existed (e.g. a duplicate tap) — treat that as a harmless
+      // no-op, not a failure. Any OTHER error means the like truly
+      // didn't save, so we must roll back.
       const isDuplicate = insertErr && insertErr.code === "23505";
       if (insertErr && !isDuplicate) throw insertErr;
+      if (!insertErr) {
+        await supabase.rpc("increment_post_likes", { post_id_input: postId });
+      }
     }
   } catch (e) {
     console.error("Like sync failed — reverting UI to match database:", e);
@@ -2303,12 +1799,12 @@ window.likePost = async function (postId, btn) {
     // Roll back the optimistic UI exactly, since the write did not
     // actually persist.
     if (liked) {
-      likedPostIds.add(key);
+      likedPostIds.add(postId);
       icon.className = "fas fa-heart text-rose-500";
       btn.classList.add("text-rose-500");
       currentCount = currentCount + 1;
     } else {
-      likedPostIds.delete(key);
+      likedPostIds.delete(postId);
       icon.className = "far fa-heart text-slate-300";
       btn.classList.remove("text-rose-500");
       currentCount = Math.max(0, currentCount - 1);
@@ -2322,7 +1818,7 @@ window.likePost = async function (postId, btn) {
 
     showToast("Couldn't save your like — please try again.");
   } finally {
-    likeInFlight.delete(key);
+    likeInFlight.delete(postId);
   }
 };
 
@@ -2336,10 +1832,14 @@ window.sharePost = function (postId, title) {
   }
 };
 
-// downloadMedia was removed entirely — post media (photos/videos) is no
-// longer downloadable from anywhere in the app. This is separate from the
-// avatar long-press "Save" button, which only ever lets someone save
-// their OWN profile picture and is unaffected by this change.
+window.downloadMedia = function (mediaUrl, title) {
+  if (!mediaUrl) return;
+  const a = document.createElement("a");
+  a.href = mediaUrl;
+  a.download = title || "campus-market";
+  a.target = "_blank";
+  a.click();
+};
 
 // Opens a real DM thread with the seller AND shares a small preview of the
 // exact listing the person tapped "Contact" on, so the seller immediately
@@ -2407,45 +1907,6 @@ window.postComment = async function (postId, inputEl, parentCommentId = null) {
   lastCommentPostedAt = now;
 
   inputEl.value = "";
-  window._syncCommentSendState(postId, inputEl);
-
-  // Fix: posting used to clear the input and then just wait silently for
-  // the realtime echo to repaint the list — on any network lag it looked
-  // like the tap did nothing. This appends an immediate "sending…"
-  // placeholder bubble so the comment appears the instant it's sent; the
-  // next realtime-triggered fetchAndRender() (see toggleComments) does a
-  // full re-render from the DB and naturally replaces this placeholder
-  // with the real row, so there's no separate cleanup or dedupe needed.
-  const list = document.getElementById(`comment-list-${postId}`);
-  const emptyState = list
-    ?.querySelector(".far.fa-comment-dots")
-    ?.closest("div");
-  if (emptyState) emptyState.remove();
-  if (list) {
-    const metadata = currentUserData.user_metadata || {};
-    list.insertAdjacentHTML(
-      "beforeend",
-      renderCommentItem(
-        {
-          id: `pending-${now}`,
-          user_id: currentUserData.id,
-          user_name: metadata.full_name || "Anonymous Student",
-          user_avatar: metadata.avatar_url || "",
-          text,
-          parent_comment_id: parentCommentId,
-          created_at: new Date().toISOString(),
-          likes_count: 0,
-        },
-        postId,
-      ),
-    );
-    const pendingEl = document.getElementById(`comment-item-pending-${now}`);
-    if (pendingEl) {
-      pendingEl.style.opacity = "0.55";
-      pendingEl.querySelectorAll("button").forEach((b) => (b.disabled = true));
-    }
-    list.scrollTop = list.scrollHeight;
-  }
 
   try {
     const metadata = currentUserData.user_metadata || {};
@@ -2458,23 +1919,9 @@ window.postComment = async function (postId, inputEl, parentCommentId = null) {
       created_at: new Date().toISOString(),
     };
     if (parentCommentId) insertPayload.parent_comment_id = parentCommentId;
-    const { error } = await supabase.from("comments").insert(insertPayload);
-    if (error) throw error;
+    await supabase.from("comments").insert(insertPayload);
   } catch (err) {
     console.error("Comment submission error:", err);
-    // RLS policies added for blocking (see blocked_users_rls.sql) reject
-    // the insert outright if either person has blocked the other —
-    // this is the only way to know that happened when it's the OTHER
-    // person who blocked you, since your local blockedUserIds set has
-    // no way of knowing about a block made from their side.
-    const isBlockRejection =
-      err?.code === "42501" || /row-level security/i.test(err?.message || "");
-    showToast(
-      isBlockRejection
-        ? "This comment couldn't be posted."
-        : "Couldn't post your comment — please try again.",
-    );
-    document.getElementById(`comment-item-pending-${now}`)?.remove();
   }
 };
 
@@ -2518,31 +1965,8 @@ window.submitCommentFromInput = function (postId, inputEl) {
   if (parentId) window.cancelCommentReply(postId);
 };
 
-// Enables/disables the paper-plane send button based on whether there's
-// actual (trimmed) text to send — mirrors the disabled feel of iMessage/
-// WhatsApp send buttons rather than always looking tappable.
-window._syncCommentSendState = function (postId, inputEl) {
-  const sendBtn = document.getElementById(`comment-send-${postId}`);
-  if (sendBtn) sendBtn.disabled = inputEl.value.trim().length === 0;
-};
-
-// The Send button doesn't have a direct reference to its input the way
-// the onkeydown handler does, so it looks the input up by shared
-// container instead of relying on DOM sibling order (which would break
-// silently if the markup around it ever changes).
-window._submitFromSendBtn = function (postId) {
-  const input = document.querySelector(
-    `#comments-${CSS.escape(postId)} .comment-input-field`,
-  );
-  if (input) window.submitCommentFromInput(postId, input);
-};
-
-// Same string/number id mismatch as posts (comments.id is also a bigint
-// primary key) — normalized through idKey for the same reason.
 const likedCommentIds = new Set(
-  JSON.parse(localStorage.getItem("campus_market_comment_likes") || "[]").map(
-    idKey,
-  ),
+  JSON.parse(localStorage.getItem("campus_market_comment_likes") || "[]"),
 );
 
 window.likeComment = async function (commentId, btn) {
@@ -2551,19 +1975,18 @@ window.likeComment = async function (commentId, btn) {
     return;
   }
 
-  const key = idKey(commentId);
-  const liked = likedCommentIds.has(key);
+  const liked = likedCommentIds.has(commentId);
   const countEl = btn.querySelector(".comment-like-count");
   const icon = btn.querySelector("i");
   let count = parseInt(countEl?.textContent || 0);
 
   if (liked) {
-    likedCommentIds.delete(key);
-    icon.className = "far fa-heart text-slate-400";
+    likedCommentIds.delete(commentId);
+    icon.className = "far fa-thumbs-up text-slate-400";
     count = Math.max(0, count - 1);
   } else {
-    likedCommentIds.add(key);
-    icon.className = "fas fa-heart text-rose-500";
+    likedCommentIds.add(commentId);
+    icon.className = "fas fa-thumbs-up text-amber-400";
     count = count + 1;
   }
   if (countEl) countEl.textContent = count;
@@ -2572,57 +1995,27 @@ window.likeComment = async function (commentId, btn) {
     JSON.stringify([...likedCommentIds]),
   );
 
-  // Fix: this used to swallow every failure into a console.warn with
-  // no toast and no UI rollback — meaning if this insert/delete ever
-  // failed for any reason (including the exact same kind of orphaned-
-  // row duplicate-key conflict that turned out to be the real post-
-  // likes bug), nobody would ever see it happen. "Comment likes work
-  // well" may partly reflect that failures here were simply invisible
-  // rather than genuinely rarer. Real failures now roll back the
-  // optimistic UI and show a toast, matching likePost's behavior.
   try {
     if (liked) {
-      const { error } = await supabase
+      await supabase
         .from("comment_likes")
         .delete()
         .eq("comment_id", commentId)
         .eq("user_id", currentUserData.id);
-      if (error) throw error;
-      const { error: decErr } = await supabase.rpc("decrement_comment_likes", {
+      await supabase.rpc("decrement_comment_likes", {
         comment_id_input: commentId,
       });
-      if (decErr) throw decErr;
     } else {
       const { error } = await supabase
         .from("comment_likes")
         .insert({ comment_id: commentId, user_id: currentUserData.id });
-      const isDuplicate = error && error.code === "23505";
-      if (error && !isDuplicate) throw error;
-      if (!error) {
-        const { error: incErr } = await supabase.rpc(
-          "increment_comment_likes",
-          { comment_id_input: commentId },
-        );
-        if (incErr) throw incErr;
-      }
+      if (!error)
+        await supabase.rpc("increment_comment_likes", {
+          comment_id_input: commentId,
+        });
     }
   } catch (e) {
-    console.error("Comment like sync failed — reverting:", e);
-    if (liked) {
-      likedCommentIds.add(key);
-      icon.className = "fas fa-heart text-rose-500";
-      count = count + 1;
-    } else {
-      likedCommentIds.delete(key);
-      icon.className = "far fa-heart text-slate-400";
-      count = Math.max(0, count - 1);
-    }
-    if (countEl) countEl.textContent = count;
-    localStorage.setItem(
-      "campus_market_comment_likes",
-      JSON.stringify([...likedCommentIds]),
-    );
-    showToast("Couldn't save your like — please try again.");
+    console.warn("Comment like sync delayed:", e);
   }
 };
 
@@ -2672,51 +2065,33 @@ window.deleteComment = function (commentId, postId) {
   });
 };
 
-// Expands a collapsed reply group (see fetchAndRender inside
-// toggleComments) and hides the "View N more replies" toggle that
-// revealed it.
-window._expandReplies = function (groupId) {
-  document.getElementById(groupId)?.classList.remove("hidden");
-  document.getElementById(`toggle-${groupId}`)?.classList.add("hidden");
-};
-
 function renderCommentItem(c, postId) {
-  const isLiked = likedCommentIds.has(idKey(c.id));
+  const isLiked = likedCommentIds.has(c.id);
   const heartClass = isLiked
-    ? "fas fa-heart text-rose-500"
-    : "far fa-heart text-slate-400";
+    ? "fas fa-thumbs-up text-amber-400"
+    : "far fa-thumbs-up text-slate-400";
   const isOwn = currentUserData && c.user_id === currentUserData.id;
   const indentClass = c.parent_comment_id ? "ml-7" : "";
-  const avatarFallback = `https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(c.user_name || "U")}`;
-  const bubbleClass = isOwn
-    ? "bg-amber-400/10 border-amber-400/25"
-    : "bg-slate-800 border-slate-700/20";
 
   return `
-        <div class="flex gap-2 items-start text-left mt-2.5 ${indentClass}" id="comment-item-${escAttr(c.id)}">
-            <div class="feed-profile-trigger flex gap-2 items-start flex-1 min-w-0 cursor-pointer" data-user-id="${escAttr(c.user_id)}">
-                <img src="${esc(c.user_avatar) || avatarFallback}" onerror="this.onerror=null; this.src='${avatarFallback}'" class="w-7 h-7 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
-                <div class="${bubbleClass} rounded-2xl px-3 py-2 flex-1 border min-w-0">
-                    <div class="flex items-start justify-between gap-2">
-                        <div class="flex items-baseline gap-1.5 min-w-0">
-                            <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide truncate">${esc(c.user_name)}</p>
-                            ${isOwn ? '<span class="text-[8px] text-amber-400/60 font-bold uppercase shrink-0">You</span>' : ""}
-                            <span class="text-[9px] text-slate-500 shrink-0">· ${timeAgo(c.created_at)}</span>
-                        </div>
-                        <button onclick="event.stopPropagation(); window.openCommentOptionsMenu('${escAttr(c.id)}', '${escAttr(postId)}', ${isOwn ? "true" : "false"}, '${escAttr(c.user_id)}', '${escAttr(c.user_name)}')" class="text-slate-500 hover:text-white transition shrink-0 -mt-0.5 -mr-1 px-1.5 py-0.5" aria-label="More options">
-                            <i class="fas fa-ellipsis-vertical text-[11px]"></i>
-                        </button>
-                    </div>
-                    <p class="text-xs text-slate-200 mt-0.5 break-words">${esc(c.text)}</p>
-                    <div class="flex items-center gap-3 mt-1.5">
-                        <button onclick="event.stopPropagation(); window.likeComment('${escAttr(c.id)}', this)" class="flex items-center gap-1 active:scale-90 transition">
-                            <i class="${heartClass} text-[11px]"></i>
-                            <span class="comment-like-count text-[10px] text-slate-400 font-semibold">${parseInt(c.likes_count || 0)}</span>
-                        </button>
-                        <button onclick="event.stopPropagation(); window.startCommentReply('${escAttr(postId)}', '${escAttr(c.id)}', '${escAttr(c.user_name)}')" class="text-[10px] text-slate-400 font-semibold hover:text-amber-400 transition">
-                            Reply
-                        </button>
-                    </div>
+        <div class="flex gap-2 items-start text-left mt-2 ${indentClass}" id="comment-item-${escAttr(c.id)}">
+            <img src="${esc(c.user_avatar) || "https://ui-avatars.com/api/?name=U"}" class="w-6 h-6 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
+            <div class="bg-slate-800 rounded-2xl px-3 py-2 flex-1 border border-slate-700/20">
+                <div class="flex items-start justify-between gap-2">
+                    <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide">${esc(c.user_name)}</p>
+                    <button onclick="window.openCommentOptionsMenu('${escAttr(c.id)}', '${escAttr(postId)}', ${isOwn ? "true" : "false"})" class="text-slate-500 hover:text-white transition shrink-0 -mt-0.5 -mr-1 px-1.5 py-0.5" aria-label="More options">
+                        <i class="fas fa-ellipsis-vertical text-[11px]"></i>
+                    </button>
+                </div>
+                <p class="text-xs text-slate-200 mt-0.5">${esc(c.text)}</p>
+                <div class="flex items-center gap-3 mt-1.5">
+                    <button onclick="window.likeComment('${escAttr(c.id)}', this)" class="flex items-center gap-1">
+                        <i class="${heartClass} text-[11px]"></i>
+                        <span class="comment-like-count text-[10px] text-slate-400 font-semibold">${parseInt(c.likes_count || 0)}</span>
+                    </button>
+                    <button onclick="window.startCommentReply('${escAttr(postId)}', '${escAttr(c.id)}', '${escAttr(c.user_name)}')" class="text-[10px] text-slate-400 font-semibold hover:text-amber-400 transition">
+                        Reply
+                    </button>
                 </div>
             </div>
         </div>`;
@@ -2795,59 +2170,21 @@ window.toggleComments = async function (postId) {
     updateCommentCountUI(postId, count ?? (comments ? comments.length : 0));
 
     if (!comments || comments.length === 0) {
-      list.innerHTML = `
-                <div class="flex flex-col items-center justify-center text-center py-8 px-4">
-                    <i class="far fa-comment-dots text-2xl text-slate-700 mb-2"></i>
-                    <p class="text-xs text-slate-400 font-semibold">No comments yet</p>
-                    <p class="text-[10px] text-slate-600 mt-0.5">Be the first to say something</p>
-                </div>`;
+      list.innerHTML = `<p class="text-[10px] text-slate-600 italic py-2 pl-1">No comments yet. Start the chat!</p>`;
       return;
     }
 
-    // Top-level comments first, replies immediately after their parent.
-    // idKey() here matters for the same reason it does everywhere else
-    // in the app — comment ids are bigints from the DB, and comparing
-    // them without normalizing types silently drops replies from view.
+    // Top-level comments first, replies immediately after their parent
     const topLevel = comments.filter((c) => !c.parent_comment_id);
     const replies = comments.filter((c) => c.parent_comment_id);
-    const REPLY_PREVIEW_COUNT = 2;
 
     topLevel.forEach((c) => {
       list.innerHTML += renderCommentItem(c, postId);
-      const childReplies = replies.filter(
-        (r) => idKey(r.parent_comment_id) === idKey(c.id),
-      );
-      if (childReplies.length === 0) return;
-
-      if (childReplies.length <= REPLY_PREVIEW_COUNT) {
-        childReplies.forEach((r) => {
+      replies
+        .filter((r) => r.parent_comment_id === c.id)
+        .forEach((r) => {
           list.innerHTML += renderCommentItem(r, postId);
         });
-        return;
-      }
-
-      // Long threads start collapsed to a couple of replies with a
-      // "View N more replies" toggle, instead of always dumping every
-      // reply into view — keeps a busy thread scannable.
-      const groupId = `replies-${idKey(c.id)}`;
-      childReplies.slice(0, REPLY_PREVIEW_COUNT).forEach((r) => {
-        list.innerHTML += renderCommentItem(r, postId);
-      });
-      list.innerHTML += `
-                <button
-                    id="toggle-${groupId}"
-                    onclick="window._expandReplies('${escAttr(groupId)}')"
-                    class="ml-7 mt-1 text-[10px] text-amber-400/80 hover:text-amber-400 font-bold flex items-center gap-1.5"
-                >
-                    <span class="w-5 h-px bg-slate-700"></span>
-                    View ${childReplies.length - REPLY_PREVIEW_COUNT} more repl${childReplies.length - REPLY_PREVIEW_COUNT === 1 ? "y" : "ies"}
-                </button>
-                <div id="${groupId}" class="hidden">
-                    ${childReplies
-                      .slice(REPLY_PREVIEW_COUNT)
-                      .map((r) => renderCommentItem(r, postId))
-                      .join("")}
-                </div>`;
     });
   };
 
@@ -2902,40 +2239,6 @@ window._closeCommentSheet = function (postId, fromPop = false) {
 };
 
 // Global backdrop click dismisses whichever reel comment sheet is open.
-// Measures the ACTUAL rendered height of the bottom nav bar (icons +
-// labels + its own padding, all of which can vary by device font
-// rendering, safe-area insets, etc.) and stores it as a CSS custom
-// property so #posts-feed.reels-mode's bottom inset is always exactly
-// right instead of relying on a guessed pixel constant that can drift
-// out of sync with reality and leave a sliver of video peeking out from
-// under the nav. Re-measures on resize/orientation change since mobile
-// browsers frequently resize the visual viewport when their address bar
-// shows/hides, which can also change how much of the safe-area inset is
-// actually reserved.
-function measureBottomNavHeight() {
-  const nav = document.querySelector(".bottom-nav-container");
-  if (!nav) return;
-  const height = nav.getBoundingClientRect().height;
-  if (height > 0) {
-    document.documentElement.style.setProperty(
-      "--real-nav-height",
-      `${height}px`,
-    );
-  }
-}
-
-document.addEventListener("DOMContentLoaded", () => {
-  measureBottomNavHeight();
-  // A second pass shortly after load catches any late font-swap or
-  // layout shift that changed the nav's rendered height after the
-  // very first measurement.
-  setTimeout(measureBottomNavHeight, 300);
-});
-window.addEventListener("resize", measureBottomNavHeight);
-window.addEventListener("orientationchange", () =>
-  setTimeout(measureBottomNavHeight, 200),
-);
-
 document.addEventListener("DOMContentLoaded", () => {
   if (!document.getElementById("comments-global-backdrop")) {
     const backdrop = document.createElement("div");
@@ -3068,194 +2371,6 @@ window._runOptionsMenuAction = function (index) {
   }
 };
 
-// ─── BLOCKING ───────────────────────────────────────────────────────────────
-// Blocking a person hides their posts from your feed and hides/prevents
-// DMs with them — it does NOT delete anything they've already posted or
-// notify them in any way. Mirrors the `reports` table's fallback pattern:
-// if a `blocked_users` table isn't set up yet in Supabase, blocks are kept
-// in localStorage on this device so the feature still works end-to-end
-// (including unblocking) rather than being a dead end.
-//
-// Suggested table (create this in Supabase for the block to sync across
-// devices and actually filter server-side data other people send you):
-//   create table blocked_users (
-//     id bigint generated always as identity primary key,
-//     blocker_id uuid not null references auth.users(id),
-//     blocked_id uuid not null references auth.users(id),
-//     blocked_name text,
-//     created_at timestamptz not null default now(),
-//     unique (blocker_id, blocked_id)
-//   );
-//   alter table blocked_users enable row level security;
-//   create policy "read own blocks" on blocked_users for select using (auth.uid() = blocker_id);
-//   create policy "insert own blocks" on blocked_users for insert with check (auth.uid() = blocker_id);
-//   create policy "delete own blocks" on blocked_users for delete using (auth.uid() = blocker_id);
-const blockedUserIds = new Set(
-  JSON.parse(localStorage.getItem("campus_market_blocked_users") || "[]").map(
-    idKey,
-  ),
-);
-// Keeps display names alongside ids so the Blocked Users settings list has
-// something to show even before/without a `blocked_users` table (which
-// would otherwise require a join back to `profiles` to get a name).
-let blockedUserNames = JSON.parse(
-  localStorage.getItem("campus_market_blocked_names") || "{}",
-);
-
-function _persistBlockedLocally() {
-  localStorage.setItem(
-    "campus_market_blocked_users",
-    JSON.stringify([...blockedUserIds]),
-  );
-  localStorage.setItem(
-    "campus_market_blocked_names",
-    JSON.stringify(blockedUserNames),
-  );
-}
-
-// Pulls the signed-in person's block list from Supabase (if the table
-// exists) so blocks made on another device are respected here too, then
-// falls back to whatever's in localStorage if the table isn't there yet.
-async function syncBlockedUsers() {
-  if (!currentUserData) return;
-  try {
-    const { data, error } = await supabase
-      .from("blocked_users")
-      .select("blocked_id, blocked_name")
-      .eq("blocker_id", currentUserData.id);
-    if (error) throw error;
-
-    blockedUserIds.clear();
-    blockedUserNames = {};
-    (data || []).forEach((row) => {
-      const key = idKey(row.blocked_id);
-      blockedUserIds.add(key);
-      if (row.blocked_name) blockedUserNames[key] = row.blocked_name;
-    });
-    _persistBlockedLocally();
-  } catch (err) {
-    // No table yet (or RLS not set up) — silently keep using whatever
-    // is already in localStorage from a previous local-only block.
-    console.warn("Blocked-users sync skipped (using local list):", err);
-  }
-}
-
-window.blockUser = function (userId, userName = "this student") {
-  if (!currentUserData) {
-    showToast("Please sign in to block someone.");
-    return;
-  }
-  if (!userId) {
-    showToast("Couldn't identify this user — please try again.");
-    return;
-  }
-  if (idKey(userId) === idKey(currentUserData.id)) return;
-
-  showConfirmDialog({
-    title: `Block ${userName}?`,
-    message:
-      "You won't see their posts anymore, and neither of you can message the other. You can unblock them anytime from Campus Settings.",
-    confirmLabel: "Block",
-    danger: true,
-    onConfirm: async () => {
-      const key = idKey(userId);
-      blockedUserIds.add(key);
-      blockedUserNames[key] = userName;
-      _persistBlockedLocally();
-
-      // A blocked person's existing posts/threads are already on
-      // screen in some cases (feed cache, open inbox) — refresh
-      // whatever's currently visible so the block takes effect
-      // immediately instead of only on next reload.
-      try {
-        renderFeedFromCache();
-      } catch (_) {}
-      try {
-        if (document.getElementById("dms-content") && !activeConversationId)
-          renderInboxList();
-      } catch (_) {}
-      if (activeConversationPeer && idKey(activeConversationPeer.id) === key) {
-        window.closeDMThread();
-      }
-
-      try {
-        const { error } = await supabase.from("blocked_users").insert({
-          blocker_id: currentUserData.id,
-          blocked_id: userId,
-          blocked_name: userName,
-        });
-        if (error) throw error;
-      } catch (err) {
-        console.warn("Block insert failed, kept locally only:", err);
-      }
-
-      // Blocking someone also breaks any follow relationship between
-      // you two, in either direction — matches what people expect
-      // from blocking on other apps, and avoids the odd state of
-      // still "following" someone you've just blocked.
-      try {
-        await supabase
-          .from("follows")
-          .delete()
-          .eq("follower_id", currentUserData.id)
-          .eq("following_id", userId);
-        await supabase
-          .from("follows")
-          .delete()
-          .eq("follower_id", userId)
-          .eq("following_id", currentUserData.id);
-      } catch (err) {
-        console.warn("Follow cleanup on block failed:", err);
-      }
-
-      showToast(`${userName} is blocked.`);
-    },
-  });
-};
-
-window.unblockUser = function (userId, userName = "this student") {
-  const key = idKey(userId);
-
-  showConfirmDialog({
-    title: `Unblock ${userName}?`,
-    message:
-      "They'll be able to message you again and their posts will show up in your feed.",
-    confirmLabel: "Unblock",
-    danger: false,
-    onConfirm: async () => {
-      blockedUserIds.delete(key);
-      delete blockedUserNames[key];
-      _persistBlockedLocally();
-
-      try {
-        renderFeedFromCache();
-      } catch (_) {}
-      if (
-        document
-          .getElementById("info-sheet-overlay")
-          ?.classList.contains("sheet-open")
-      ) {
-        window.openInfoSheet("blocked");
-      }
-
-      try {
-        await supabase
-          .from("blocked_users")
-          .delete()
-          .eq("blocker_id", currentUserData.id)
-          .eq("blocked_id", userId);
-      } catch (err) {
-        console.warn(
-          "Unblock delete failed remotely, removed locally only:",
-          err,
-        );
-      }
-
-      showToast(`${userName} unblocked.`);
-    },
-  });
-};
-
 // ─── REPORTING ────────────────────────────────────────────────────────────────
 // Previously "Report" just showed a toast and did nothing at all — no
 // record was kept anywhere, so it was a dead end dressed up as a real
@@ -3303,14 +2418,9 @@ async function submitReport(targetType, targetId, reason = "unspecified") {
 }
 
 // Post options: only the owner gets a real "Delete listing"; everyone
-// else gets "Report" (persists — see submitReport above) and "Block
-// user" (hides this person's posts and DMs — see blockUser above).
-window.openPostOptionsMenu = function (
-  postId,
-  isOwn,
-  authorId = null,
-  authorName = "this student",
-) {
+// else gets a "Report" action that now actually persists (see
+// submitReport above) instead of being a dead-end toast.
+window.openPostOptionsMenu = function (postId, isOwn) {
   const items = isOwn
     ? [
         {
@@ -3326,25 +2436,12 @@ window.openPostOptionsMenu = function (
           icon: "fas fa-flag",
           action: () => submitReport("post", postId),
         },
-        { divider: true },
-        {
-          label: `Block ${authorName}`,
-          icon: "fas fa-user-slash",
-          danger: true,
-          action: () => window.blockUser(authorId, authorName),
-        },
       ];
   openOptionsMenu(items);
 };
 
-// Comment options: owner gets Delete; everyone else gets Report + Block.
-window.openCommentOptionsMenu = function (
-  commentId,
-  postId,
-  isOwn,
-  authorId = null,
-  authorName = "this student",
-) {
+// Comment options: owner gets Delete; everyone else gets Report.
+window.openCommentOptionsMenu = function (commentId, postId, isOwn) {
   const items = isOwn
     ? [
         {
@@ -3359,13 +2456,6 @@ window.openCommentOptionsMenu = function (
           label: "Report comment",
           icon: "fas fa-flag",
           action: () => submitReport("comment", commentId),
-        },
-        { divider: true },
-        {
-          label: `Block ${authorName}`,
-          icon: "fas fa-user-slash",
-          danger: true,
-          action: () => window.blockUser(authorId, authorName),
         },
       ];
   openOptionsMenu(items);
@@ -3438,13 +2528,13 @@ function renderFeedCard(id, d) {
 
   const deleteBlock = `
         <button
-            onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')"
+            onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? "true" : "false"})"
             class="post-options-trigger"
             aria-label="More options">
             <i class="fas fa-ellipsis-vertical"></i>
         </button>`;
 
-  const isLiked = likedPostIds.has(idKey(id));
+  const isLiked = likedPostIds.has(id);
   const heartClass = isLiked
     ? "fas fa-heart text-rose-500"
     : "far fa-heart text-slate-300";
@@ -3456,9 +2546,7 @@ function renderFeedCard(id, d) {
   const displayComments =
     commentCountCache[id] ?? parseInt(d.comments_count || 0);
 
-  const isAddedToCart = userCartList.some(
-    (item) => idKey(item.id) === idKey(id),
-  );
+  const isAddedToCart = userCartList.some((item) => item.id === id);
   const bookmarkClass = isAddedToCart
     ? "fas fa-bookmark text-amber-400"
     : "far fa-bookmark text-slate-300";
@@ -3468,9 +2556,8 @@ function renderFeedCard(id, d) {
   return `
     <div class="bg-slate-900 border-b border-slate-800/60 w-full" id="feed-card-${escAttr(id)}">
 
-
         <div class="flex items-center justify-between px-3 py-2.5">
-            <div class="feed-profile-trigger flex items-center gap-2.5 min-w-0 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
+            <div class="feed-profile-trigger flex items-center gap-2.5 min-w-0 cursor-pointer">
                 <img src="${esc(d.user_avatar) || "https://ui-avatars.com/api/?name=User"}" data-avatar-for="${escAttr(d.user_id)}" class="w-8 h-8 rounded-full border border-slate-700 object-cover shrink-0" alt="">
                 <div class="min-w-0">
                     <p class="text-[12px] font-bold text-white leading-tight truncate">${esc(d.user_name) || "Student"}</p>
@@ -3503,6 +2590,9 @@ function renderFeedCard(id, d) {
                 <button id="feed-cart-icon-${escAttr(id)}" onclick="window.toggleCartItem('${escAttr(id)}')" class="hover:text-amber-400 transition active:scale-90">
                     <i class="${bookmarkClass} text-xl"></i>
                 </button>
+                <button onclick="downloadMedia('${escAttr(mediaUrls[0] || "")}', '${escAttr(d.title)}')" class="text-slate-400 hover:text-purple-400 transition">
+                    <i class="fas fa-arrow-down text-base"></i>
+                </button>
             </div>
         </div>
 
@@ -3526,23 +2616,11 @@ function renderFeedCard(id, d) {
             <div class="flex items-center gap-1.5">
                 <input
                     type="text"
-                    inputmode="text"
-                    maxlength="500"
                     placeholder="Add a comment…"
-                    class="comment-input-field flex-1 bg-slate-800/80 border border-slate-700/50 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
-                    oninput="window._syncCommentSendState('${escAttr(id)}', this)"
+                    class="flex-1 bg-slate-800/80 border border-slate-700/50 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
                     onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
                 >
                 <button id="cancel-reply-${escAttr(id)}" onclick="window.cancelCommentReply('${escAttr(id)}')" class="hidden text-[10px] text-slate-500 hover:text-white px-1">✕</button>
-                <button
-                    id="comment-send-${escAttr(id)}"
-                    disabled
-                    onclick="window._submitFromSendBtn('${escAttr(id)}')"
-                    class="comment-send-btn shrink-0 w-8 h-8 rounded-xl bg-amber-400 text-black flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed active:scale-90"
-                    aria-label="Send comment"
-                >
-                    <i class="fas fa-paper-plane text-[11px]"></i>
-                </button>
             </div>
             <div id="comment-list-${escAttr(id)}" class="max-h-36 overflow-y-auto space-y-1.5 custom-scrollbar"></div>
         </div>
@@ -3565,9 +2643,7 @@ function renderProductGridCard(id, d) {
   }
 
   const isVideo = d.media_type === "video";
-  const isAddedToCart = userCartList.some(
-    (item) => idKey(item.id) === idKey(id),
-  );
+  const isAddedToCart = userCartList.some((item) => item.id === id);
   const bookmarkClass = isAddedToCart
     ? "fas fa-bookmark text-amber-400"
     : "far fa-bookmark text-white/80";
@@ -3577,8 +2653,7 @@ function renderProductGridCard(id, d) {
         <div class="relative aspect-square w-full bg-slate-950 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
             ${
               isVideo
-                ? `<video class="w-full h-full object-cover" muted loop playsinline preload="none" src="${esc(mediaUrl)}"></video>
-                   <div class="absolute top-2 left-2 w-6 h-6 rounded-full bg-black/50 flex items-center justify-center text-white text-[10px]"><i class="fas fa-play"></i></div>`
+                ? `<video class="w-full h-full object-cover" muted loop playsinline autoplay src="${esc(mediaUrl)}"></video>`
                 : `<img class="w-full h-full object-cover" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
             }
             <button
@@ -3609,13 +2684,16 @@ function renderProductGrid() {
 
   if (products.length === 0) {
     const isScopedEmpty =
-      currentCampusScope !== "everywhere" && currentUserData?.institution;
+      currentCampusScope === "mine" && currentUserData?.institution;
     feed.innerHTML = isScopedEmpty
       ? `
             <div class="text-center py-16 space-y-3 px-6">
                 <p class="text-4xl">📦</p>
-                <p class="font-bold text-white">No products found</p>
-                ${buildScopeWidenPrompt({ contextLabel: "products" })}
+                <p class="font-bold text-white">No products from ${esc(currentUserData.institution)} yet</p>
+                <p class="text-slate-500 text-xs">Be the first to list one, or check other campuses.</p>
+                <button onclick="window.toggleCampusScope()" class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
+                    Show Everywhere
+                </button>
             </div>`
       : `
             <div class="text-center py-16 space-y-3">
@@ -3630,17 +2708,9 @@ function renderProductGrid() {
     .map(({ id, data: d }) => renderProductGridCard(id, d))
     .join("")}</div>`;
 
-  const canWidenProducts =
-    currentCampusScope !== "everywhere" && currentUserData?.institution;
   feed.innerHTML += `
-        <div id="feed-load-more-sentinel" class="py-6 text-center space-y-2 px-6">
-            ${
-              feedHasMore
-                ? ""
-                : canWidenProducts
-                  ? buildScopeWidenPrompt({ contextLabel: "products" })
-                  : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
-            }
+        <div id="feed-load-more-sentinel" class="py-6">
+            ${feedHasMore ? "" : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`}
         </div>`;
   setupFeedLoadMoreObserver();
 }
@@ -3750,21 +2820,6 @@ function setupFeedCommentAutoClose() {
     feedCommentAutoCloseObserver = null;
   }
 
-  // Fix: root: null observes intersection against the whole BROWSER
-  // viewport — but #posts-feed (in its normal, non-reels mode) scrolls
-  // internally via its own overflow-y: scroll, not by moving the actual
-  // window. A card scrolling within that inner container can stay
-  // "intersecting the viewport" the entire time even as it visually
-  // scrolls out of sight inside #posts-feed, since the container
-  // element itself never moves relative to the window. That meant this
-  // observer could silently never fire for normal-feed scrolling, and
-  // an open comment panel would stay open (and visible, since it's
-  // just an inline block in the card's own DOM) as the person scrolled
-  // straight past it — reading exactly like a stuck dark panel
-  // covering part of the screen. Using #posts-feed itself as the
-  // intersection root fixes this at the source.
-  const feed = document.getElementById("posts-feed");
-
   feedCommentAutoCloseObserver = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
@@ -3782,7 +2837,7 @@ function setupFeedCommentAutoClose() {
         }
       });
     },
-    { root: feed, threshold: 0, rootMargin: "-20% 0px -20% 0px" },
+    { root: null, threshold: 0, rootMargin: "-20% 0px -20% 0px" },
   );
 
   document.querySelectorAll('[id^="feed-card-"]').forEach((card) => {
@@ -3803,43 +2858,23 @@ function setupReelsIntersectionObserver() {
     (entries) => {
       entries.forEach((entry) => {
         const video = entry.target.querySelector(".reel-video");
-        const reelId = entry.target.id.replace("reel-card-", "");
-
+        if (!video) return;
         if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
           // This reel is the one in view: play it, unmuted only if the
           // user hasn't explicitly muted it before (default unmuted
           // like TikTok, matching tap-to-mute behavior already wired).
-          if (video) {
-            document.querySelectorAll(".reel-video").forEach((v) => {
-              if (v !== video) {
-                v.pause();
-                v.muted = true;
-                v.currentTime = v.currentTime;
-              }
-            });
-            video.muted = video.dataset.userMuted === "true";
-            video.play().catch(() => {});
-          }
+          document.querySelectorAll(".reel-video").forEach((v) => {
+            if (v !== video) {
+              v.pause();
+              v.muted = true;
+              v.currentTime = v.currentTime;
+            }
+          });
+          video.muted = video.dataset.userMuted === "true";
+          video.play().catch(() => {});
         } else {
-          if (video) {
-            video.pause();
-            video.muted = true;
-          }
-
-          // Fix: scrolling to the next/previous reel previously left
-          // the last-opened reel's comment sheet (moved to
-          // document.body, fixed to viewport — see toggleComments)
-          // sitting open on screen, floating over whatever the person
-          // scrolled to next. It looked exactly like a stuck dark
-          // panel covering the bottom half of the screen, and the
-          // only way out was tapping its close button or re-tapping
-          // the comment icon to toggle it shut. Closing it here the
-          // moment its reel leaves view means it can never outlive
-          // the reel it belongs to.
-          const commentSheet = document.getElementById(`comments-${reelId}`);
-          if (commentSheet?.classList.contains("comments-open")) {
-            window._closeCommentSheet(reelId);
-          }
+          video.pause();
+          video.muted = true;
         }
       });
     },
@@ -3866,23 +2901,21 @@ function renderReelCard(id, d) {
   }
   const videoUrl = mediaUrls[0] || "";
 
-  const isLiked = likedPostIds.has(idKey(id));
+  const isLiked = likedPostIds.has(id);
   const heartClass = isLiked
     ? "fas fa-heart text-rose-500"
     : "far fa-heart text-white";
   const displayLikes = parseInt(d.likes_count || 0);
   const displayComments =
     commentCountCache[id] ?? parseInt(d.comments_count || 0);
-  const isAddedToCart = userCartList.some(
-    (item) => idKey(item.id) === idKey(id),
-  );
+  const isAddedToCart = userCartList.some((item) => item.id === id);
   const bookmarkClass = isAddedToCart
     ? "fas fa-bookmark text-amber-400"
     : "far fa-bookmark text-white";
   const isOwnPost = currentUserData && d.user_id === currentUserData.id;
 
   const deleteBlock = `
-        <button onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="reel-action-btn">
+        <button onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? "true" : "false"})" class="reel-action-btn">
             <i class="fas fa-ellipsis-vertical text-white text-lg"></i>
         </button>`;
 
@@ -3902,7 +2935,7 @@ function renderReelCard(id, d) {
                 <i class="far fa-comment text-2xl text-white"></i>
                 <span class="comment-count-${escAttr(id)} text-white text-[10px] font-bold mt-1">${displayComments}</span>
             </button>
-            <button id="reel-cart-icon-${escAttr(id)}" onclick="window.toggleCartItem('${escAttr(id)}')" class="reel-action-btn">
+            <button onclick="window.toggleCartItem('${escAttr(id)}')" class="reel-action-btn">
                 <i class="${bookmarkClass} text-2xl"></i>
             </button>
             <button onclick="sharePost('${escAttr(id)}', '${escAttr(d.title)}')" class="reel-action-btn">
@@ -3912,7 +2945,7 @@ function renderReelCard(id, d) {
         </div>
 
         <div class="reel-info">
-            <div class="feed-profile-trigger flex items-center gap-2 mb-1.5 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
+            <div class="flex items-center gap-2 mb-1.5">
                 <img src="${esc(d.user_avatar) || "https://ui-avatars.com/api/?name=User"}" data-avatar-for="${escAttr(d.user_id)}" class="w-8 h-8 rounded-full border border-white/40 object-cover shrink-0" alt="">
                 <p class="text-white font-bold text-sm leading-tight truncate">${esc(d.user_name) || "Student"}</p>
             </div>
@@ -3937,23 +2970,11 @@ function renderReelCard(id, d) {
             <div class="comments-input-row flex items-center gap-1.5">
                 <input
                     type="text"
-                    inputmode="text"
-                    maxlength="500"
                     placeholder="Add a comment…"
-                    class="comment-input-field flex-1 bg-white/10 border border-white/20 text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none focus:border-amber-400 transition"
-                    oninput="window._syncCommentSendState('${escAttr(id)}', this)"
+                    class="flex-1 bg-white/10 border border-white/20 text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none focus:border-amber-400 transition"
                     onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
                 >
                 <button id="cancel-reply-${escAttr(id)}" onclick="window.cancelCommentReply('${escAttr(id)}')" class="hidden text-[10px] text-white/60 hover:text-white px-1">✕</button>
-                <button
-                    id="comment-send-${escAttr(id)}"
-                    disabled
-                    onclick="window._submitFromSendBtn('${escAttr(id)}')"
-                    class="comment-send-btn shrink-0 w-8 h-8 rounded-xl bg-amber-400 text-black flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed active:scale-90"
-                    aria-label="Send comment"
-                >
-                    <i class="fas fa-paper-plane text-[11px]"></i>
-                </button>
             </div>
         </div>
     </div>`;
@@ -4013,16 +3034,8 @@ window.toggleCartItem = async function (postId) {
   }
 
   let postRecord = null;
-  // Fix: this used to compare p.id === postId directly — p.id is the raw
-  // bigint from the DB while postId is always a string (read out of an
-  // HTML onclick attribute), so this comparison almost never matched and
-  // the code fell through to a fragile DOM-scraping fallback below every
-  // single time. That's exactly why "Add to Cart"/bookmarking looked
-  // broken or inconsistent — it was silently guessing at the title/price
-  // from whatever text happened to be in the card's DOM instead of using
-  // the real post data.
   const found = allCachedPosts.find(
-    (p) => idKey(p.id) === idKey(postId) || idKey(p.data?.id) === idKey(postId),
+    (p) => p.id === postId || p.data?.id === postId,
   );
   if (found) postRecord = found.data ? found.data : found;
 
@@ -4049,9 +3062,7 @@ window.toggleCartItem = async function (postId) {
     return;
   }
 
-  const index = userCartList.findIndex(
-    (item) => idKey(item.id) === idKey(postId),
-  );
+  const index = userCartList.findIndex((item) => item.id === postId);
   const isRemoving = index > -1;
 
   // 1. Optimistic UI: Handle local mutations instantly
@@ -4093,20 +3104,6 @@ window.toggleCartItem = async function (postId) {
       : "far fa-bookmark text-white/80 text-xs";
   }
 
-  // Fix: the reel card's bookmark button had no id at all, so tapping
-  // it on the Reels tab correctly saved the item (toast showed, data
-  // persisted) but the icon on screen never visually flipped between
-  // outline/filled — it silently "worked" with zero visible feedback,
-  // which read as the feature not doing anything.
-  const reelIcon = document
-    .getElementById(`reel-cart-icon-${postId}`)
-    ?.querySelector("i");
-  if (reelIcon) {
-    reelIcon.className = !isRemoving
-      ? "fas fa-bookmark text-amber-400 text-2xl"
-      : "far fa-bookmark text-white text-2xl";
-  }
-
   const detailBtn = document.getElementById(`detail-cart-btn-${postId}`);
   if (detailBtn) {
     const labelText = detailBtn.querySelector(".cart-btn-label");
@@ -4126,81 +3123,20 @@ window.toggleCartItem = async function (postId) {
   }
 
   // 2. Background Sync with Supabase saves table
-  //
-  // Fix: a failure here used to only log a console warning — the bookmark
-  // icon, the toast, and userCartList had already all been updated
-  // optimistically above with no way to know the write never actually
-  // reached the database. The item would then look "added" until the
-  // next reload silently re-synced against the real `saves` table and
-  // made it vanish again — exactly the "Add to Cart isn't working"
-  // symptom. Now a real failure rolls back every part of the optimistic
-  // update and tells the person plainly, instead of drifting silently.
   try {
     if (isRemoving) {
-      const { error } = await supabase
+      await supabase
         .from("saves")
         .delete()
         .eq("user_id", currentUserData.id)
         .eq("post_id", postId);
-      if (error) throw error;
     } else {
-      const { error } = await supabase
+      await supabase
         .from("saves")
         .insert({ user_id: currentUserData.id, post_id: postId });
-      // A duplicate save (e.g. a fast double-tap) isn't a real
-      // failure — the row already exists, which is what we wanted.
-      const isDuplicate = error && error.code === "23505";
-      if (error && !isDuplicate) throw error;
     }
   } catch (err) {
-    console.error("Saves table sync failed — reverting bookmark UI:", err);
-
-    if (isRemoving) {
-      userCartList.splice(index, 0, {
-        id: postId,
-        title: postRecord.title,
-        price: postRecord.price,
-        media_url: postRecord.media_url || "",
-        media_type: postRecord.media_type || "image",
-        institution: postRecord.institution || "",
-        type: postRecord.type || "product",
-        user_name: postRecord.user_name || "Anonymous",
-      });
-    } else {
-      const revertIndex = userCartList.findIndex(
-        (item) => idKey(item.id) === idKey(postId),
-      );
-      if (revertIndex > -1) userCartList.splice(revertIndex, 1);
-    }
-    localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
-
-    const revertedIsSaved = isRemoving; // if we were removing, it's back to saved; if we were adding, it's back to unsaved
-    if (feedIcon)
-      feedIcon.className = revertedIsSaved
-        ? "fas fa-bookmark text-amber-400"
-        : "far fa-bookmark text-slate-300";
-    if (gridBtn)
-      gridBtn.className = revertedIsSaved
-        ? "fas fa-bookmark text-amber-400 text-xs"
-        : "far fa-bookmark text-white/80 text-xs";
-    if (reelIcon)
-      reelIcon.className = revertedIsSaved
-        ? "fas fa-bookmark text-amber-400 text-2xl"
-        : "far fa-bookmark text-white text-2xl";
-    if (detailBtn) {
-      const labelText = detailBtn.querySelector(".cart-btn-label");
-      if (labelText)
-        labelText.textContent = revertedIsSaved
-          ? "✓ Added to Chart"
-          : "Add to Chart List";
-    }
-    if (
-      !document.getElementById("cart-container")?.classList.contains("hidden")
-    ) {
-      renderCartListView();
-    }
-
-    showToast("Couldn't save that — please try again.");
+    console.warn("Saves table background sync failed/delayed:", err);
   }
 };
 
@@ -4319,75 +3255,6 @@ async function refreshFollowButtonStates() {
   }
 }
 
-// Shared delete implementation: removes the post's media from storage,
-// deletes the DB row (scoped to the current user so someone can't delete
-// another person's post even by guessing an id), and cleans up any local
-// caches that reference it. Used by both the single-post delete (options
-// menu) and the "My Gigs & Posts" bulk delete, so there's exactly one
-// place that knows how to fully remove a post.
-async function _deletePostById(postId) {
-  const { data: currentPost, error: fetchErr } = await supabase
-    .from("posts")
-    .select("media_url")
-    .eq("id", postId)
-    .single();
-
-  if (fetchErr) throw fetchErr;
-
-  if (currentPost?.media_url) {
-    const targets = currentPost.media_url.startsWith("[")
-      ? JSON.parse(currentPost.media_url)
-      : [currentPost.media_url];
-    for (const url of targets) {
-      const pathParts = url.split("/storage/v1/object/public/posts/");
-      const storagePath = pathParts[1];
-      if (storagePath)
-        await supabase.storage.from("posts").remove([storagePath]);
-    }
-  }
-
-  // Fix: deleting a post used to leave every like, comment, and save
-  // pointing at it behind as an orphaned row — nothing here ever
-  // cleaned those up. A like row surviving its post's deletion is
-  // exactly what caused a confusing false "this is already liked"
-  // duplicate-key conflict later, on an entirely unrelated test,
-  // since the row was still sitting in the likes table with no post
-  // left to belong to. Comments on the deleted post need their own
-  // comment_likes cleared first (comment_likes references comments,
-  // not posts, so it isn't reachable by post_id directly).
-  const { data: doomedComments } = await supabase
-    .from("comments")
-    .select("id")
-    .eq("post_id", idKey(postId));
-  if (doomedComments?.length) {
-    const commentIds = doomedComments.map((c) => c.id);
-    await supabase.from("comment_likes").delete().in("comment_id", commentIds);
-  }
-  await supabase.from("comments").delete().eq("post_id", idKey(postId));
-  await supabase.from("likes").delete().eq("post_id", postId);
-  await supabase.from("saves").delete().eq("post_id", postId);
-
-  const { error: dbDeleteErr } = await supabase
-    .from("posts")
-    .delete()
-    .eq("id", postId)
-    .eq("user_id", currentUserData.id);
-
-  if (dbDeleteErr) throw dbDeleteErr;
-
-  const cartIndex = userCartList.findIndex(
-    (item) => idKey(item.id) === idKey(postId),
-  );
-  if (cartIndex > -1) {
-    userCartList.splice(cartIndex, 1);
-    localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
-  }
-
-  allCachedPosts = allCachedPosts.filter(
-    (item) => idKey(item.id) !== idKey(postId),
-  );
-}
-
 window.deletePost = function (postId) {
   if (!currentUserData) return;
 
@@ -4399,8 +3266,45 @@ window.deletePost = function (postId) {
     danger: true,
     onConfirm: async () => {
       try {
-        await _deletePostById(postId);
+        const { data: currentPost, error: fetchErr } = await supabase
+          .from("posts")
+          .select("media_url")
+          .eq("id", postId)
+          .single();
+
+        if (fetchErr) throw fetchErr;
+
+        if (currentPost?.media_url) {
+          const targets = currentPost.media_url.startsWith("[")
+            ? JSON.parse(currentPost.media_url)
+            : [currentPost.media_url];
+          for (const url of targets) {
+            const pathParts = url.split("/storage/v1/object/public/posts/");
+            const storagePath = pathParts[1];
+            if (storagePath)
+              await supabase.storage.from("posts").remove([storagePath]);
+          }
+        }
+
+        const { error: dbDeleteErr } = await supabase
+          .from("posts")
+          .delete()
+          .eq("id", postId)
+          .eq("user_id", currentUserData.id);
+
+        if (dbDeleteErr) throw dbDeleteErr;
+
+        const cartIndex = userCartList.findIndex((item) => item.id === postId);
+        if (cartIndex > -1) {
+          userCartList.splice(cartIndex, 1);
+          localStorage.setItem(
+            "campus_market_cart",
+            JSON.stringify(userCartList),
+          );
+        }
+
         showToast("Post deleted successfully! ✓");
+        allCachedPosts = allCachedPosts.filter((item) => item.id !== postId);
         renderFeedFromCache();
       } catch (err) {
         console.error("Error deleting post from database:", err);
@@ -4531,19 +3435,6 @@ function renderFeedFromCache() {
   const feed = document.getElementById("posts-feed");
   if (!feed) return;
 
-  // Blocking a user should hide their posts everywhere in the app —
-  // rather than patching every fetch site that populates
-  // allCachedPosts (subscribeFeed, loadNextFeedPage, loadFollowingFeed,
-  // loadNextFollowingPage, search, etc.) individually and risking one
-  // being missed later, this single filter runs right before anything
-  // paints to the screen, so it's a guarantee regardless of which path
-  // put a post in the cache.
-  if (blockedUserIds.size > 0) {
-    allCachedPosts = allCachedPosts.filter(
-      ({ data: d }) => !blockedUserIds.has(idKey(d.user_id)),
-    );
-  }
-
   // Reels tab: full-bleed vertical video feed, TikTok-style
   if (currentFeedType === "reels") {
     renderReelsFeed();
@@ -4567,15 +3458,18 @@ function renderFeedFromCache() {
 
   if (allCachedPosts.length === 0) {
     const isScopedEmpty =
-      currentCampusScope !== "everywhere" &&
+      currentCampusScope === "mine" &&
       currentUserData?.institution &&
       currentFeedType !== "following";
     feed.innerHTML = isScopedEmpty
       ? `
             <div class="text-center py-16 space-y-3 px-6">
                 <p class="text-4xl">📭</p>
-                <p class="font-bold text-white">No posts found</p>
-                ${buildScopeWidenPrompt({ contextLabel: "posts" })}
+                <p class="font-bold text-white">No posts from ${esc(currentUserData.institution)} yet</p>
+                <p class="text-slate-500 text-xs">Be the first to post, or check what's happening at other campuses.</p>
+                <button onclick="window.toggleCampusScope()" class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
+                    Show Everywhere
+                </button>
             </div>`
       : `
             <div class="text-center py-16 space-y-3">
@@ -4594,25 +3488,15 @@ function renderFeedFromCache() {
   });
 
   // Infinite scroll: a sentinel div at the end of the list triggers
-  // loading the next page once it scrolls into view. Once there's
-  // genuinely nothing left, shows a "want to see more?" prompt offering
-  // to widen to the next scope tier (institution -> region ->
-  // everywhere) rather than just silently stopping with no feedback —
-  // unless already at 'everywhere' or on a tab scope doesn't apply to
-  // (Following), in which case it's just a plain "caught up" message
-  // since there's nowhere wider left to offer.
-  const canWiden =
-    currentCampusScope !== "everywhere" &&
-    currentUserData?.institution &&
-    currentFeedType !== "following";
+  // loading the next page once it scrolls into view. Shows a small
+  // "you're all caught up" message once there's genuinely nothing left,
+  // instead of just silently stopping with no feedback.
   feed.innerHTML += `
-        <div id="feed-load-more-sentinel" class="py-6 text-center space-y-2 px-6">
+        <div id="feed-load-more-sentinel" class="py-6">
             ${
               feedHasMore
                 ? ""
-                : canWiden
-                  ? buildScopeWidenPrompt({ contextLabel: "posts" })
-                  : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
+                : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
             }
         </div>`;
 
@@ -4659,11 +3543,6 @@ window.filterFeed = function (type, clickedBtn = null) {
 
   const previousType = currentFeedType;
   currentFeedType = type;
-
-  // Remember the active tab so a refresh lands back where the person
-  // actually was (Reels, Products, Services, Following...) instead of
-  // always resetting to "All".
-  localStorage.setItem("campus_market_feed_tab", type);
 
   // Leaving Reels: stop any playing video audio immediately.
   if (previousType === "reels" && type !== "reels") {
@@ -4725,15 +3604,8 @@ window.filterFeed = function (type, clickedBtn = null) {
       q = q.eq("type", type);
     }
 
-    // Three-tier scoping: institution first (tightest), then region
-    // (wider), then no filter at all for 'everywhere'. Falls through
-    // gracefully to a looser tier if the person's profile is somehow
-    // missing the field a tighter tier needs (e.g. no region saved),
-    // rather than silently returning nothing.
-    if (currentCampusScope === "institution" && currentUserData?.institution) {
+    if (currentCampusScope === "mine" && currentUserData?.institution) {
       q = q.eq("institution", currentUserData.institution);
-    } else if (currentCampusScope === "region" && currentUserData?.region) {
-      q = q.eq("region", currentUserData.region);
     }
 
     return q;
@@ -4747,43 +3619,6 @@ window.filterFeed = function (type, clickedBtn = null) {
 // feed. Hidden entirely on Reels/Following (scope doesn't apply there)
 // and for anyone without a saved institution yet (nothing to scope by —
 // they'd just see an empty toggle that does nothing).
-// Builds the right "want to see more?" prompt HTML for whichever scope
-// tier is currently active, so the same institution -> region ->
-// everywhere logic doesn't need to be duplicated across every place a
-// feed can run dry (empty-from-zero states AND the scroll-exhaustion
-// prompt at the bottom of a populated feed both call this).
-function buildScopeWidenPrompt({ contextLabel = "posts" } = {}) {
-  if (currentCampusScope === "institution") {
-    const hasRegion = !!currentUserData?.region;
-    return `
-            <p class="text-slate-500 text-xs">
-                No more ${contextLabel} from ${esc(currentUserData.institution)}${hasRegion ? ` — want to see ${esc(currentUserData.region)}?` : " — want to see everywhere?"}
-            </p>
-            <button
-                onclick="window.setCampusScope('${hasRegion ? "region" : "everywhere"}')"
-                class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
-            >
-                ${hasRegion ? `Show ${esc(currentUserData.region)}` : "Show Everywhere"}
-            </button>`;
-  }
-
-  if (currentCampusScope === "region") {
-    return `
-            <p class="text-slate-500 text-xs">
-                No more ${contextLabel} from ${esc(currentUserData.region)} — want to see everywhere?
-            </p>
-            <button
-                onclick="window.setCampusScope('everywhere')"
-                class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
-            >
-                Show Everywhere
-            </button>`;
-  }
-
-  // Already at 'everywhere' — there's nothing wider to offer.
-  return `<p class="text-slate-500 text-xs">That's everything for now.</p>`;
-}
-
 function updateCampusScopeBanner() {
   const banner = document.getElementById("campus-scope-banner");
   const label = document.getElementById("campus-scope-label");
@@ -4798,71 +3633,28 @@ function updateCampusScopeBanner() {
   }
 
   banner.classList.remove("hidden");
-  if (currentCampusScope === "institution") {
-    label.textContent = currentUserData.institution;
-  } else if (currentCampusScope === "region" && currentUserData?.region) {
-    label.textContent = currentUserData.region;
-  } else {
-    label.textContent = "Everywhere";
-  }
+  label.textContent =
+    currentCampusScope === "mine" ? currentUserData.institution : "Everywhere";
 }
 
-// Cycles institution -> region -> everywhere -> back to institution,
-// persists the choice, and re-runs the current tab's query with the new
-// scope applied. Skips the region step entirely for anyone without a
-// saved region (goes straight institution -> everywhere for them, same
-// as the old two-tier behavior), so this never traps someone in a tier
-// their profile can't actually support.
+// Toggles between "mine" (the person's own institution) and "everywhere"
+// (the full nationwide feed), persists the choice, and re-runs the
+// current tab's query with the new scope applied.
 window.toggleCampusScope = function () {
   if (!currentUserData?.institution) return;
 
-  const hasRegion = !!currentUserData?.region;
-  if (currentCampusScope === "institution") {
-    currentCampusScope = hasRegion ? "region" : "everywhere";
-  } else if (currentCampusScope === "region") {
-    currentCampusScope = "everywhere";
-  } else {
-    currentCampusScope = "institution";
-  }
+  currentCampusScope = currentCampusScope === "mine" ? "everywhere" : "mine";
   localStorage.setItem("campus_market_scope", currentCampusScope);
 
-  const scopeLabel =
-    currentCampusScope === "institution"
-      ? currentUserData.institution
-      : currentCampusScope === "region"
-        ? currentUserData.region
-        : "everywhere";
-  showToast(`Showing posts from ${scopeLabel}`);
+  showToast(
+    currentCampusScope === "mine"
+      ? `Showing posts from ${currentUserData.institution}`
+      : "Showing posts from everywhere",
+  );
 
   // Re-apply the current tab with the new scope. Reels/Following
   // aren't affected by scope, so nothing to re-run there — but this
   // button is hidden on those tabs anyway.
-  if (["all", "product", "skill"].includes(currentFeedType)) {
-    const clickedBtn = document.querySelector(".feed-tab-btn.text-amber-400");
-    window.filterFeed(currentFeedType, clickedBtn);
-  }
-};
-
-// Jumps directly to a specific scope tier (used by the end-of-feed
-// "want to see more?" prompt, which offers a specific next tier rather
-// than cycling blindly) — same persistence/re-run behavior as the
-// regular toggle, just targeting an explicit tier instead of advancing
-// by one step.
-window.setCampusScope = function (scope) {
-  if (!_validCampusScopes.includes(scope)) return;
-  if (!currentUserData?.institution) return;
-
-  currentCampusScope = scope;
-  localStorage.setItem("campus_market_scope", currentCampusScope);
-
-  const scopeLabel =
-    scope === "institution"
-      ? currentUserData.institution
-      : scope === "region"
-        ? currentUserData.region || "your region"
-        : "everywhere";
-  showToast(`Showing posts from ${scopeLabel}`);
-
   if (["all", "product", "skill"].includes(currentFeedType)) {
     const clickedBtn = document.querySelector(".feed-tab-btn.text-amber-400");
     window.filterFeed(currentFeedType, clickedBtn);
@@ -4897,15 +3689,11 @@ async function _runSearchImmediate(term) {
 
   const trimmedTerm = term.trim();
   if (!trimmedTerm) {
-    window._searchNavInProgress = true;
     window.navigateTo("feed");
-    window._searchNavInProgress = false;
     return;
   }
 
-  window._searchNavInProgress = true;
   window.navigateTo("explore");
-  window._searchNavInProgress = false;
   resultsEl.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Searching Campus...</div>`;
   const lower = trimmedTerm.toLowerCase();
 
@@ -5197,19 +3985,6 @@ async function loadProfileStats() {
     setEl("profile-following-count", followingRes.count || 0);
     setEl("profile-posts-count", postsCount);
 
-    // The grid is about to be rebuilt from scratch, so any select-mode
-    // state (checkmarks, the toolbar) referring to the old tiles would
-    // otherwise be left dangling.
-    if (typeof window.exitGridSelectMode === "function")
-      window.exitGridSelectMode();
-
-    // Cached so shareSelectedGridItems (multi-select Share) can build
-    // a real summary of title/price for whatever's selected without
-    // a redundant fetch — this data only otherwise existed inside
-    // this function's own closure and was gone the moment it returned.
-    _ownProfilePostsById.clear();
-    postsRes.data?.forEach((d) => _ownProfilePostsById.set(idKey(d.id), d));
-
     const grid = document.getElementById("profile-grid");
     if (grid) {
       grid.innerHTML = "";
@@ -5256,17 +4031,6 @@ function populateAccountSettings() {
   }
   if (emailInput) {
     emailInput.value = currentUserData.email || "";
-  }
-
-  const stripName = document.getElementById("settingsCampusStripName");
-  const stripInst = document.getElementById("settingsCampusStripInst");
-  if (stripName)
-    stripName.textContent =
-      metadata.full_name || currentUserData.email || "Campus Account";
-  if (stripInst) {
-    stripInst.textContent = currentUserData.institution
-      ? `${currentUserData.institution}${currentUserData.region ? " · " + currentUserData.region : ""}`
-      : "Set your institution below";
   }
 }
 
@@ -5347,257 +4111,6 @@ function saveAppSettings(partial) {
 // Exposed so other parts of the app (media pipeline, video observers) can
 // check the current preference without re-reading localStorage directly.
 window.getAppSettings = getAppSettings;
-
-// ─── INFO SHEET: Privacy Policy / Help & Support / Blocked Users ────────────
-// Replaces the old "Coming soon" toast placeholders with real, readable
-// content. Blocked Users is honest about the fact that there's no
-// block-a-person feature wired up yet (it would need its own table + RLS
-// + feed filtering — a separate feature, not a settings-page fix) rather
-// than faking a list or silently doing nothing.
-const INFO_SHEET_CONTENT = {
-  privacy: {
-    title: "Privacy Policy",
-    render: () => `
-            <h4>What we collect</h4>
-            <p>Your name, email, institution, and region come from sign-in and onboarding so listings and gigs can be matched to your campus. Anything you post — photos, videos, descriptions, prices, messages — is stored so it can be shown to other students.</p>
-            <h4>How it's used</h4>
-            <p>Your posts and profile are shown to other students on your campus (or nationwide, if you switch off campus scope). Direct messages are only visible to you and the other person in the conversation.</p>
-            <h4>What we don't do</h4>
-            <p>CampusMarket doesn't sell your data to advertisers, and doesn't share your contact details with anyone outside a conversation you've started yourself.</p>
-            <h4>Your choices</h4>
-            <p>You can edit your display name and campus at any time from this Settings tab. Deleting your account removes your posts, comments, and profile information.</p>
-            <h4>Questions</h4>
-            <p>Reach out through Help & Support above if you'd like more detail on anything here.</p>
-        `,
-  },
-  help: {
-    title: "Help & Support",
-    render: () => `
-            <h4>Buying or selling</h4>
-            <p>Tap Contact Seller on any listing to open a direct message with the person who posted it. Prices and availability are set by the student posting, not by CampusMarket.</p>
-            <h4>Reporting a problem</h4>
-            <p>Open the listing or message you want to report and use the options menu (⋯) to send a report. A team member reviews every report.</p>
-            <h4>Account issues</h4>
-            <p>If you're locked out or something looks wrong with your profile, email the address below with your registered email and a short description.</p>
-            <h4>Data usage</h4>
-            <p>Turn on Data Saver Mode above to load lower-quality media and use less data on campus Wi-Fi or mobile data.</p>
-            <h4>Contact</h4>
-            <p><a href="mailto:support@campusmarket.app" class="text-amber-400 font-bold">support@campusmarket.app</a></p>
-        `,
-  },
-  blocked: {
-    title: "Blocked Users",
-    render: () => {
-      const ids = [...blockedUserIds];
-      if (ids.length === 0) {
-        return `
-                    <div class="info-sheet-empty">
-                        <i class="fas fa-user-shield text-3xl mb-3 text-slate-600"></i>
-                        <p class="text-slate-300 font-bold text-sm mb-1">No blocked users</p>
-                        <p class="text-xs max-w-[240px] leading-relaxed">When you block someone from a post, comment, or chat, they'll show up here so you can unblock them anytime.</p>
-                    </div>
-                `;
-      }
-      return ids
-        .map((id) => {
-          const name = blockedUserNames[id] || "Student";
-          const fallbackAvatar = `https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(name)}`;
-          return `
-                    <div class="blocked-user-row">
-                        <img src="${fallbackAvatar}" alt="">
-                        <p class="text-white text-sm font-bold flex-1 truncate">${esc(name)}</p>
-                        <button
-                            onclick="window.unblockUser('${escAttr(id)}', '${escAttr(name)}')"
-                            class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-[11px] font-black uppercase tracking-wider px-3 py-1.5 rounded-lg shrink-0 active:scale-95 transition"
-                        >
-                            Unblock
-                        </button>
-                    </div>
-                `;
-        })
-        .join("");
-    },
-  },
-};
-
-window.openInfoSheet = function (key) {
-  const entry = INFO_SHEET_CONTENT[key];
-  const overlay = document.getElementById("info-sheet-overlay");
-  const titleEl = document.getElementById("info-sheet-title");
-  const bodyEl = document.getElementById("info-sheet-body");
-  if (!entry || !overlay || !titleEl || !bodyEl) return;
-
-  titleEl.textContent = entry.title;
-  bodyEl.innerHTML = entry.render();
-  bodyEl.scrollTop = 0;
-  overlay.classList.add("sheet-open");
-  pushUiState("info-sheet", () => window.closeInfoSheet(true));
-};
-
-window.closeInfoSheet = function (fromPop = false) {
-  document.getElementById("info-sheet-overlay")?.classList.remove("sheet-open");
-  if (!fromPop) popUiState("info-sheet");
-};
-
-// ─── PUBLIC PROFILE (someone else's page, opened from a post) ──────────────
-// A read-only view of another student: avatar, name, institution, follower/
-// following/post counts, their public posts grid, and Follow + Message
-// actions. Deliberately separate from #profile-container (the signed-in
-// person's OWN profile, with editable settings/account deletion/etc.) —
-// this only ever fetches and displays someone else's public data.
-window.openPublicProfile = async function (userId) {
-  if (!userId) return;
-  const overlay = document.getElementById("public-profile-overlay");
-  const titleEl = document.getElementById("public-profile-title");
-  const bodyEl = document.getElementById("public-profile-body");
-  if (!overlay || !bodyEl) return;
-
-  titleEl.textContent = "Profile";
-  bodyEl.innerHTML = `
-        <div class="flex items-center justify-center py-20">
-            <i class="fas fa-circle-notch fa-spin text-slate-600 text-xl"></i>
-        </div>`;
-  overlay.classList.add("sheet-open");
-  pushUiState("public-profile", () => window.closePublicProfile(true));
-
-  try {
-    const [followersRes, followingRes, postsRes, isFollowingRes] =
-      await Promise.all([
-        supabase
-          .from("follows")
-          .select("", { count: "exact", head: true })
-          .eq("following_id", userId),
-        supabase
-          .from("follows")
-          .select("", { count: "exact", head: true })
-          .eq("follower_id", userId),
-        supabase
-          .from("posts")
-          .select("id, title, media_url, media_type, price")
-          .eq("user_id", userId)
-          .order("created_at", { ascending: false }),
-        currentUserData
-          ? supabase
-              .from("follows")
-              .select("id")
-              .eq("follower_id", currentUserData.id)
-              .eq("following_id", userId)
-              .maybeSingle()
-          : Promise.resolve({ data: null }),
-      ]);
-
-    // The name/institution/avatar aren't stored anywhere queryable by
-    // user id alone (profiles are keyed by auth, not duplicated per
-    // post) — the most recent post from this person is a reliable,
-    // already-available source for display info without needing a
-    // separate profiles-table fetch.
-    const latestPost = postsRes.data?.[0];
-    const displayName =
-      latestPost?.user_name || blockedUserNames[idKey(userId)] || "Student";
-    const avatarUrl =
-      latestPost?.user_avatar ||
-      `https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(displayName)}`;
-    const institution = latestPost?.institution || "";
-    const isFollowing = !!isFollowingRes?.data;
-    const isBlocked = blockedUserIds.has(idKey(userId));
-
-    titleEl.textContent = displayName;
-
-    bodyEl.innerHTML = `
-            <div class="public-profile-header">
-                <img src="${esc(avatarUrl)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(displayName)}'" alt="">
-                <h3 class="text-white font-black text-lg mt-3">${esc(displayName)}</h3>
-                ${institution ? `<p class="text-slate-500 text-xs mt-1">${esc(institution)}</p>` : ""}
-            </div>
-
-            <div class="public-profile-stats">
-                <div><span class="stat-value">${postsRes.data?.length || 0}</span><span class="stat-label">Posts</span></div>
-                <div><span class="stat-value">${followersRes.count || 0}</span><span class="stat-label">Followers</span></div>
-                <div><span class="stat-value">${followingRes.count || 0}</span><span class="stat-label">Following</span></div>
-            </div>
-
-            <div class="flex gap-2 mb-5">
-                <button
-                    onclick="toggleFollow('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}'); window._refreshPublicProfileFollowState('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}')"
-                    class="flex-1 font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 ${isFollowing ? "bg-slate-800 border border-slate-700 text-white" : "bg-amber-400 text-black"}"
-                >
-                    ${isFollowing ? "Following" : "+ Follow"}
-                </button>
-                <button
-                    onclick="window.openDM('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}')"
-                    class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
-                >
-                    Message
-                </button>
-            </div>
-
-            <div class="grid grid-cols-3 gap-2 mb-6">
-                ${
-                  postsRes.data && postsRes.data.length > 0
-                    ? postsRes.data
-                        .map((d) => renderPublicGridItem(d.id, d))
-                        .join("")
-                    : `<div class="col-span-3 info-sheet-empty !py-10">
-                             <i class="fas fa-box-open text-2xl mb-2 text-slate-600"></i>
-                             <p class="text-xs">No posts yet</p>
-                           </div>`
-                }
-            </div>
-
-            ${
-              !isBlocked
-                ? `
-                <button
-                    onclick="window.blockUser('${escAttr(userId)}', '${escAttr(displayName)}')"
-                    class="w-full text-red-400 text-xs font-bold uppercase tracking-wider py-3"
-                >
-                    <i class="fas fa-user-slash mr-1.5"></i> Block ${esc(displayName)}
-                </button>
-            `
-                : ""
-            }
-        `;
-  } catch (err) {
-    console.error("Public profile load error:", err);
-    bodyEl.innerHTML = `
-            <div class="info-sheet-empty">
-                <i class="fas fa-triangle-exclamation text-2xl mb-2 text-slate-600"></i>
-                <p class="text-xs">Couldn't load this profile. Please try again.</p>
-            </div>`;
-  }
-};
-
-// Re-renders just the Follow button's label/style after toggling, without
-// re-fetching the whole profile — toggleFollow already updated the DB by
-// the time this runs immediately after it in the onclick above.
-window._refreshPublicProfileFollowState = async function (
-  userId,
-  displayName,
-  avatarUrl,
-) {
-  if (!currentUserData) return;
-  const { data } = await supabase
-    .from("follows")
-    .select("id")
-    .eq("follower_id", currentUserData.id)
-    .eq("following_id", userId)
-    .maybeSingle();
-  const isFollowing = !!data;
-  const btn = document.querySelector(
-    '#public-profile-body button[onclick*="toggleFollow"]',
-  );
-  if (btn) {
-    btn.textContent = isFollowing ? "Following" : "+ Follow";
-    btn.className = `flex-1 font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 ${isFollowing ? "bg-slate-800 border border-slate-700 text-white" : "bg-amber-400 text-black"}`;
-  }
-};
-
-window.closePublicProfile = function (fromPop = false) {
-  document
-    .getElementById("public-profile-overlay")
-    ?.classList.remove("sheet-open");
-  if (!fromPop) popUiState("public-profile");
-};
 
 function initSettingsToggles() {
   const settings = getAppSettings();
@@ -5748,8 +4261,6 @@ document
 
       const locationEl = document.getElementById("profile-ui-location");
       if (locationEl) locationEl.textContent = `${institution} · ${region}`;
-      const stripInst = document.getElementById("settingsCampusStripInst");
-      if (stripInst) stripInst.textContent = `${institution} · ${region}`;
       showToast("Settings updated ✓");
 
       // Institution may have just changed — refresh the scope banner
@@ -5837,14 +4348,7 @@ function renderInboxList() {
   const content = document.getElementById("dms-content");
   if (!content) return;
 
-  // A blocked person's existing conversation is hidden from the inbox
-  // entirely (not deleted — unblocking brings it right back) so it
-  // reads as "gone" rather than sitting there unusable.
-  const visibleConversations = conversationsCache.filter(
-    (conv) => !blockedUserIds.has(idKey(dmPeerInfo(conv).id)),
-  );
-
-  if (visibleConversations.length === 0) {
+  if (conversationsCache.length === 0) {
     content.innerHTML = `
             <div class="text-center py-16 space-y-3 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
                 <p class="text-3xl">💬</p>
@@ -5854,7 +4358,7 @@ function renderInboxList() {
     return;
   }
 
-  content.innerHTML = `<div class="divide-y divide-slate-800/60 bg-slate-900 border border-slate-800/60 rounded-3xl overflow-hidden">${visibleConversations
+  content.innerHTML = `<div class="divide-y divide-slate-800/60 bg-slate-900 border border-slate-800/60 rounded-3xl overflow-hidden">${conversationsCache
     .map((conv) => {
       const peer = dmPeerInfo(conv);
       const isUnread = isConversationUnread(conv);
@@ -5866,7 +4370,7 @@ function renderInboxList() {
             <button
                 onclick="window.openDM('${escAttr(peer.id)}','${escAttr(peer.name)}','${escAttr(peer.avatar)}')"
                 class="w-full flex items-center gap-3 p-3.5 text-left active:bg-slate-800/60 transition">
-                <img src="${esc(peer.avatar)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(peer.name)}'" class="w-12 h-12 rounded-full object-cover border border-slate-700 shrink-0" alt="">
+                <img src="${esc(peer.avatar)}" class="w-12 h-12 rounded-full object-cover border border-slate-700 shrink-0" alt="">
                 <div class="min-w-0 flex-1">
                     <div class="flex items-center justify-between gap-2">
                         <p class="text-white font-bold text-sm truncate">${esc(peer.name)}</p>
@@ -5925,13 +4429,6 @@ window.openDM = async function (
   }
   if (otherUserId === currentUserData.id) return;
 
-  if (blockedUserIds.has(idKey(otherUserId))) {
-    showToast(
-      "You've blocked this person. Unblock them in Campus Settings to message again.",
-    );
-    return;
-  }
-
   window.navigateTo("dms");
   const content = document.getElementById("dms-content");
   if (!content) return;
@@ -5989,19 +4486,7 @@ window.openDM = async function (
     });
   } catch (err) {
     console.error("Open DM error:", err);
-    // If the SQL patch from blocked_users_rls.sql is applied,
-    // get_or_create_conversation raises when either person has
-    // blocked the other — this surfaces that clearly instead of a
-    // generic failure, covering the case where THEY blocked YOU
-    // (which the local blockedUserIds check earlier in this function
-    // has no way to know about).
-    const isBlockRejection =
-      /block/i.test(err?.message || "") || err?.code === "42501";
-    content.innerHTML = `<div class="p-12 text-center text-red-400 text-xs">${
-      isBlockRejection
-        ? "This chat isn't available."
-        : "Couldn't open this chat. Try again."
-    }</div>`;
+    content.innerHTML = `<div class="p-12 text-center text-red-400 text-xs">Couldn't open this chat. Try again.</div>`;
   }
 };
 
@@ -6031,35 +4516,17 @@ async function sendPostSharePreview(postContext) {
   if (container) {
     const emptyState = container.querySelector("p");
     if (emptyState && container.children.length === 1) container.innerHTML = "";
-
-    const newLabel = formatDateSeparator(optimisticMsg.created_at);
-    if (newLabel !== container.dataset.lastDateLabel) {
-      container.innerHTML += renderDateSeparator(newLabel);
-    }
-    container.dataset.lastDateLabel = newLabel;
-
     container.innerHTML += renderChatBubble(optimisticMsg);
     container.scrollTop = container.scrollHeight;
   }
 
   try {
-    // Same duplication-bug fix as sendChatMessage: capture the real
-    // inserted row id so the realtime echo of this exact message can
-    // be recognized and skipped instead of rendered a second time.
-    const { data: inserted, error: msgErr } = await supabase
-      .from("messages")
-      .insert({
-        conversation_id: activeConversationId,
-        sender_id: currentUserData.id,
-        text,
-      })
-      .select("id")
-      .single();
+    const { error: msgErr } = await supabase.from("messages").insert({
+      conversation_id: activeConversationId,
+      sender_id: currentUserData.id,
+      text,
+    });
     if (msgErr) throw msgErr;
-
-    if (container && inserted?.id) {
-      container.dataset.lastOptimisticId = String(inserted.id);
-    }
 
     await supabase
       .from("conversations")
@@ -6086,60 +4553,28 @@ function renderChatThreadShell() {
                 <button onclick="window.closeDMThread()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 text-slate-300 active:scale-90 transition shrink-0">
                     <i class="fas fa-arrow-left text-xs"></i>
                 </button>
-                <img src="${esc(activeConversationPeer.avatar)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(activeConversationPeer.name)}'" class="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0" alt="">
+                <img src="${esc(activeConversationPeer.avatar)}" class="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0" alt="">
                 <div class="min-w-0">
                     <p class="text-white font-bold text-sm truncate">${esc(activeConversationPeer.name)}</p>
                     <p id="chat-typing-status" class="text-amber-400 text-[10px] font-semibold h-3.5"></p>
                 </div>
             </div>
             <div id="chat-messages" class="flex-1 overflow-y-auto space-y-2 px-1 pb-2"></div>
-            <div class="flex items-end gap-2 pt-2 border-t border-slate-800/60">
-                <textarea
+            <div class="flex items-center gap-2 pt-2 border-t border-slate-800/60">
+                <input
+                    type="text"
                     id="chat-input"
-                    rows="1"
-                    maxlength="1000"
                     placeholder="Message..."
-                    class="flex-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-2xl px-4 py-2.5 focus:outline-none focus:border-amber-400 transition resize-none max-h-32 leading-normal"
-                    style="field-sizing: content;"
-                    onkeydown="window._handleChatInputKeydown(event)"
-                    oninput="window._handleTypingInput(); window._autoGrowChatInput(this); window._syncChatSendState(this)"
-                ></textarea>
-                <button
-                    id="chat-send-btn"
-                    disabled
-                    onclick="window.sendChatMessage()"
-                    class="w-10 h-10 flex items-center justify-center bg-amber-400 text-black rounded-full active:scale-90 transition shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
+                    class="flex-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-full px-4 py-2.5 focus:outline-none focus:border-amber-400 transition"
+                    onkeydown="if(event.key==='Enter') window.sendChatMessage()"
+                    oninput="window._handleTypingInput()"
                 >
+                <button onclick="window.sendChatMessage()" class="w-10 h-10 flex items-center justify-center bg-amber-400 text-black rounded-full active:scale-90 transition shrink-0">
                     <i class="fas fa-paper-plane text-xs"></i>
                 </button>
             </div>
         </div>`;
 }
-
-// Enter sends the message (matching every mainstream chat app); Shift+Enter
-// inserts a normal newline instead, so a longer message can actually be
-// composed across multiple lines without accidentally sending mid-thought.
-window._handleChatInputKeydown = function (event) {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    window.sendChatMessage();
-  }
-};
-
-// Grows the textarea with its content up to the max-h-32 CSS cap (beyond
-// that it scrolls internally instead of pushing the rest of the layout
-// around) — the `field-sizing: content` inline style above handles this
-// automatically in browsers that support it, but this is the fallback for
-// ones that don't.
-window._autoGrowChatInput = function (el) {
-  el.style.height = "auto";
-  el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
-};
-
-window._syncChatSendState = function (el) {
-  const sendBtn = document.getElementById("chat-send-btn");
-  if (sendBtn) sendBtn.disabled = el.value.trim().length === 0;
-};
 
 function renderChatBubble(msg) {
   const isMe = msg.sender_id === currentUserData.id;
@@ -6159,71 +4594,13 @@ function renderChatBubble(msg) {
     }
   }
 
-  // Read receipts: a single check for sent-but-not-yet-read, a double
-  // check for read — only shown on your OWN messages (seeing whether
-  // the other person read your own message), matching WhatsApp/iMessage
-  // conventions. `read` already existed as a column being written to
-  // (see loadAndRenderMessages' mark-as-read call) but was never
-  // actually displayed anywhere.
-  const receiptHtml = isMe
-    ? `<i class="fas ${msg.read ? "fa-check-double text-blue-400" : "fa-check text-black/40"} text-[10px] ml-1"></i>`
-    : "";
-
   return `
-        <div class="flex ${isMe ? "justify-end" : "justify-start"}" data-message-id="${escAttr(idKey(msg.id))}">
+        <div class="flex ${isMe ? "justify-end" : "justify-start"}">
             <div class="max-w-[75%] ${isMe ? "bg-amber-400 text-black" : "bg-slate-800 text-white"} rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} px-3.5 py-2">
                 <p class="text-sm break-words">${esc(msg.text)}</p>
-                <p class="text-[9px] ${isMe ? "text-black/50" : "text-slate-400"} mt-1 text-right flex items-center justify-end gap-0.5">
-                    ${esc(formatClockTime(msg.created_at))}${receiptHtml}
-                </p>
+                <p class="text-[9px] ${isMe ? "text-black/50" : "text-slate-400"} mt-1 text-right">${esc(formatClockTime(msg.created_at))}</p>
             </div>
         </div>`;
-}
-
-// A short date separator ("Today", "Yesterday", or e.g. "Jul 3") shown
-// once between groups of messages from different calendar days —
-// standard in every mainstream chat app, and without it a long
-// conversation just reads as one undifferentiated wall of bubbles with
-// no sense of when anything happened.
-function formatDateSeparator(dateStr) {
-  const msgDate = new Date(dateStr);
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(today.getDate() - 1);
-
-  const isSameDay = (a, b) => a.toDateString() === b.toDateString();
-  if (isSameDay(msgDate, today)) return "Today";
-  if (isSameDay(msgDate, yesterday)) return "Yesterday";
-  return msgDate.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function renderDateSeparator(label) {
-  return `
-        <div class="flex items-center gap-3 my-3">
-            <span class="flex-1 h-px bg-slate-800"></span>
-            <span class="text-[9px] text-slate-500 font-bold uppercase tracking-widest shrink-0">${esc(label)}</span>
-            <span class="flex-1 h-px bg-slate-800"></span>
-        </div>`;
-}
-
-// Renders a full message list with date separators inserted between
-// days — shared by the initial load and anywhere else a full list needs
-// re-rendering, so date-grouping logic lives in exactly one place.
-function renderMessageListWithDateSeparators(messages) {
-  let html = "";
-  let lastDateLabel = null;
-  messages.forEach((msg) => {
-    const label = formatDateSeparator(msg.created_at);
-    if (label !== lastDateLabel) {
-      html += renderDateSeparator(label);
-      lastDateLabel = label;
-    }
-    html += renderChatBubble(msg);
-  });
-  return html;
 }
 
 function renderPostSharePreviewBubble(payload, isMe, createdAt) {
@@ -6271,10 +4648,7 @@ async function loadAndRenderMessages() {
     if (!messages || messages.length === 0) {
       container.innerHTML = `<p class="text-center text-[11px] text-slate-500 py-6">No messages yet. Say hello 👋</p>`;
     } else {
-      container.innerHTML = renderMessageListWithDateSeparators(messages);
-      container.dataset.lastDateLabel = formatDateSeparator(
-        messages[messages.length - 1].created_at,
-      );
+      container.innerHTML = messages.map(renderChatBubble).join("");
       container.scrollTop = container.scrollHeight;
     }
 
@@ -6300,16 +4674,6 @@ function subscribeActiveThreadMessages() {
   }
   if (!activeConversationId) return;
 
-  // Tracks message ids already rendered in this thread session, as a
-  // second safety net alongside container.dataset.lastOptimisticId — in
-  // the rare case where the realtime INSERT event arrives before
-  // sendChatMessage's own insert().select() round-trip has finished
-  // (both are separate network round-trips racing each other), relying
-  // on dataset.lastOptimisticId alone could still momentarily miss and
-  // double-render. This set makes the render idempotent regardless of
-  // which one wins the race.
-  const renderedMessageIds = new Set();
-
   currentMessagesChan = supabase
     .channel(`messages-live-${activeConversationId}`)
     .on(
@@ -6323,31 +4687,12 @@ function subscribeActiveThreadMessages() {
       (payload) => {
         const container = document.getElementById("chat-messages");
         if (!container) return;
-
-        const incomingId = String(payload.new.id);
-        if (
-          container.dataset.lastOptimisticId === incomingId ||
-          renderedMessageIds.has(incomingId)
-        )
+        // Avoid duplicating our own optimistically-rendered bubble
+        if (container.dataset.lastOptimisticId === String(payload.new.id))
           return;
-        renderedMessageIds.add(incomingId);
-
         const emptyState = container.querySelector("p");
         if (emptyState && container.children.length === 1)
           container.innerHTML = "";
-
-        // If this message falls on a different day than the last one
-        // currently rendered, insert a date separator first — keeps a
-        // long-running open thread correctly grouped by day even
-        // without a full reload.
-        const newLabel = formatDateSeparator(payload.new.created_at);
-        const lastBubble = container.lastElementChild;
-        const lastLabel = container.dataset.lastDateLabel;
-        if (newLabel !== lastLabel) {
-          container.innerHTML += renderDateSeparator(newLabel);
-        }
-        container.dataset.lastDateLabel = newLabel;
-
         container.innerHTML += renderChatBubble(payload.new);
         container.scrollTop = container.scrollHeight;
 
@@ -6355,32 +4700,6 @@ function subscribeActiveThreadMessages() {
         // typing — clear the indicator right away instead of waiting
         // for their typing-stopped broadcast.
         setTypingStatusVisible(false);
-      },
-    )
-    // Fix/addition: `read` was already being written to (see the
-    // mark-as-read call in loadAndRenderMessages) but nothing ever
-    // reflected that back into the UI in real time — your own sent
-    // message would keep showing a single check forever unless you
-    // fully reloaded the thread. Listening for UPDATE events lets the
-    // check flip to double the instant the other person actually
-    // opens the conversation and their mark-as-read query runs.
-    .on(
-      "postgres_changes",
-      {
-        event: "UPDATE",
-        schema: "public",
-        table: "messages",
-        filter: `conversation_id=eq.${activeConversationId}`,
-      },
-      (payload) => {
-        if (!payload.new.read) return;
-        const bubble = document.querySelector(
-          `[data-message-id="${CSS.escape(String(payload.new.id))}"] i.fa-check`,
-        );
-        if (bubble) {
-          bubble.classList.remove("fa-check", "text-black/40");
-          bubble.classList.add("fa-check-double", "text-blue-400");
-        }
       },
     )
     .subscribe();
@@ -6442,20 +4761,7 @@ window.sendChatMessage = async function () {
   const text = input?.value.trim();
   if (!text || !activeConversationId || !currentUserData) return;
 
-  // Backstop: normally openDM() already refuses to open a blocked
-  // person's thread at all, but this covers the edge case of blocking
-  // someone while already inside a conversation with them.
-  if (
-    activeConversationPeer &&
-    blockedUserIds.has(idKey(activeConversationPeer.id))
-  ) {
-    showToast("You've blocked this person and can't send messages to them.");
-    return;
-  }
-
   input.value = "";
-  input.style.height = "auto";
-  window._syncChatSendState(input);
   clearTimeout(typingStopTimer);
   currentTypingChan?.track({ typing: false });
 
@@ -6470,40 +4776,17 @@ window.sendChatMessage = async function () {
   if (container) {
     const emptyState = container.querySelector("p");
     if (emptyState && container.children.length === 1) container.innerHTML = "";
-
-    const newLabel = formatDateSeparator(optimisticMsg.created_at);
-    if (newLabel !== container.dataset.lastDateLabel) {
-      container.innerHTML += renderDateSeparator(newLabel);
-    }
-    container.dataset.lastDateLabel = newLabel;
-
     container.innerHTML += renderChatBubble(optimisticMsg);
     container.scrollTop = container.scrollHeight;
   }
 
   try {
-    // Fix: this insert's returned row id was never captured anywhere,
-    // so the realtime handler's dedup check (comparing
-    // container.dataset.lastOptimisticId against the incoming row's
-    // id) could never actually match — every message you sent would
-    // render once optimistically here, then render AGAIN a moment
-    // later when Supabase's realtime INSERT event echoed it back,
-    // showing every outgoing message duplicated. Selecting the
-    // inserted row back and recording its real id closes that gap.
-    const { data: inserted, error: msgErr } = await supabase
-      .from("messages")
-      .insert({
-        conversation_id: activeConversationId,
-        sender_id: currentUserData.id,
-        text,
-      })
-      .select("id")
-      .single();
+    const { error: msgErr } = await supabase.from("messages").insert({
+      conversation_id: activeConversationId,
+      sender_id: currentUserData.id,
+      text,
+    });
     if (msgErr) throw msgErr;
-
-    if (container && inserted?.id) {
-      container.dataset.lastOptimisticId = String(inserted.id);
-    }
 
     await supabase
       .from("conversations")
@@ -6515,16 +4798,7 @@ window.sendChatMessage = async function () {
       .eq("id", activeConversationId);
   } catch (err) {
     console.error("Send message error:", err);
-    // Same block-detection reasoning as postComment above — this is
-    // how we find out the OTHER person blocked you (your local
-    // blockedUserIds only knows about blocks you made yourself).
-    const isBlockRejection =
-      err?.code === "42501" || /row-level security/i.test(err?.message || "");
-    showToast(
-      isBlockRejection
-        ? "This message couldn't be delivered."
-        : "Message failed to send.",
-    );
+    showToast("Message failed to send.");
   }
 };
 
@@ -6627,75 +4901,42 @@ if (activeAuthChange) {
       document.getElementById("dms-auth-gate")?.classList.add("hidden");
       document.getElementById("dms-content")?.classList.remove("hidden");
 
-      // Fix: the very first feed load after sign-in/refresh always
-      // rebuilt an "all" style filter and ignored whichever tab
-      // (Reels, Products, Services, Following) the person had open
-      // before — so a refresh silently bounced everyone back to
-      // "All". currentFeedType is now rehydrated from
-      // localStorage before this runs (see the top of the file),
-      // so this restores the same tab, re-applies campus scoping
-      // consistently via the shared filterFeed() path, and syncs
-      // the active-tab button styling and Reels header mode to
-      // match.
-      // filterFeed() guards on isAuthInitialized being true, so it
-      // must be set before we call it here (it's normally set at
-      // the end of this handler) — otherwise this restore call
-      // would silently no-op on first load.
-      isAuthInitialized = true;
+      // Fix: the very first feed load after sign-in previously
+      // called subscribeFeed() with no filter at all, bypassing
+      // campus scoping entirely — so someone with "My Campus"
+      // selected would still see everyone nationwide until they
+      // manually clicked a tab. Now the initial load applies the
+      // same "all" tab base filter (including campus scope) that
+      // filterFeed('all', ...) would.
+      updateCampusScopeBanner();
+      subscribeFeed((q) => {
+        if (currentCampusScope === "mine" && currentUserData?.institution) {
+          return q.eq("institution", currentUserData.institution);
+        }
+        return q;
+      });
+      try {
+        loadProfileStats();
+      } catch (_) {}
+      _initAvatarLongPress();
 
-      // Everything below this point is expensive and/or has
-      // side effects that don't belong happening more than once
-      // per page load (subscribing to realtime channels, syncing
-      // the likes table, fetching profile stats) — see
-      // hasBootedFeedForSession's declaration for why this guard
-      // exists. The lightweight UI sync above (avatar/name text,
-      // onboarding check) stays unguarded since re-running it
-      // harmlessly on a repeat auth event is fine.
-      if (!hasBootedFeedForSession) {
-        hasBootedFeedForSession = true;
-
-        // Load the block list before the first render so a blocked
-        // person's posts never flash on screen for a moment before
-        // being filtered out.
-        await syncBlockedUsers();
-
-        updateCampusScopeBanner();
-        const savedTabBtn = document.querySelector(
-          `.feed-tab-btn[onclick*="'${currentFeedType}'"]`,
-        );
-        window.filterFeed(currentFeedType, savedTabBtn);
-        try {
-          loadProfileStats();
-        } catch (_) {}
-        _initAvatarLongPress();
-
-        // Populate the DMs unread badge immediately on sign-in,
-        // rather than only after the person happens to open the DMs
-        // tab for the first time.
-        try {
-          const { data: convData } = await supabase
-            .from("conversations")
-            .select("*")
-            .or(
-              `user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`,
-            )
-            .order("last_message_at", { ascending: false });
-          conversationsCache = convData || [];
-          updateDmUnreadBadge();
-        } catch (_) {}
-      }
+      // Populate the DMs unread badge immediately on sign-in,
+      // rather than only after the person happens to open the DMs
+      // tab for the first time.
+      try {
+        const { data: convData } = await supabase
+          .from("conversations")
+          .select("*")
+          .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
+          .order("last_message_at", { ascending: false });
+        conversationsCache = convData || [];
+        updateDmUnreadBadge();
+      } catch (_) {}
     } else {
       unsubscribeFeed();
       unsubscribeConversations();
       unsubscribeActiveThread();
       if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
-
-      // Reset so a genuine sign-out followed by signing back in
-      // (within the same page load, not just a refresh) correctly
-      // re-runs the one-time boot sequence for the new session,
-      // instead of being permanently skipped because it already
-      // ran once for the previous person.
-      hasBootedFeedForSession = false;
 
       if (authProfileNav) {
         authProfileNav.innerHTML = `<i class="fas fa-sign-in-alt text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>`;
@@ -6766,28 +5007,13 @@ window.addEventListener(
 );
 
 // ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ──────────────────────────────
-// Fix: this previously called navigateTo('profile') unconditionally,
-// which always opens the SIGNED-IN person's own profile tab — tapping
-// someone else's name/avatar on a post had nowhere real to go and just
-// silently reopened your own profile every time. Now it reads which
-// person was actually tapped (data-user-id, added to every profile
-// trigger element) and opens a real, separate public-profile view for
-// them — own profile stays reachable only via the bottom nav, as before.
 document.body.addEventListener("click", (event) => {
   const profileClickTarget = event.target.closest(".feed-profile-trigger");
   if (profileClickTarget) {
     event.preventDefault();
     event.stopPropagation();
-    const userId = profileClickTarget.dataset.userId;
-    if (!userId) return;
-
-    // Tapping your OWN name/avatar on your own post should go to your
-    // real profile tab (with editable settings etc.), not the
-    // read-only public view meant for other people.
-    if (currentUserData && idKey(userId) === idKey(currentUserData.id)) {
+    if (typeof window.navigateTo === "function") {
       window.navigateTo("profile");
-    } else if (typeof window.openPublicProfile === "function") {
-      window.openPublicProfile(userId);
     }
   }
 });
@@ -6843,13 +5069,8 @@ window.addEventListener("online", () => {
         if (currentFeedType !== "all" && currentFeedType !== "product") {
           q = q.eq("type", currentFeedType);
         }
-        if (
-          currentCampusScope === "institution" &&
-          currentUserData?.institution
-        ) {
+        if (currentCampusScope === "mine" && currentUserData?.institution) {
           q = q.eq("institution", currentUserData.institution);
-        } else if (currentCampusScope === "region" && currentUserData?.region) {
-          q = q.eq("region", currentUserData.region);
         }
         return q;
       };
@@ -6907,43 +5128,6 @@ function wireCarouselCounters(postId) {
 }
 
 // ─── UTILITY FUNCTION: RENDER PROFILE GRID ITEM ─────────────────────────────
-// Simple, view-only grid tile — used for the public profile view (someone
-// ELSE's posts). Deliberately has none of renderGridItem's press-and-hold
-// multi-select wiring, since selecting-to-delete only ever makes sense on
-// your own profile; a tap just opens the post like anywhere else in the
-// app.
-function renderPublicGridItem(id, post) {
-  const d = post.data ? post.data : post;
-  let mediaUrl = "";
-  if (d.media_url) {
-    if (d.media_url.startsWith("[")) {
-      try {
-        mediaUrl = JSON.parse(d.media_url)[0];
-      } catch (_) {
-        mediaUrl = d.media_url;
-      }
-    } else {
-      mediaUrl = d.media_url;
-    }
-  }
-  const fallbackImage =
-    "https://images.unsplash.com/photo-1563013544-824ae1d704d3?w=300";
-  const isVideo = d.media_type === "video";
-
-  return `
-    <div class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition" onclick="openDetail('${escAttr(idKey(id))}')">
-        ${
-          isVideo
-            ? `<video class="w-full h-full object-cover" src="${mediaUrl}" preload="none" muted playsinline></video>
-               <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
-            : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
-        }
-        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
-            <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
-        </div>
-    </div>`;
-}
-
 function renderGridItem(id, post) {
   const d = post.data ? post.data : post;
 
@@ -6963,29 +5147,12 @@ function renderGridItem(id, post) {
   const fallbackImage =
     "https://images.unsplash.com/photo-1563013544-824ae1d704d3?w=300";
   const isVideo = d.media_type === "video";
-  const key = idKey(id);
 
-  // Press-and-hold enters multi-select mode and selects this tile; a
-  // normal tap either opens the post (outside select mode) or toggles
-  // selection (while in select mode). onmousedown/touchstart start a
-  // timer; onmouseup/touchend/mouseleave/touchmove-far all cancel it so
-  // a normal tap or a scroll gesture never gets mistaken for a hold.
   return `
-    <div
-        class="grid-tile relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition"
-        data-post-id="${escAttr(key)}"
-        onclick="window._handleGridTileTap('${escAttr(key)}')"
-        onmousedown="window._startGridTileHold('${escAttr(key)}')"
-        onmouseup="window._cancelGridTileHold()"
-        onmouseleave="window._cancelGridTileHold()"
-        ontouchstart="window._startGridTileHold('${escAttr(key)}')"
-        ontouchend="window._cancelGridTileHold()"
-        ontouchmove="window._cancelGridTileHold()"
-    >
-        <span class="grid-tile-check"><i class="fas fa-check"></i></span>
+    <div onclick="openDetail('${id}')" class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition">
         ${
           isVideo
-            ? `<video class="w-full h-full object-cover" src="${mediaUrl}" preload="none" muted playsinline></video>
+            ? `<video class="w-full h-full object-cover" src="${mediaUrl}"></video>
                <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
             : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
         }
@@ -6994,177 +5161,3 @@ function renderGridItem(id, post) {
         </div>
     </div>`;
 }
-
-// ─── GRID MULTI-SELECT (press-and-hold to select, then bulk delete) ────────
-let _gridHoldTimer = null;
-let _gridSelectMode = false;
-let _gridJustLongPressed = false;
-const _gridSelectedIds = new Set();
-// id -> {title, price, ...} for the signed-in person's OWN posts, refreshed
-// every time loadProfileStats() rebuilds the grid. Lets shareSelectedGridItems
-// build a real summary of what's selected without a redundant fetch.
-const _ownProfilePostsById = new Map();
-
-window._startGridTileHold = function (id) {
-  clearTimeout(_gridHoldTimer);
-  _gridHoldTimer = setTimeout(() => {
-    _gridHoldTimer = null;
-    _gridJustLongPressed = true;
-    if (!_gridSelectMode) window._enterGridSelectMode();
-    window._toggleGridTileSelection(id);
-  }, 500);
-};
-
-window._cancelGridTileHold = function () {
-  clearTimeout(_gridHoldTimer);
-  _gridHoldTimer = null;
-};
-
-// The click handler fires after mouseup/touchend regardless of whether a
-// hold just happened. If the hold timer already fired (long press), skip
-// the tap behavior entirely — the hold handler already selected the tile,
-// and the browser-generated click right after a long-press shouldn't
-// toggle selection a second time or open the post.
-window._handleGridTileTap = function (id) {
-  if (_gridJustLongPressed) {
-    _gridJustLongPressed = false;
-    return;
-  }
-  if (_gridSelectMode) {
-    window._toggleGridTileSelection(id);
-  } else {
-    openDetail(id);
-  }
-};
-
-window._enterGridSelectMode = function () {
-  _gridSelectMode = true;
-  // Fix: the toolbar markup starts with class="hidden", and this app's
-  // .hidden rule is `display: none !important` — adding
-  // select-mode-active alone was never enough to show it, since a
-  // non-!important display:flex rule can't override an !important
-  // display:none. The toolbar itself was invisible the whole time even
-  // though tiles correctly flipped into select mode (checkmarks use a
-  // separate, non-!important CSS rule, so those worked fine and made it
-  // look like only "half" of select mode was broken).
-  const toolbar = document.getElementById("grid-select-toolbar");
-  toolbar?.classList.remove("hidden");
-  toolbar?.classList.add("select-mode-active");
-  document
-    .querySelectorAll(".grid-tile")
-    .forEach((t) => t.classList.add("select-mode"));
-};
-
-window.exitGridSelectMode = function () {
-  _gridSelectMode = false;
-  _gridSelectedIds.clear();
-  const toolbar = document.getElementById("grid-select-toolbar");
-  toolbar?.classList.add("hidden");
-  toolbar?.classList.remove("select-mode-active");
-  document.querySelectorAll(".grid-tile").forEach((t) => {
-    t.classList.remove("select-mode", "tile-selected");
-  });
-  _updateGridSelectCount();
-};
-
-window._toggleGridTileSelection = function (id) {
-  const key = idKey(id);
-  const tile = document.querySelector(
-    `.grid-tile[data-post-id="${CSS.escape(key)}"]`,
-  );
-  if (_gridSelectedIds.has(key)) {
-    _gridSelectedIds.delete(key);
-    tile?.classList.remove("tile-selected");
-  } else {
-    _gridSelectedIds.add(key);
-    tile?.classList.add("tile-selected");
-  }
-  _updateGridSelectCount();
-
-  // Selecting the last remaining tile back down to zero doesn't force
-  // an exit — the toolbar (with Cancel) stays up so the person can
-  // keep selecting more without re-triggering a long-press.
-};
-
-function _updateGridSelectCount() {
-  const countEl = document.getElementById("grid-select-count");
-  if (countEl) countEl.textContent = `${_gridSelectedIds.size} selected`;
-}
-
-// Shares a combined summary of whatever's currently selected in the "My
-// Gigs & Posts" multi-select grid. There's no per-post deep link anywhere
-// in this single-page app to share individually (sharePost, the existing
-// single-post share, already just links back to the app's root URL with
-// a text description) — so for multiple selected posts, this builds one
-// combined text listing (title + price per item) and shares/copies that,
-// which is the honest equivalent given what the app actually has to share.
-window.shareSelectedGridItems = function () {
-  if (_gridSelectedIds.size === 0) {
-    showToast("Select at least one post first.");
-    return;
-  }
-
-  const ids = [..._gridSelectedIds];
-  const items = ids.map((id) => _ownProfilePostsById.get(id)).filter(Boolean);
-
-  if (items.length === 0) {
-    showToast("Couldn't find details for the selected posts.");
-    return;
-  }
-
-  const lines = items.map((d) => `• ${d.title} — GH₵${d.price ?? 0}`);
-  const intro =
-    items.length === 1
-      ? `Check out "${items[0].title}" on CampusMarket!`
-      : `Check out these ${items.length} listings on CampusMarket!`;
-  const shareText = `${intro}\n${lines.join("\n")}\n${window.location.href}`;
-
-  if (navigator.share) {
-    navigator.share({ title: "CampusMarket", text: shareText }).catch(() => {});
-  } else {
-    navigator.clipboard?.writeText(shareText);
-    showToast("Link copied to clipboard!");
-  }
-};
-
-window.deleteSelectedGridItems = function () {
-  if (_gridSelectedIds.size === 0) {
-    showToast("Select at least one post first.");
-    return;
-  }
-
-  const ids = [..._gridSelectedIds];
-  showConfirmDialog({
-    title: `Delete ${ids.length} post${ids.length > 1 ? "s" : ""}?`,
-    message:
-      "This can't be undone. The selected posts, their media, and any likes or comments on them will be permanently removed.",
-    confirmLabel: "Delete",
-    danger: true,
-    onConfirm: async () => {
-      showToast(`Deleting ${ids.length} post${ids.length > 1 ? "s" : ""}…`);
-      let failCount = 0;
-
-      for (const id of ids) {
-        try {
-          await _deletePostById(id);
-        } catch (err) {
-          console.error("Bulk delete error for post", id, err);
-          failCount++;
-        }
-      }
-
-      window.exitGridSelectMode();
-      try {
-        loadProfileStats();
-      } catch (_) {}
-
-      if (failCount === 0) {
-        showToast(`${ids.length} post${ids.length > 1 ? "s" : ""} deleted`);
-      } else {
-        showToast(
-          `Deleted ${ids.length - failCount} of ${ids.length} — some failed, please try again`,
-        );
-      }
-    },
-  });
-};
