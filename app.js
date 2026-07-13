@@ -36,19 +36,6 @@ let currentFeedChan     = null;
 let currentCommentsChan = null;
 let allCachedPosts      = [];
 let isAuthInitialized   = false;
-// Fix: Supabase's onAuthStateChange can legitimately fire more than once
-// for a single page load (INITIAL_SESSION, then SIGNED_IN, sometimes
-// TOKEN_REFRESHED) — every one of those events used to re-run the ENTIRE
-// signed-in boot sequence below (re-fetching the profile, re-syncing
-// blocked users, and critically, re-calling filterFeed -> subscribeFeed,
-// which re-ran the whole likes-table sync and re-subscribed to
-// realtime). Confirmed directly in the Network tab: a single refresh
-// produced SIX separate GET requests to the likes table and THREE
-// duplicate-key 409 Conflicts on POST to likes, all within about a
-// second of each other — exactly what repeated boot runs would produce.
-// This flag ensures the expensive one-time boot work only ever runs
-// once per real page load, regardless of how many auth events fire.
-let hasBootedFeedForSession = false;
 let isOnline            = navigator.onLine;
 // Fix: this used to be hardcoded to 'all', so any refresh silently
 // bounced the person back to the All tab no matter what they were
@@ -68,21 +55,9 @@ let currentFeedType   = _validFeedTabs.includes(_savedFeedTab) ? _savedFeedTab :
 // past a fridge for sale in Tamale they can't realistically go pick up).
 // Now the All/Products/Services tabs default to "mine" — the signed-in
 // person's own institution — with an easy one-tap switch to "everywhere"
-// Three-tier feed scope: 'institution' (the person's own campus, the
-// tightest/default view) -> 'region' (their wider region, e.g. all of
-// Greater Accra) -> 'everywhere' (nationwide, no scope at all). Each tier
-// is explicit and persisted, rather than silently auto-expanding — the
-// person always knows which one they're looking at and chose to move to
-// a wider one themselves, whether via the banner toggle or the
-// end-of-feed "want to see more?" prompt.
-const _validCampusScopes = ['institution', 'region', 'everywhere'];
-const _savedCampusScope = localStorage.getItem('campus_market_scope');
-// 'mine' was the old value from before region scoping existed — treat it
-// as 'institution' so anyone's existing saved preference still maps
-// sensibly instead of silently resetting.
-let currentCampusScope = _savedCampusScope === 'mine'
-    ? 'institution'
-    : (_validCampusScopes.includes(_savedCampusScope) ? _savedCampusScope : 'institution');
+// for anyone who wants the full nationwide feed. Persisted so the choice
+// survives a reload rather than resetting every visit.
+let currentCampusScope = localStorage.getItem('campus_market_scope') || 'mine'; // 'mine' | 'everywhere'
 
 // ─── PAGINATION STATE ─────────────────────────────────────────────────────────
 // Fix: the feed previously had a single hard cap (FEED_LIMIT posts) with
@@ -164,14 +139,6 @@ let userCartList = JSON.parse(localStorage.getItem("campus_market_cart") || "[]"
 
 Object.defineProperty(window, '_currentUser',   { get: () => currentUserData });
 Object.defineProperty(window, '_userCartList',  { get: () => userCartList });
-// Debug helper: likedPostIds is a module-scoped const, so it's private
-// to this module and was never reachable from the browser console
-// directly (typing `likedPostIds` there throws "not defined" — that's
-// expected JS module behavior, not a bug). Exposing it read-only here,
-// the same way _currentUser/_userCartList already are, so it can
-// actually be inspected: type `[..._likedPostIds]` in the console to
-// see its contents as a plain array.
-Object.defineProperty(window, '_likedPostIds', { get: () => likedPostIds });
 
 // ─── 3b. MEDIA EDIT MODAL STATE (WhatsApp-style edit before upload) ──────────
 // Files staged for review in the "Edit Media" modal before they're actually
@@ -1899,30 +1866,16 @@ window.likePost = async function (postId, btn) {
     if (cachedEntry?.data) cachedEntry.data.likes_count = currentCount;
 
     // 2. Execute Backend sync — this is what makes likes survive reload.
+    // Uses atomic RPC counters (increment_post_likes / decrement_post_likes)
+    // defined in migration.sql so concurrent likes never clobber each other.
     //
-    // Fix: this used to also call increment_post_likes/decrement_post_likes
-    // RPCs after the insert/delete succeeded, to keep posts.likes_count
-    // up to date. That's now redundant and was actually a source of
-    // unnecessary fragility: the likes_count_sync trigger (added
-    // separately, directly on the likes table) already recalculates
-    // posts.likes_count from a real COUNT(*) on every insert/delete,
-    // automatically, with no RPC involved — so the count was already
-    // being kept correct by the time this RPC call ran. Keeping the RPC
-    // around meant a single network hiccup or naming mismatch on THAT
-    // call alone could throw and roll back an otherwise fully successful
-    // like/unlike action, even though the actual likes row (and the
-    // trigger-maintained count) were already correct. Removing it
-    // matches the simpler, standard pattern most apps use: write the
-    // row, let the database keep the derived count in sync — nothing
-    // else needed.
-    //
-    // Also fixed previously: an insert/delete failure into the `likes`
-    // table used to be swallowed silently (error checked but never
-    // surfaced or acted on), so the heart stayed optimistically "liked"
-    // in the UI while nothing was actually saved server-side. Any real
-    // failure now rolls the UI back to its prior state and tells the
-    // person, instead of drifting out of sync with the database until
-    // the next reload silently corrects it.
+    // Fix: previously an insert/delete failure into the `likes` table was
+    // swallowed silently (error checked but never surfaced or acted on),
+    // so the heart stayed optimistically "liked" in the UI while nothing
+    // was actually saved server-side — the exact cause of likes vanishing
+    // on refresh. Now any real failure rolls the UI back to its prior
+    // state and tells the person, instead of drifting out of sync with
+    // the database until the next reload silently corrects it.
     try {
         if (liked) {
             const { error: deleteErr } = await supabase
@@ -1932,6 +1885,19 @@ window.likePost = async function (postId, btn) {
                 .eq("user_id", currentUserData.id);
 
             if (deleteErr) throw deleteErr;
+
+            // Fix: this RPC's error was never checked — if it failed (wrong
+            // argument name, RPC not deployed, permissions issue, etc.) the
+            // `likes` row was still deleted correctly, but posts.likes_count
+            // silently never decremented in the database. The heart would
+            // then look right after a refresh (correctly unliked, since
+            // that's read from the `likes` table) while the count itself
+            // drifted or reverted, which is exactly the "likes keep
+            // disappearing/count is wrong" symptom. Now a real RPC failure
+            // throws and rolls back the whole optimistic update below,
+            // instead of leaving the two tables out of sync forever.
+            const { error: decErr } = await supabase.rpc('decrement_post_likes', { post_id_input: postId });
+            if (decErr) throw decErr;
         } else {
             const { error: insertErr } = await supabase
                 .from("likes")
@@ -1941,20 +1907,18 @@ window.likePost = async function (postId, btn) {
                 });
 
             // A unique-constraint violation just means this like already
-            // existed in the database (e.g. a stale/incomplete local
-            // likedPostIds cache thought you hadn't liked this post yet,
-            // tried to insert, and got rejected because you actually
-            // already had). Treat that as a harmless no-op for THIS
-            // action, not a failure — the row already existing means the
-            // like itself is fine, and the trigger-maintained count is
-            // already correct regardless of which specific action put
-            // that row there.
+            // existed (e.g. a duplicate tap) — treat that as a harmless
+            // no-op, not a failure. Any OTHER error means the like truly
+            // didn't save, so we must roll back.
             const isDuplicate = insertErr && insertErr.code === '23505';
             if (insertErr && !isDuplicate) throw insertErr;
+            if (!insertErr) {
+                const { error: incErr } = await supabase.rpc('increment_post_likes', { post_id_input: postId });
+                if (incErr) throw incErr;
+            }
         }
     } catch (e) {
         console.error("Like sync failed — reverting UI to match database:", e);
-
 
         // Roll back the optimistic UI exactly, since the write did not
         // actually persist.
@@ -2192,43 +2156,16 @@ window.likeComment = async function (commentId, btn) {
     if (countEl) countEl.textContent = count;
     localStorage.setItem('campus_market_comment_likes', JSON.stringify([...likedCommentIds]));
 
-    // Fix: this used to swallow every failure into a console.warn with
-    // no toast and no UI rollback — meaning if this insert/delete ever
-    // failed for any reason (including the exact same kind of orphaned-
-    // row duplicate-key conflict that turned out to be the real post-
-    // likes bug), nobody would ever see it happen. "Comment likes work
-    // well" may partly reflect that failures here were simply invisible
-    // rather than genuinely rarer. Real failures now roll back the
-    // optimistic UI and show a toast, matching likePost's behavior.
     try {
         if (liked) {
-            const { error } = await supabase.from('comment_likes').delete().eq('comment_id', commentId).eq('user_id', currentUserData.id);
-            if (error) throw error;
-            const { error: decErr } = await supabase.rpc('decrement_comment_likes', { comment_id_input: commentId });
-            if (decErr) throw decErr;
+            await supabase.from('comment_likes').delete().eq('comment_id', commentId).eq('user_id', currentUserData.id);
+            await supabase.rpc('decrement_comment_likes', { comment_id_input: commentId });
         } else {
             const { error } = await supabase.from('comment_likes').insert({ comment_id: commentId, user_id: currentUserData.id });
-            const isDuplicate = error && error.code === '23505';
-            if (error && !isDuplicate) throw error;
-            if (!error) {
-                const { error: incErr } = await supabase.rpc('increment_comment_likes', { comment_id_input: commentId });
-                if (incErr) throw incErr;
-            }
+            if (!error) await supabase.rpc('increment_comment_likes', { comment_id_input: commentId });
         }
     } catch (e) {
-        console.error("Comment like sync failed — reverting:", e);
-        if (liked) {
-            likedCommentIds.add(key);
-            icon.className = 'fas fa-heart text-rose-500';
-            count = count + 1;
-        } else {
-            likedCommentIds.delete(key);
-            icon.className = 'far fa-heart text-slate-400';
-            count = Math.max(0, count - 1);
-        }
-        if (countEl) countEl.textContent = count;
-        localStorage.setItem('campus_market_comment_likes', JSON.stringify([...likedCommentIds]));
-        showToast("Couldn't save your like — please try again.");
+        console.warn("Comment like sync delayed:", e);
     }
 };
 
@@ -2293,29 +2230,27 @@ function renderCommentItem(c, postId) {
 
     return `
         <div class="flex gap-2 items-start text-left mt-2.5 ${indentClass}" id="comment-item-${escAttr(c.id)}">
-            <div class="feed-profile-trigger flex gap-2 items-start flex-1 min-w-0 cursor-pointer" data-user-id="${escAttr(c.user_id)}">
-                <img src="${esc(c.user_avatar) || avatarFallback}" onerror="this.onerror=null; this.src='${avatarFallback}'" class="w-7 h-7 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
-                <div class="${bubbleClass} rounded-2xl px-3 py-2 flex-1 border min-w-0">
-                    <div class="flex items-start justify-between gap-2">
-                        <div class="flex items-baseline gap-1.5 min-w-0">
-                            <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide truncate">${esc(c.user_name)}</p>
-                            ${isOwn ? '<span class="text-[8px] text-amber-400/60 font-bold uppercase shrink-0">You</span>' : ''}
-                            <span class="text-[9px] text-slate-500 shrink-0">· ${timeAgo(c.created_at)}</span>
-                        </div>
-                        <button onclick="event.stopPropagation(); window.openCommentOptionsMenu('${escAttr(c.id)}', '${escAttr(postId)}', ${isOwn ? 'true' : 'false'}, '${escAttr(c.user_id)}', '${escAttr(c.user_name)}')" class="text-slate-500 hover:text-white transition shrink-0 -mt-0.5 -mr-1 px-1.5 py-0.5" aria-label="More options">
-                            <i class="fas fa-ellipsis-vertical text-[11px]"></i>
-                        </button>
+            <img src="${esc(c.user_avatar) || avatarFallback}" onerror="this.onerror=null; this.src='${avatarFallback}'" class="w-7 h-7 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
+            <div class="${bubbleClass} rounded-2xl px-3 py-2 flex-1 border min-w-0">
+                <div class="flex items-start justify-between gap-2">
+                    <div class="flex items-baseline gap-1.5 min-w-0">
+                        <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide truncate">${esc(c.user_name)}</p>
+                        ${isOwn ? '<span class="text-[8px] text-amber-400/60 font-bold uppercase shrink-0">You</span>' : ''}
+                        <span class="text-[9px] text-slate-500 shrink-0">· ${timeAgo(c.created_at)}</span>
                     </div>
-                    <p class="text-xs text-slate-200 mt-0.5 break-words">${esc(c.text)}</p>
-                    <div class="flex items-center gap-3 mt-1.5">
-                        <button onclick="event.stopPropagation(); window.likeComment('${escAttr(c.id)}', this)" class="flex items-center gap-1 active:scale-90 transition">
-                            <i class="${heartClass} text-[11px]"></i>
-                            <span class="comment-like-count text-[10px] text-slate-400 font-semibold">${parseInt(c.likes_count || 0)}</span>
-                        </button>
-                        <button onclick="event.stopPropagation(); window.startCommentReply('${escAttr(postId)}', '${escAttr(c.id)}', '${escAttr(c.user_name)}')" class="text-[10px] text-slate-400 font-semibold hover:text-amber-400 transition">
-                            Reply
-                        </button>
-                    </div>
+                    <button onclick="window.openCommentOptionsMenu('${escAttr(c.id)}', '${escAttr(postId)}', ${isOwn ? 'true' : 'false'}, '${escAttr(c.user_id)}', '${escAttr(c.user_name)}')" class="text-slate-500 hover:text-white transition shrink-0 -mt-0.5 -mr-1 px-1.5 py-0.5" aria-label="More options">
+                        <i class="fas fa-ellipsis-vertical text-[11px]"></i>
+                    </button>
+                </div>
+                <p class="text-xs text-slate-200 mt-0.5 break-words">${esc(c.text)}</p>
+                <div class="flex items-center gap-3 mt-1.5">
+                    <button onclick="window.likeComment('${escAttr(c.id)}', this)" class="flex items-center gap-1 active:scale-90 transition">
+                        <i class="${heartClass} text-[11px]"></i>
+                        <span class="comment-like-count text-[10px] text-slate-400 font-semibold">${parseInt(c.likes_count || 0)}</span>
+                    </button>
+                    <button onclick="window.startCommentReply('${escAttr(postId)}', '${escAttr(c.id)}', '${escAttr(c.user_name)}')" class="text-[10px] text-slate-400 font-semibold hover:text-amber-400 transition">
+                        Reply
+                    </button>
                 </div>
             </div>
         </div>`;
@@ -2922,8 +2857,6 @@ function renderFeedCard(id, d) {
 
     return `
     <div class="bg-slate-900 border-b border-slate-800/60 w-full" id="feed-card-${escAttr(id)}">
-        ${_debugBanner}
-
 
         <div class="flex items-center justify-between px-3 py-2.5">
             <div class="feed-profile-trigger flex items-center gap-2.5 min-w-0 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
@@ -3053,13 +2986,16 @@ function renderProductGrid() {
     const products = allCachedPosts.filter(({ data: d }) => (d.type || 'product') === 'product');
 
     if (products.length === 0) {
-        const isScopedEmpty = currentCampusScope !== 'everywhere' && currentUserData?.institution;
+        const isScopedEmpty = currentCampusScope === 'mine' && currentUserData?.institution;
         feed.innerHTML = isScopedEmpty
             ? `
             <div class="text-center py-16 space-y-3 px-6">
                 <p class="text-4xl">📦</p>
-                <p class="font-bold text-white">No products found</p>
-                ${buildScopeWidenPrompt({ contextLabel: 'products' })}
+                <p class="font-bold text-white">No products from ${esc(currentUserData.institution)} yet</p>
+                <p class="text-slate-500 text-xs">Be the first to list one, or check other campuses.</p>
+                <button onclick="window.toggleCampusScope()" class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
+                    Show Everywhere
+                </button>
             </div>`
             : `
             <div class="text-center py-16 space-y-3">
@@ -3074,15 +3010,9 @@ function renderProductGrid() {
         products.map(({ id, data: d }) => renderProductGridCard(id, d)).join('')
     }</div>`;
 
-    const canWidenProducts = currentCampusScope !== 'everywhere' && currentUserData?.institution;
     feed.innerHTML += `
-        <div id="feed-load-more-sentinel" class="py-6 text-center space-y-2 px-6">
-            ${feedHasMore
-                ? ''
-                : canWidenProducts
-                    ? buildScopeWidenPrompt({ contextLabel: 'products' })
-                    : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
-            }
+        <div id="feed-load-more-sentinel" class="py-6">
+            ${feedHasMore ? '' : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`}
         </div>`;
     setupFeedLoadMoreObserver();
 }
@@ -3687,27 +3617,6 @@ async function _deletePostById(postId) {
         }
     }
 
-    // Fix: deleting a post used to leave every like, comment, and save
-    // pointing at it behind as an orphaned row — nothing here ever
-    // cleaned those up. A like row surviving its post's deletion is
-    // exactly what caused a confusing false "this is already liked"
-    // duplicate-key conflict later, on an entirely unrelated test,
-    // since the row was still sitting in the likes table with no post
-    // left to belong to. Comments on the deleted post need their own
-    // comment_likes cleared first (comment_likes references comments,
-    // not posts, so it isn't reachable by post_id directly).
-    const { data: doomedComments } = await supabase
-        .from("comments")
-        .select("id")
-        .eq("post_id", idKey(postId));
-    if (doomedComments?.length) {
-        const commentIds = doomedComments.map(c => c.id);
-        await supabase.from("comment_likes").delete().in("comment_id", commentIds);
-    }
-    await supabase.from("comments").delete().eq("post_id", idKey(postId));
-    await supabase.from("likes").delete().eq("post_id", postId);
-    await supabase.from("saves").delete().eq("post_id", postId);
-
     const { error: dbDeleteErr } = await supabase
         .from("posts")
         .delete()
@@ -3891,13 +3800,16 @@ function renderFeedFromCache() {
     feed.classList.remove('grid-mode', 'reels-mode');
 
     if (allCachedPosts.length === 0) {
-        const isScopedEmpty = currentCampusScope !== 'everywhere' && currentUserData?.institution && currentFeedType !== 'following';
+        const isScopedEmpty = currentCampusScope === 'mine' && currentUserData?.institution && currentFeedType !== 'following';
         feed.innerHTML = isScopedEmpty
             ? `
             <div class="text-center py-16 space-y-3 px-6">
                 <p class="text-4xl">📭</p>
-                <p class="font-bold text-white">No posts found</p>
-                ${buildScopeWidenPrompt({ contextLabel: 'posts' })}
+                <p class="font-bold text-white">No posts from ${esc(currentUserData.institution)} yet</p>
+                <p class="text-slate-500 text-xs">Be the first to post, or check what's happening at other campuses.</p>
+                <button onclick="window.toggleCampusScope()" class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
+                    Show Everywhere
+                </button>
             </div>`
             : `
             <div class="text-center py-16 space-y-3">
@@ -3916,21 +3828,14 @@ function renderFeedFromCache() {
     });
 
     // Infinite scroll: a sentinel div at the end of the list triggers
-    // loading the next page once it scrolls into view. Once there's
-    // genuinely nothing left, shows a "want to see more?" prompt offering
-    // to widen to the next scope tier (institution -> region ->
-    // everywhere) rather than just silently stopping with no feedback —
-    // unless already at 'everywhere' or on a tab scope doesn't apply to
-    // (Following), in which case it's just a plain "caught up" message
-    // since there's nowhere wider left to offer.
-    const canWiden = currentCampusScope !== 'everywhere' && currentUserData?.institution && currentFeedType !== 'following';
+    // loading the next page once it scrolls into view. Shows a small
+    // "you're all caught up" message once there's genuinely nothing left,
+    // instead of just silently stopping with no feedback.
     feed.innerHTML += `
-        <div id="feed-load-more-sentinel" class="py-6 text-center space-y-2 px-6">
+        <div id="feed-load-more-sentinel" class="py-6">
             ${feedHasMore
                 ? ''
-                : canWiden
-                    ? buildScopeWidenPrompt({ contextLabel: 'posts' })
-                    : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
+                : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
             }
         </div>`;
 
@@ -4035,15 +3940,8 @@ window.filterFeed = function (type, clickedBtn = null) {
             q = q.eq("type", type);
         }
 
-        // Three-tier scoping: institution first (tightest), then region
-        // (wider), then no filter at all for 'everywhere'. Falls through
-        // gracefully to a looser tier if the person's profile is somehow
-        // missing the field a tighter tier needs (e.g. no region saved),
-        // rather than silently returning nothing.
-        if (currentCampusScope === 'institution' && currentUserData?.institution) {
+        if (currentCampusScope === 'mine' && currentUserData?.institution) {
             q = q.eq("institution", currentUserData.institution);
-        } else if (currentCampusScope === 'region' && currentUserData?.region) {
-            q = q.eq("region", currentUserData.region);
         }
 
         return q;
@@ -4057,43 +3955,6 @@ window.filterFeed = function (type, clickedBtn = null) {
 // feed. Hidden entirely on Reels/Following (scope doesn't apply there)
 // and for anyone without a saved institution yet (nothing to scope by —
 // they'd just see an empty toggle that does nothing).
-// Builds the right "want to see more?" prompt HTML for whichever scope
-// tier is currently active, so the same institution -> region ->
-// everywhere logic doesn't need to be duplicated across every place a
-// feed can run dry (empty-from-zero states AND the scroll-exhaustion
-// prompt at the bottom of a populated feed both call this).
-function buildScopeWidenPrompt({ contextLabel = 'posts' } = {}) {
-    if (currentCampusScope === 'institution') {
-        const hasRegion = !!currentUserData?.region;
-        return `
-            <p class="text-slate-500 text-xs">
-                No more ${contextLabel} from ${esc(currentUserData.institution)}${hasRegion ? ` — want to see ${esc(currentUserData.region)}?` : ' — want to see everywhere?'}
-            </p>
-            <button
-                onclick="window.setCampusScope('${hasRegion ? 'region' : 'everywhere'}')"
-                class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
-            >
-                ${hasRegion ? `Show ${esc(currentUserData.region)}` : 'Show Everywhere'}
-            </button>`;
-    }
-
-    if (currentCampusScope === 'region') {
-        return `
-            <p class="text-slate-500 text-xs">
-                No more ${contextLabel} from ${esc(currentUserData.region)} — want to see everywhere?
-            </p>
-            <button
-                onclick="window.setCampusScope('everywhere')"
-                class="mt-2 bg-amber-400 text-black font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
-            >
-                Show Everywhere
-            </button>`;
-    }
-
-    // Already at 'everywhere' — there's nothing wider to offer.
-    return `<p class="text-slate-500 text-xs">That's everything for now.</p>`;
-}
-
 function updateCampusScopeBanner() {
     const banner = document.getElementById('campus-scope-banner');
     const label  = document.getElementById('campus-scope-label');
@@ -4108,69 +3969,29 @@ function updateCampusScopeBanner() {
     }
 
     banner.classList.remove('hidden');
-    if (currentCampusScope === 'institution') {
-        label.textContent = currentUserData.institution;
-    } else if (currentCampusScope === 'region' && currentUserData?.region) {
-        label.textContent = currentUserData.region;
-    } else {
-        label.textContent = 'Everywhere';
-    }
+    label.textContent = currentCampusScope === 'mine'
+        ? currentUserData.institution
+        : 'Everywhere';
 }
 
-// Cycles institution -> region -> everywhere -> back to institution,
-// persists the choice, and re-runs the current tab's query with the new
-// scope applied. Skips the region step entirely for anyone without a
-// saved region (goes straight institution -> everywhere for them, same
-// as the old two-tier behavior), so this never traps someone in a tier
-// their profile can't actually support.
+// Toggles between "mine" (the person's own institution) and "everywhere"
+// (the full nationwide feed), persists the choice, and re-runs the
+// current tab's query with the new scope applied.
 window.toggleCampusScope = function () {
     if (!currentUserData?.institution) return;
 
-    const hasRegion = !!currentUserData?.region;
-    if (currentCampusScope === 'institution') {
-        currentCampusScope = hasRegion ? 'region' : 'everywhere';
-    } else if (currentCampusScope === 'region') {
-        currentCampusScope = 'everywhere';
-    } else {
-        currentCampusScope = 'institution';
-    }
+    currentCampusScope = currentCampusScope === 'mine' ? 'everywhere' : 'mine';
     localStorage.setItem('campus_market_scope', currentCampusScope);
 
-    const scopeLabel = currentCampusScope === 'institution'
-        ? currentUserData.institution
-        : currentCampusScope === 'region'
-            ? currentUserData.region
-            : 'everywhere';
-    showToast(`Showing posts from ${scopeLabel}`);
+    showToast(
+        currentCampusScope === 'mine'
+            ? `Showing posts from ${currentUserData.institution}`
+            : 'Showing posts from everywhere'
+    );
 
     // Re-apply the current tab with the new scope. Reels/Following
     // aren't affected by scope, so nothing to re-run there — but this
     // button is hidden on those tabs anyway.
-    if (['all', 'product', 'skill'].includes(currentFeedType)) {
-        const clickedBtn = document.querySelector('.feed-tab-btn.text-amber-400');
-        window.filterFeed(currentFeedType, clickedBtn);
-    }
-};
-
-// Jumps directly to a specific scope tier (used by the end-of-feed
-// "want to see more?" prompt, which offers a specific next tier rather
-// than cycling blindly) — same persistence/re-run behavior as the
-// regular toggle, just targeting an explicit tier instead of advancing
-// by one step.
-window.setCampusScope = function (scope) {
-    if (!_validCampusScopes.includes(scope)) return;
-    if (!currentUserData?.institution) return;
-
-    currentCampusScope = scope;
-    localStorage.setItem('campus_market_scope', currentCampusScope);
-
-    const scopeLabel = scope === 'institution'
-        ? currentUserData.institution
-        : scope === 'region'
-            ? (currentUserData.region || 'your region')
-            : 'everywhere';
-    showToast(`Showing posts from ${scopeLabel}`);
-
     if (['all', 'product', 'skill'].includes(currentFeedType)) {
         const clickedBtn = document.querySelector('.feed-tab-btn.text-amber-400');
         window.filterFeed(currentFeedType, clickedBtn);
@@ -5710,53 +5531,34 @@ if (activeAuthChange) {
             // would silently no-op on first load.
             isAuthInitialized = true;
 
-            // Everything below this point is expensive and/or has
-            // side effects that don't belong happening more than once
-            // per page load (subscribing to realtime channels, syncing
-            // the likes table, fetching profile stats) — see
-            // hasBootedFeedForSession's declaration for why this guard
-            // exists. The lightweight UI sync above (avatar/name text,
-            // onboarding check) stays unguarded since re-running it
-            // harmlessly on a repeat auth event is fine.
-            if (!hasBootedFeedForSession) {
-                hasBootedFeedForSession = true;
+            // Load the block list before the first render so a blocked
+            // person's posts never flash on screen for a moment before
+            // being filtered out.
+            await syncBlockedUsers();
 
-                // Load the block list before the first render so a blocked
-                // person's posts never flash on screen for a moment before
-                // being filtered out.
-                await syncBlockedUsers();
+            updateCampusScopeBanner();
+            const savedTabBtn = document.querySelector(`.feed-tab-btn[onclick*="'${currentFeedType}'"]`);
+            window.filterFeed(currentFeedType, savedTabBtn);
+            try { loadProfileStats(); } catch (_) {}
+            _initAvatarLongPress();
 
-                updateCampusScopeBanner();
-                const savedTabBtn = document.querySelector(`.feed-tab-btn[onclick*="'${currentFeedType}'"]`);
-                window.filterFeed(currentFeedType, savedTabBtn);
-                try { loadProfileStats(); } catch (_) {}
-                _initAvatarLongPress();
-
-                // Populate the DMs unread badge immediately on sign-in,
-                // rather than only after the person happens to open the DMs
-                // tab for the first time.
-                try {
-                    const { data: convData } = await supabase
-                        .from('conversations')
-                        .select('*')
-                        .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
-                        .order('last_message_at', { ascending: false });
-                    conversationsCache = convData || [];
-                    updateDmUnreadBadge();
-                } catch (_) {}
-            }
+            // Populate the DMs unread badge immediately on sign-in,
+            // rather than only after the person happens to open the DMs
+            // tab for the first time.
+            try {
+                const { data: convData } = await supabase
+                    .from('conversations')
+                    .select('*')
+                    .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
+                    .order('last_message_at', { ascending: false });
+                conversationsCache = convData || [];
+                updateDmUnreadBadge();
+            } catch (_) {}
         } else {
             unsubscribeFeed();
             unsubscribeConversations();
             unsubscribeActiveThread();
             if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
-
-            // Reset so a genuine sign-out followed by signing back in
-            // (within the same page load, not just a refresh) correctly
-            // re-runs the one-time boot sequence for the new session,
-            // instead of being permanently skipped because it already
-            // ran once for the previous person.
-            hasBootedFeedForSession = false;
 
             if (authProfileNav) {
                 authProfileNav.innerHTML = `<i class="fas fa-sign-in-alt text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>`;
@@ -5886,10 +5688,8 @@ window.addEventListener('online', () => {
                 if (currentFeedType !== 'all' && currentFeedType !== 'product') {
                     q = q.eq("type", currentFeedType);
                 }
-                if (currentCampusScope === 'institution' && currentUserData?.institution) {
+                if (currentCampusScope === 'mine' && currentUserData?.institution) {
                     q = q.eq("institution", currentUserData.institution);
-                } else if (currentCampusScope === 'region' && currentUserData?.region) {
-                    q = q.eq("region", currentUserData.region);
                 }
                 return q;
             };
