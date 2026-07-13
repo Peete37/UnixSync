@@ -2910,18 +2910,6 @@ function renderFeedCard(id, d) {
     const heartClass    = isLiked ? 'fas fa-heart text-rose-500' : 'far fa-heart text-slate-300';
     const likedData     = isLiked ? 'true' : 'false';
 
-    // TEMPORARY DEBUG — remove once the likes investigation is closed.
-    // Prints directly on the card itself (not console, not a toast) so
-    // it shows up in a normal screenshot with zero extra steps: the
-    // card's own id, whether idKey(id) is currently found inside
-    // likedPostIds, and the raw contents of likedPostIds at this exact
-    // render moment. This settles definitively whether the Set actually
-    // contains the id when a card renders reverted.
-    const _debugBanner = `
-        <div style="background:#000;color:#0f0;font:10px monospace;padding:6px;word-break:break-all;border:2px solid red;">
-            DEBUG card id=${esc(idKey(id))} | isLiked=${isLiked} | likedPostIds=[${[...likedPostIds].map(esc).join(',')}]
-        </div>`;
-
     // likes_count now comes straight from the DB and is kept accurate via
     // the RPC counters, so this reflects the true persisted count on load.
     const displayLikes  = parseInt(d.likes_count || 0);
