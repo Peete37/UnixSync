@@ -90,6 +90,19 @@ let currentFeedChan = null;
 let currentCommentsChan = null;
 let allCachedPosts = [];
 let isAuthInitialized = false;
+// Fix: Supabase's onAuthStateChange can legitimately fire more than once
+// for a single page load (INITIAL_SESSION, then SIGNED_IN, sometimes
+// TOKEN_REFRESHED) — every one of those events used to re-run the ENTIRE
+// signed-in boot sequence below (re-fetching the profile, re-syncing
+// blocked users, and critically, re-calling filterFeed -> subscribeFeed,
+// which re-ran the whole likes-table sync and re-subscribed to
+// realtime). Confirmed directly in the Network tab: a single refresh
+// produced SIX separate GET requests to the likes table and THREE
+// duplicate-key 409 Conflicts on POST to likes, all within about a
+// second of each other — exactly what repeated boot runs would produce.
+// This flag ensures the expensive one-time boot work only ever runs
+// once per real page load, regardless of how many auth events fire.
+let hasBootedFeedForSession = false;
 let isOnline = navigator.onLine;
 // Fix: this used to be hardcoded to 'all', so any refresh silently
 // bounced the person back to the All tab no matter what they were
@@ -2563,27 +2576,57 @@ window.likeComment = async function (commentId, btn) {
     JSON.stringify([...likedCommentIds]),
   );
 
+  // Fix: this used to swallow every failure into a console.warn with
+  // no toast and no UI rollback — meaning if this insert/delete ever
+  // failed for any reason (including the exact same kind of orphaned-
+  // row duplicate-key conflict that turned out to be the real post-
+  // likes bug), nobody would ever see it happen. "Comment likes work
+  // well" may partly reflect that failures here were simply invisible
+  // rather than genuinely rarer. Real failures now roll back the
+  // optimistic UI and show a toast, matching likePost's behavior.
   try {
     if (liked) {
-      await supabase
+      const { error } = await supabase
         .from("comment_likes")
         .delete()
         .eq("comment_id", commentId)
         .eq("user_id", currentUserData.id);
-      await supabase.rpc("decrement_comment_likes", {
+      if (error) throw error;
+      const { error: decErr } = await supabase.rpc("decrement_comment_likes", {
         comment_id_input: commentId,
       });
+      if (decErr) throw decErr;
     } else {
       const { error } = await supabase
         .from("comment_likes")
         .insert({ comment_id: commentId, user_id: currentUserData.id });
-      if (!error)
-        await supabase.rpc("increment_comment_likes", {
-          comment_id_input: commentId,
-        });
+      const isDuplicate = error && error.code === "23505";
+      if (error && !isDuplicate) throw error;
+      if (!error) {
+        const { error: incErr } = await supabase.rpc(
+          "increment_comment_likes",
+          { comment_id_input: commentId },
+        );
+        if (incErr) throw incErr;
+      }
     }
   } catch (e) {
-    console.warn("Comment like sync delayed:", e);
+    console.error("Comment like sync failed — reverting:", e);
+    if (liked) {
+      likedCommentIds.add(key);
+      icon.className = "fas fa-heart text-rose-500";
+      count = count + 1;
+    } else {
+      likedCommentIds.delete(key);
+      icon.className = "far fa-heart text-slate-400";
+      count = Math.max(0, count - 1);
+    }
+    if (countEl) countEl.textContent = count;
+    localStorage.setItem(
+      "campus_market_comment_likes",
+      JSON.stringify([...likedCommentIds]),
+    );
+    showToast("Couldn't save your like — please try again.");
   }
 };
 
@@ -4305,6 +4348,27 @@ async function _deletePostById(postId) {
         await supabase.storage.from("posts").remove([storagePath]);
     }
   }
+
+  // Fix: deleting a post used to leave every like, comment, and save
+  // pointing at it behind as an orphaned row — nothing here ever
+  // cleaned those up. A like row surviving its post's deletion is
+  // exactly what caused a confusing false "this is already liked"
+  // duplicate-key conflict later, on an entirely unrelated test,
+  // since the row was still sitting in the likes table with no post
+  // left to belong to. Comments on the deleted post need their own
+  // comment_likes cleared first (comment_likes references comments,
+  // not posts, so it isn't reachable by post_id directly).
+  const { data: doomedComments } = await supabase
+    .from("comments")
+    .select("id")
+    .eq("post_id", idKey(postId));
+  if (doomedComments?.length) {
+    const commentIds = doomedComments.map((c) => c.id);
+    await supabase.from("comment_likes").delete().in("comment_id", commentIds);
+  }
+  await supabase.from("comments").delete().eq("post_id", idKey(postId));
+  await supabase.from("likes").delete().eq("post_id", postId);
+  await supabase.from("saves").delete().eq("post_id", postId);
 
   const { error: dbDeleteErr } = await supabase
     .from("posts")
@@ -6582,38 +6646,59 @@ if (activeAuthChange) {
       // would silently no-op on first load.
       isAuthInitialized = true;
 
-      // Load the block list before the first render so a blocked
-      // person's posts never flash on screen for a moment before
-      // being filtered out.
-      await syncBlockedUsers();
+      // Everything below this point is expensive and/or has
+      // side effects that don't belong happening more than once
+      // per page load (subscribing to realtime channels, syncing
+      // the likes table, fetching profile stats) — see
+      // hasBootedFeedForSession's declaration for why this guard
+      // exists. The lightweight UI sync above (avatar/name text,
+      // onboarding check) stays unguarded since re-running it
+      // harmlessly on a repeat auth event is fine.
+      if (!hasBootedFeedForSession) {
+        hasBootedFeedForSession = true;
 
-      updateCampusScopeBanner();
-      const savedTabBtn = document.querySelector(
-        `.feed-tab-btn[onclick*="'${currentFeedType}'"]`,
-      );
-      window.filterFeed(currentFeedType, savedTabBtn);
-      try {
-        loadProfileStats();
-      } catch (_) {}
-      _initAvatarLongPress();
+        // Load the block list before the first render so a blocked
+        // person's posts never flash on screen for a moment before
+        // being filtered out.
+        await syncBlockedUsers();
 
-      // Populate the DMs unread badge immediately on sign-in,
-      // rather than only after the person happens to open the DMs
-      // tab for the first time.
-      try {
-        const { data: convData } = await supabase
-          .from("conversations")
-          .select("*")
-          .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
-          .order("last_message_at", { ascending: false });
-        conversationsCache = convData || [];
-        updateDmUnreadBadge();
-      } catch (_) {}
+        updateCampusScopeBanner();
+        const savedTabBtn = document.querySelector(
+          `.feed-tab-btn[onclick*="'${currentFeedType}'"]`,
+        );
+        window.filterFeed(currentFeedType, savedTabBtn);
+        try {
+          loadProfileStats();
+        } catch (_) {}
+        _initAvatarLongPress();
+
+        // Populate the DMs unread badge immediately on sign-in,
+        // rather than only after the person happens to open the DMs
+        // tab for the first time.
+        try {
+          const { data: convData } = await supabase
+            .from("conversations")
+            .select("*")
+            .or(
+              `user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`,
+            )
+            .order("last_message_at", { ascending: false });
+          conversationsCache = convData || [];
+          updateDmUnreadBadge();
+        } catch (_) {}
+      }
     } else {
       unsubscribeFeed();
       unsubscribeConversations();
       unsubscribeActiveThread();
       if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
+
+      // Reset so a genuine sign-out followed by signing back in
+      // (within the same page load, not just a refresh) correctly
+      // re-runs the one-time boot sequence for the new session,
+      // instead of being permanently skipped because it already
+      // ran once for the previous person.
+      hasBootedFeedForSession = false;
 
       if (authProfileNav) {
         authProfileNav.innerHTML = `<i class="fas fa-sign-in-alt text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>`;
