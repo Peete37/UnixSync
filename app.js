@@ -11,6 +11,54 @@ const FEED_PAGE_SIZE = 15; // posts per page for infinite scroll (was a single h
 const FEED_LIMIT = FEED_PAGE_SIZE; // kept for any code that still references the old name
 const SEARCH_LIMIT = 100;
 const SEARCH_RESULTS_CAP = 20;
+const MAX_SAVED_ALERTS = 12;
+const FEED_SELECT_COLUMNS = [
+  "id",
+  "title",
+  "description",
+  "price",
+  "media_url",
+  "media_type",
+  "institution",
+  "region",
+  "user_name",
+  "user_avatar",
+  "user_id",
+  "likes_count",
+  "comments_count",
+  "type",
+  "created_at",
+].join(", ");
+const FEED_DECAY_HALF_LIFE_HOURS = 72;
+const FEED_DECAY_ENGAGEMENT_WEIGHT = 0.18;
+const SAVED_ALERTS_KEY = "campus_market_saved_alerts";
+const ALERT_NOTIFIED_POSTS_KEY = "campus_market_alert_notified_posts";
+const DEFAULT_SAFE_SWAP_ZONES = {
+  default: [
+    "Main campus security post",
+    "Library forecourt or reading hall entrance",
+    "Student affairs or administration block frontage",
+    "Busy cafeteria frontage during daylight hours",
+  ],
+  "Greater Accra": [
+    "Main security gate or checkpoint",
+    "Library forecourt / main reading area entrance",
+    "Departmental admin block frontage",
+    "Student centre or SRC forecourt",
+  ],
+  Ashanti: [
+    "Campus police or security barrier",
+    "Main library entrance",
+    "Engineering / department quadrangle",
+    "Popular hall frontage with CCTV or porter presence",
+  ],
+  Central: [
+    "Campus security office frontage",
+    "Library square",
+    "Student centre / auditorium forecourt",
+    "Faculty administration block frontage",
+  ],
+};
 
 const GHANA_DATA = {
   "Greater Accra": [
@@ -156,6 +204,8 @@ let feedLoadedCount = 0;
 let feedHasMore = true;
 let isFeedLoadingMore = false;
 let feedLoadMoreObserver = null;
+let feedCursor = null;
+let followingFeedCursor = null;
 
 // DM state
 let currentConversationsChan = null;
@@ -218,6 +268,12 @@ function updateDmUnreadBadge() {
 // comparisons are always string-to-string regardless of where the id
 // originated.
 const idKey = (id) => String(id);
+const savedSearchAlerts = JSON.parse(
+  localStorage.getItem(SAVED_ALERTS_KEY) || "[]",
+);
+const alertedPostIds = new Set(
+  JSON.parse(localStorage.getItem(ALERT_NOTIFIED_POSTS_KEY) || "[]").map(idKey),
+);
 
 // Persistent state maps that survive feed re-renders
 const likedPostIds = new Set(
@@ -323,6 +379,223 @@ function registerPostContext(id, d, firstMediaUrl) {
     type: d.type || "product",
   };
 }
+
+function getPostCursor(post) {
+  if (!post?.created_at || post?.id == null) return null;
+  return { created_at: post.created_at, id: post.id };
+}
+
+function applyCursorToPostQuery(q, cursor) {
+  if (!cursor?.created_at || cursor?.id == null) return q;
+  return q.or(
+    `created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`,
+  );
+}
+
+function updateFeedCursorFromPosts(posts, target = "feed") {
+  const cursor = posts?.length ? getPostCursor(posts[posts.length - 1]) : null;
+  if (target === "following") followingFeedCursor = cursor;
+  else feedCursor = cursor;
+}
+
+function getPostAgeHours(post) {
+  if (!post?.created_at) return Number.POSITIVE_INFINITY;
+  const created = new Date(post.created_at).getTime();
+  if (!Number.isFinite(created)) return Number.POSITIVE_INFINITY;
+  return Math.max(0, (Date.now() - created) / 36e5);
+}
+
+function getFeedScore(post) {
+  const ageHours = getPostAgeHours(post);
+  const freshness = Math.exp(-ageHours / FEED_DECAY_HALF_LIFE_HOURS);
+  const engagement =
+    parseInt(post?.likes_count || 0, 10) * 1.35 +
+    parseInt(post?.comments_count || 0, 10) * 2.1;
+  return freshness * (1 + engagement * FEED_DECAY_ENGAGEMENT_WEIGHT);
+}
+
+function applyFeedRankingToCache() {
+  allCachedPosts.sort((a, b) => {
+    const aScore = getFeedScore(a?.data || a);
+    const bScore = getFeedScore(b?.data || b);
+    if (Math.abs(bScore - aScore) > 0.0001) return bScore - aScore;
+    const aTime = new Date(a?.data?.created_at || 0).getTime();
+    const bTime = new Date(b?.data?.created_at || 0).getTime();
+    if (bTime !== aTime) return bTime - aTime;
+    return (
+      Number((b?.data?.id ?? b?.id) || 0) - Number((a?.data?.id ?? a?.id) || 0)
+    );
+  });
+}
+
+function getSafeSwapZoneSuggestions(post) {
+  const byInstitution = DEFAULT_SAFE_SWAP_ZONES[post?.institution];
+  if (Array.isArray(byInstitution) && byInstitution.length > 0)
+    return byInstitution;
+  const byRegion = DEFAULT_SAFE_SWAP_ZONES[post?.region];
+  if (Array.isArray(byRegion) && byRegion.length > 0) return byRegion;
+  return DEFAULT_SAFE_SWAP_ZONES.default;
+}
+
+function renderSafeSwapZoneCard(post) {
+  if ((post?.type || "product") !== "product") return "";
+  const zones = getSafeSwapZoneSuggestions(post);
+  if (!zones?.length) return "";
+  return `
+        <div class="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-2">
+            <div class="flex items-center justify-between gap-2">
+                <p class="text-[11px] font-black uppercase tracking-[0.22em] text-emerald-300">Safe Swap Zones</p>
+                <span class="text-[10px] text-emerald-200/70 uppercase">Campus pickup</span>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed">Suggested public meetup spots near ${esc(post?.institution || post?.region || "campus")} to reduce handover risk.</p>
+            <div class="flex flex-wrap gap-2">
+                ${zones.map((zone) => `<span class="px-2.5 py-1 rounded-full bg-slate-900/80 border border-emerald-400/20 text-[10px] text-emerald-100">${esc(zone)}</span>`).join("")}
+            </div>
+        </div>`;
+}
+
+function persistSavedAlerts() {
+  localStorage.setItem(SAVED_ALERTS_KEY, JSON.stringify(savedSearchAlerts));
+}
+
+function persistAlertedPostIds() {
+  localStorage.setItem(
+    ALERT_NOTIFIED_POSTS_KEY,
+    JSON.stringify([...alertedPostIds]),
+  );
+}
+
+function normalizeSearchAlertTerm(term) {
+  return String(term || "")
+    .trim()
+    .toLowerCase();
+}
+
+function postMatchesSavedAlert(post, alert) {
+  if (!post || !alert?.term) return false;
+  const haystack = [
+    post.title,
+    post.description,
+    post.user_name,
+    post.institution,
+    post.region,
+    post.type,
+  ]
+    .map((v) => String(v || "").toLowerCase())
+    .join(" ");
+  if (!haystack.includes(alert.term)) return false;
+  if (
+    alert.postType &&
+    alert.postType !== "all" &&
+    (post.type || "product") !== alert.postType
+  )
+    return false;
+  if (
+    alert.scope === "institution" &&
+    currentUserData?.institution &&
+    post.institution !== currentUserData.institution
+  )
+    return false;
+  if (
+    alert.scope === "region" &&
+    currentUserData?.region &&
+    post.region !== currentUserData.region
+  )
+    return false;
+  return true;
+}
+
+function notifySavedAlertsForPosts(posts, { source = "feed" } = {}) {
+  if (
+    !Array.isArray(posts) ||
+    posts.length === 0 ||
+    savedSearchAlerts.length === 0
+  )
+    return;
+  const matched = [];
+  posts.forEach((post) => {
+    const key = idKey(post?.id);
+    if (!key || alertedPostIds.has(key)) return;
+    if (
+      post?.user_id &&
+      currentUserData?.id &&
+      post.user_id === currentUserData.id
+    )
+      return;
+    const hit = savedSearchAlerts.find((alert) =>
+      postMatchesSavedAlert(post, alert),
+    );
+    if (!hit) return;
+    alertedPostIds.add(key);
+    matched.push({ post, alert: hit });
+  });
+  if (matched.length === 0) return;
+  persistAlertedPostIds();
+  const preview = matched[0];
+  const label =
+    preview.alert.term.length > 28
+      ? `${preview.alert.term.slice(0, 28)}…`
+      : preview.alert.term;
+  showToast(
+    matched.length === 1
+      ? `Alert: "${label}" matched ${preview.post?.title || "a new listing"}`
+      : `Alert: ${matched.length} new posts matched "${label}"`,
+  );
+}
+
+function renderSavedAlertPills(activeTerm = "") {
+  if (!savedSearchAlerts.length) return "";
+  const normalizedActive = normalizeSearchAlertTerm(activeTerm);
+  return `
+        <div class="flex flex-wrap gap-2 mb-3">
+            ${savedSearchAlerts
+              .map(
+                (alert) => `
+                <button onclick="window.runSearch('${escAttr(alert.term)}')" class="px-3 py-1.5 rounded-full border text-[10px] uppercase tracking-wider font-black transition ${normalizedActive === alert.term ? "border-amber-400 text-amber-300 bg-amber-400/10" : "border-slate-700 text-slate-300 bg-slate-900"}">${esc(alert.term)}</button>
+                <button onclick="window.removeSearchAlert('${escAttr(alert.term)}')" class="-ml-1 px-2 py-1.5 rounded-full text-[10px] text-slate-500 hover:text-red-300" aria-label="Remove alert ${escAttr(alert.term)}">✕</button>
+            `,
+              )
+              .join("")}
+        </div>`;
+}
+
+window.saveSearchAlert = function (term) {
+  const normalized = normalizeSearchAlertTerm(term);
+  if (!normalized) {
+    showToast("Type a keyword before saving an alert.");
+    return;
+  }
+  if (savedSearchAlerts.some((alert) => alert.term === normalized)) {
+    showToast("That alert is already saved.");
+    return;
+  }
+  if (savedSearchAlerts.length >= MAX_SAVED_ALERTS) savedSearchAlerts.shift();
+  savedSearchAlerts.push({
+    term: normalized,
+    postType: currentFeedType === "all" ? "all" : currentFeedType,
+    scope: currentCampusScope,
+    created_at: new Date().toISOString(),
+  });
+  persistSavedAlerts();
+  showToast(`Saved alert for "${normalized}"`);
+  const searchInput =
+    document.getElementById("searchInput") ||
+    document.getElementById("search-input");
+  window.runSearch(searchInput?.value || normalized);
+};
+
+window.removeSearchAlert = function (term) {
+  const normalized = normalizeSearchAlertTerm(term);
+  const idx = savedSearchAlerts.findIndex((alert) => alert.term === normalized);
+  if (idx === -1) return;
+  savedSearchAlerts.splice(idx, 1);
+  persistSavedAlerts();
+  showToast(`Removed alert for "${normalized}"`);
+  const searchInput =
+    document.getElementById("searchInput") ||
+    document.getElementById("search-input");
+  window.runSearch(searchInput?.value || "");
+};
 
 function buildOptions(arr, selectedVal = "") {
   return arr
@@ -543,21 +816,23 @@ function unsubscribeFeed() {
 function defaultFeedQuery() {
   return supabase
     .from("posts")
-    .select("*")
+    .select(FEED_SELECT_COLUMNS)
     .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
     .limit(FEED_PAGE_SIZE);
 }
 
-// Fetches posts using the tab's base filter (type condition only) plus an
-// explicit range, so pagination and "refresh what's currently loaded"
-// (used by the realtime handler) are both just different calls to the
-// same underlying query builder instead of two divergent code paths.
-function buildFeedQuery(baseFilter, rangeStart, rangeEnd) {
-  let q = supabase.from("posts").select("*");
+// Fetches posts using the tab's base filter (type condition only) plus a
+// stable cursor, so newly inserted rows don't shift older rows between
+// pages while someone is already scrolling the feed.
+function buildFeedQuery(baseFilter, cursor = null, limit = FEED_PAGE_SIZE) {
+  let q = supabase.from("posts").select(FEED_SELECT_COLUMNS);
   if (baseFilter) q = baseFilter(q);
-  return q
+  q = q
     .order("created_at", { ascending: false })
-    .range(rangeStart, rangeEnd);
+    .order("id", { ascending: false });
+  q = applyCursorToPostQuery(q, cursor);
+  return q.limit(limit);
 }
 
 async function fetchFeedSnapshot(queryFactory = null) {
@@ -572,14 +847,17 @@ async function subscribeFeed(baseFilter = null) {
   currentFeedBaseFilter = baseFilter;
   feedLoadedCount = 0;
   feedHasMore = true;
+  feedCursor = null;
 
   try {
     const data = await fetchFeedSnapshot(() =>
-      buildFeedQuery(baseFilter, 0, FEED_PAGE_SIZE - 1),
+      buildFeedQuery(baseFilter, null, FEED_PAGE_SIZE),
     );
     allCachedPosts = data.map((item) => ({ id: item.id, data: item }));
     feedLoadedCount = data.length;
     feedHasMore = data.length === FEED_PAGE_SIZE;
+    updateFeedCursorFromPosts(data, "feed");
+    applyFeedRankingToCache();
 
     // Sync local bookmark view mapping if authenticated
     if (currentUserData) {
@@ -672,7 +950,7 @@ async function subscribeFeed(baseFilter = null) {
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "posts" },
-      () => {
+      (payload) => {
         // Debounced: multiple realtime events arriving in quick
         // succession (e.g. several people liking/commenting around
         // the same time) previously each triggered their own full
@@ -688,12 +966,15 @@ async function subscribeFeed(baseFilter = null) {
         // feed back to page 1. Now it re-fetches exactly however
         // many posts are currently loaded, preserving pagination
         // progress.
+        if (payload?.eventType === "INSERT" && payload?.new) {
+          notifySavedAlertsForPosts([payload.new], { source: "realtime" });
+        }
         clearTimeout(_feedRefreshDebounceTimer);
         _feedRefreshDebounceTimer = setTimeout(async () => {
           try {
             const currentCount = Math.max(feedLoadedCount, FEED_PAGE_SIZE);
             const data = await fetchFeedSnapshot(() =>
-              buildFeedQuery(baseFilter, 0, currentCount - 1),
+              buildFeedQuery(baseFilter, null, currentCount),
             );
 
             // Fix: liking a post writes to posts.likes_count via
@@ -724,6 +1005,8 @@ async function subscribeFeed(baseFilter = null) {
 
             feedLoadedCount = data.length;
             feedHasMore = data.length >= currentCount;
+            updateFeedCursorFromPosts(data, "feed");
+            applyFeedRankingToCache();
             renderFeedFromCache();
 
             if (
@@ -755,10 +1038,8 @@ async function loadNextFeedPage() {
   }
 
   try {
-    const rangeStart = feedLoadedCount;
-    const rangeEnd = feedLoadedCount + FEED_PAGE_SIZE - 1;
     const data = await fetchFeedSnapshot(() =>
-      buildFeedQuery(currentFeedBaseFilter, rangeStart, rangeEnd),
+      buildFeedQuery(currentFeedBaseFilter, feedCursor, FEED_PAGE_SIZE),
     );
 
     const existingIds = new Set(allCachedPosts.map((p) => p.id));
@@ -769,6 +1050,8 @@ async function loadNextFeedPage() {
     allCachedPosts = allCachedPosts.concat(newItems);
     feedLoadedCount += data.length;
     feedHasMore = data.length === FEED_PAGE_SIZE;
+    updateFeedCursorFromPosts(data, "feed");
+    applyFeedRankingToCache();
 
     renderFeedFromCache();
   } catch (err) {
@@ -995,7 +1278,7 @@ window.openDetail = async function (postId) {
   try {
     const { data: d, error } = await supabase
       .from("posts")
-      .select("*")
+      .select(FEED_SELECT_COLUMNS)
       .eq("id", postId)
       .single();
 
@@ -1069,6 +1352,7 @@ window.openDetail = async function (postId) {
       : "bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
 
     const ctaLabel = d.type === "skill" ? "Contact" : "Contact Seller";
+    const safeSwapBlock = renderSafeSwapZoneCard(d);
 
     registerPostContext(d.id, d, mediaUrls[0] || "");
 
@@ -1095,6 +1379,7 @@ window.openDetail = async function (postId) {
                     ${followBlock}
                 </div>
                 <p class="text-slate-400 leading-relaxed font-light">${esc(d.description) || "No description provided."}</p>
+                ${safeSwapBlock}
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6">
                     <button
                         id="detail-cart-btn-${escAttr(d.id)}"
@@ -3317,6 +3602,44 @@ async function submitReport(targetType, targetId, reason = "unspecified") {
 // Post options: only the owner gets a real "Delete listing"; everyone
 // else gets "Report" (persists — see submitReport above) and "Block
 // user" (hides this person's posts and DMs — see blockUser above).
+function openReportReasonMenu(
+  targetType,
+  targetId,
+  authorId = null,
+  authorName = "this student",
+) {
+  openOptionsMenu([
+    {
+      label: "Spam / scam",
+      icon: "fas fa-shield-halved",
+      action: () => submitReport(targetType, targetId, "spam_or_scam"),
+    },
+    {
+      label: "Misleading description",
+      icon: "fas fa-circle-exclamation",
+      action: () =>
+        submitReport(targetType, targetId, "misleading_description"),
+    },
+    {
+      label: "Unsafe meetup request",
+      icon: "fas fa-location-dot",
+      action: () => submitReport(targetType, targetId, "unsafe_meetup_request"),
+    },
+    {
+      label: "Harassment / abuse",
+      icon: "fas fa-user-slash",
+      action: () => submitReport(targetType, targetId, "harassment_or_abuse"),
+    },
+    { divider: true },
+    {
+      label: `Block ${authorName}`,
+      icon: "fas fa-user-slash",
+      danger: true,
+      action: () => window.blockUser(authorId, authorName),
+    },
+  ]);
+}
+
 window.openPostOptionsMenu = function (
   postId,
   isOwn,
@@ -3326,8 +3649,8 @@ window.openPostOptionsMenu = function (
   const items = isOwn
     ? [
         {
-          label: "Delete listing",
-          icon: "fas fa-trash-can",
+          label: "Archive or delete listing",
+          icon: "fas fa-box-archive",
           danger: true,
           action: () => window.deletePost(postId),
         },
@@ -3336,7 +3659,8 @@ window.openPostOptionsMenu = function (
         {
           label: "Report listing",
           icon: "fas fa-flag",
-          action: () => submitReport("post", postId),
+          action: () =>
+            openReportReasonMenu("post", postId, authorId, authorName),
         },
         { divider: true },
         {
@@ -3370,7 +3694,8 @@ window.openCommentOptionsMenu = function (
         {
           label: "Report comment",
           icon: "fas fa-flag",
-          action: () => submitReport("comment", commentId),
+          action: () =>
+            openReportReasonMenu("comment", commentId, authorId, authorName),
         },
         { divider: true },
         {
@@ -4337,6 +4662,26 @@ async function refreshFollowButtonStates() {
 // caches that reference it. Used by both the single-post delete (options
 // menu) and the "My Gigs & Posts" bulk delete, so there's exactly one
 // place that knows how to fully remove a post.
+async function attemptSoftArchivePost(postId) {
+  const archiveAttempts = [
+    { is_archived: true, archived_at: new Date().toISOString() },
+    { status: "archived", archived_at: new Date().toISOString() },
+    { status: "archived" },
+    { is_archived: true },
+  ];
+
+  for (const payload of archiveAttempts) {
+    const { error } = await supabase
+      .from("posts")
+      .update(payload)
+      .eq("id", postId)
+      .eq("user_id", currentUserData.id);
+    if (!error) return true;
+  }
+
+  return false;
+}
+
 async function _deletePostById(postId) {
   const { data: currentPost, error: fetchErr } = await supabase
     .from("posts")
@@ -4345,6 +4690,21 @@ async function _deletePostById(postId) {
     .single();
 
   if (fetchErr) throw fetchErr;
+
+  const archived = await attemptSoftArchivePost(postId);
+  if (archived) {
+    const cartIndex = userCartList.findIndex(
+      (item) => idKey(item.id) === idKey(postId),
+    );
+    if (cartIndex > -1) {
+      userCartList.splice(cartIndex, 1);
+      localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
+    }
+    allCachedPosts = allCachedPosts.filter(
+      (item) => idKey(item.id) !== idKey(postId),
+    );
+    return { mode: "archived" };
+  }
 
   if (currentPost?.media_url) {
     const targets = currentPost.media_url.startsWith("[")
@@ -4398,21 +4758,26 @@ async function _deletePostById(postId) {
   allCachedPosts = allCachedPosts.filter(
     (item) => idKey(item.id) !== idKey(postId),
   );
+  return { mode: "deleted" };
 }
 
 window.deletePost = function (postId) {
   if (!currentUserData) return;
 
   showConfirmDialog({
-    title: "Delete this listing?",
+    title: "Archive this listing?",
     message:
-      "This will permanently remove the listing and its media. This can't be undone.",
-    confirmLabel: "Delete",
+      "Uni-Sync now tries a safer archive-first workflow. If your database doesn't support archiving yet, it falls back to permanent deletion.",
+    confirmLabel: "Archive",
     danger: true,
     onConfirm: async () => {
       try {
-        await _deletePostById(postId);
-        showToast("Post deleted successfully! ✓");
+        const result = await _deletePostById(postId);
+        showToast(
+          result?.mode === "archived"
+            ? "Listing archived successfully! ✓"
+            : "Post deleted successfully! ✓",
+        );
         renderFeedFromCache();
       } catch (err) {
         console.error("Error deleting post from database:", err);
@@ -4438,6 +4803,7 @@ async function loadFollowingFeed() {
 
   feedLoadedCount = 0;
   feedHasMore = true;
+  followingFeedCursor = null;
 
   try {
     const { data: followingData } = await supabase
@@ -4459,10 +4825,11 @@ async function loadFollowingFeed() {
 
     const { data: posts, error } = await supabase
       .from("posts")
-      .select("*")
+      .select(FEED_SELECT_COLUMNS)
       .in("user_id", followingFeedIds)
       .order("created_at", { ascending: false })
-      .range(0, FEED_PAGE_SIZE - 1);
+      .order("id", { ascending: false })
+      .limit(FEED_PAGE_SIZE);
 
     if (error) throw error;
 
@@ -4475,6 +4842,8 @@ async function loadFollowingFeed() {
     allCachedPosts = posts.map((item) => ({ id: item.id, data: item }));
     feedLoadedCount = posts.length;
     feedHasMore = posts.length === FEED_PAGE_SIZE;
+    updateFeedCursorFromPosts(posts, "following");
+    applyFeedRankingToCache();
 
     feed.innerHTML = "";
     posts.forEach((d) => {
@@ -4510,14 +4879,17 @@ async function loadNextFollowingPage() {
   }
 
   try {
-    const rangeStart = feedLoadedCount;
-    const rangeEnd = feedLoadedCount + FEED_PAGE_SIZE - 1;
-    const { data: posts, error } = await supabase
+    let followingQuery = supabase
       .from("posts")
-      .select("*")
+      .select(FEED_SELECT_COLUMNS)
       .in("user_id", followingFeedIds)
       .order("created_at", { ascending: false })
-      .range(rangeStart, rangeEnd);
+      .order("id", { ascending: false });
+    followingQuery = applyCursorToPostQuery(
+      followingQuery,
+      followingFeedCursor,
+    ).limit(FEED_PAGE_SIZE);
+    const { data: posts, error } = await followingQuery;
 
     if (error) throw error;
 
@@ -4529,6 +4901,8 @@ async function loadNextFollowingPage() {
     allCachedPosts = allCachedPosts.concat(newItems);
     feedLoadedCount += (posts || []).length;
     feedHasMore = (posts || []).length === FEED_PAGE_SIZE;
+    updateFeedCursorFromPosts(posts || [], "following");
+    applyFeedRankingToCache();
 
     renderFeedFromCache();
   } catch (err) {
@@ -4925,8 +5299,9 @@ async function _runSearchImmediate(term) {
     try {
       const { data } = await supabase
         .from("posts")
-        .select("*")
+        .select(FEED_SELECT_COLUMNS)
         .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
         .limit(SEARCH_LIMIT);
 
       if (data) {
@@ -4952,18 +5327,24 @@ async function _runSearchImmediate(term) {
 
   if (matches.length === 0) {
     resultsEl.innerHTML = `
-            <div class="text-center py-14 space-y-2">
+            <div class="text-center py-14 space-y-3">
                 <p class="text-4xl">🔍</p>
                 <p class="text-slate-400 font-bold text-sm">No results for "${esc(trimmedTerm)}"</p>
                 <p class="text-slate-600 text-xs">Try searching for alternative keys, items, or skills</p>
+                <button onclick="window.saveSearchAlert('${escAttr(trimmedTerm)}')" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-400 text-black text-[11px] font-black uppercase tracking-wider active:scale-95 transition"><i class="fas fa-bell"></i> Notify me when posted</button>
+                ${renderSavedAlertPills(trimmedTerm)}
             </div>`;
     return;
   }
 
   resultsEl.innerHTML = `
-        <p class="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-3">
-            ${matches.length} campus result${matches.length !== 1 ? "s" : ""} found
-        </p>`;
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <p class="text-[10px] text-slate-500 uppercase font-bold tracking-widest">
+                ${matches.length} campus result${matches.length !== 1 ? "s" : ""} found
+            </p>
+            <button onclick="window.saveSearchAlert('${escAttr(trimmedTerm)}')" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-amber-400/40 text-amber-300 text-[10px] font-black uppercase tracking-wider active:scale-95 transition"><i class="fas fa-bell mr-1"></i>Save alert</button>
+        </div>
+        ${renderSavedAlertPills(trimmedTerm)}`;
 
   matches.slice(0, SEARCH_RESULTS_CAP).forEach((item) => {
     const id = item.id;
