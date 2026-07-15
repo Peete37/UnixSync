@@ -3607,7 +3607,7 @@ try {
 function scopeZoomToMedia() {
   document.querySelectorAll("img, video").forEach((el) => {
     try {
-      el.style.touchAction = "pinch-zoom";
+      el.style.touchAction = "pan-y pinch-zoom";
     } catch (_) {}
   });
 }
