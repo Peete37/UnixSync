@@ -1649,7 +1649,11 @@ window.openDetail = async function (postId) {
                 <p class="text-slate-400 leading-relaxed font-light">${esc(d.description) || "No description provided."}</p>
                 ${safeSwapBlock}
                 ${renderSimilarListingsBlock(d)}
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6">
+                <div class="grid grid-cols-1 ${isOwn ? "" : "sm:grid-cols-2"} gap-3 mt-6">
+                    ${
+                      isOwn
+                        ? ""
+                        : `
                     <button
                         id="detail-cart-btn-${escAttr(d.id)}"
                         onclick="window.toggleCartItem('${escAttr(d.id)}')"
@@ -1658,7 +1662,8 @@ window.openDetail = async function (postId) {
                     </button>
                     <button onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}', '${escAttr(d.id)}')" class="w-full bg-amber-400 text-black font-black py-4 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
                         ${esc(ctaLabel)}
-                    </button>
+                    </button>`
+                    }
                 </div>
             </div>`;
 
@@ -3607,7 +3612,7 @@ try {
 function scopeZoomToMedia() {
   document.querySelectorAll("img, video").forEach((el) => {
     try {
-      el.style.touchAction = "pan-y pinch-zoom";
+      el.style.touchAction = "pan-x pan-y pinch-zoom";
     } catch (_) {}
   });
 }
