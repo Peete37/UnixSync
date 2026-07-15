@@ -164,6 +164,7 @@ const _savedFeedTab = localStorage.getItem("campus_market_feed_tab");
 let currentFeedType = _validFeedTabs.includes(_savedFeedTab)
   ? _savedFeedTab
   : "all"; // tracks active tab: all | reels | following | product | skill
+let _feedLoadGeneration = 0;
 
 // ─── CAMPUS SCOPE STATE ────────────────────────────────────────────────────────
 // Previously institution/region were pure display metadata — every tab
@@ -1080,11 +1081,13 @@ async function subscribeFeed(baseFilter = null) {
   feedLoadedCount = 0;
   feedHasMore = true;
   feedCursor = null;
+  const myGeneration = _feedLoadGeneration;
 
   try {
     const data = await fetchFeedSnapshot(() =>
       buildFeedQuery(baseFilter, null, FEED_PAGE_SIZE),
     );
+    if (myGeneration !== _feedLoadGeneration) return; // superseded by a newer tab switch
     allCachedPosts = data.map((item) => ({ id: item.id, data: item }));
     feedLoadedCount = data.length;
     feedHasMore = data.length === FEED_PAGE_SIZE;
@@ -1171,6 +1174,7 @@ async function subscribeFeed(baseFilter = null) {
       }
     }
 
+    if (myGeneration !== _feedLoadGeneration) return; // superseded by a newer tab switch
     renderFeedFromCache();
   } catch (err) {
     console.error("Feed poll error:", err);
@@ -5619,6 +5623,7 @@ let followingFeedIds = []; // cached so loadMore doesn't need to re-fetch the fo
 
 async function loadFollowingFeed() {
   if (!currentUserData) return;
+  const myGeneration = _feedLoadGeneration;
 
   const feed = document.getElementById("posts-feed");
   if (!feed) return;
@@ -5637,6 +5642,8 @@ async function loadFollowingFeed() {
       .from("follows")
       .select("following_id")
       .eq("follower_id", currentUserData.id);
+
+    if (myGeneration !== _feedLoadGeneration) return; // superseded by a newer tab switch
 
     followingFeedIds = followingData?.map((s) => s.following_id) || [];
 
@@ -5660,6 +5667,7 @@ async function loadFollowingFeed() {
       .limit(FEED_PAGE_SIZE);
 
     if (error) throw error;
+    if (myGeneration !== _feedLoadGeneration) return; // superseded by a newer tab switch
 
     if (!posts || posts.length === 0) {
       feed.innerHTML =
@@ -5891,6 +5899,7 @@ window.filterFeed = function (type, clickedBtn = null) {
 
   const previousType = currentFeedType;
   currentFeedType = type;
+  _feedLoadGeneration++;
 
   // Remember the active tab so a refresh lands back where the person
   // actually was (Reels, Products, Services, Following...) instead of
