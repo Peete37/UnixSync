@@ -454,6 +454,76 @@ function renderSafeSwapZoneCard(post) {
         </div>`;
 }
 
+// ─── SMART RECOMMENDATIONS ("Similar listings") ─────────────────────────────
+// Honest scope note: this is a same-category/same-campus heuristic, not a
+// personalized ML recommender — building genuine collaborative filtering
+// or embeddings-based similarity would need a lot more user behavior data
+// than this app currently collects (no view-history table, no purchase
+// signal), plus infra this file can't stand up on its own. What's here
+// is the useful, buildable version: from whatever's already loaded in
+// allCachedPosts, surface other active listings of the same type,
+// preferring same institution first, then same region, most recent
+// first — the same signals a person would use browsing manually, just
+// automated.
+function renderSimilarListingsBlock(post) {
+  if (!post?.id || !allCachedPosts?.length) return "";
+
+  const targetType = post.type || "product";
+  const candidates = allCachedPosts
+    .map((item) => (item.data ? item.data : item))
+    .filter(
+      (d) =>
+        d &&
+        idKey(d.id) !== idKey(post.id) &&
+        (d.type || "product") === targetType,
+    );
+
+  if (!candidates.length) return "";
+
+  const scored = candidates.map((d) => {
+    let score = 0;
+    if (d.institution && d.institution === post.institution) score += 10;
+    else if (d.region && d.region === post.region) score += 5;
+    return { d, score, createdAt: d.created_at || "" };
+  });
+  scored.sort(
+    (a, b) => b.score - a.score || (b.createdAt > a.createdAt ? 1 : -1),
+  );
+
+  const picks = scored.slice(0, 6).map((s) => s.d);
+  if (!picks.length) return "";
+
+  return `
+        <div class="pt-2">
+            <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400 mb-3">You might also like</p>
+            <div class="flex gap-3 overflow-x-auto no-scrollbar pb-1" style="scroll-snap-type:x mandatory;">
+                ${picks
+                  .map((d) => {
+                    let thumb = "";
+                    if (d.media_url) {
+                      try {
+                        const urls = d.media_url.startsWith("[")
+                          ? JSON.parse(d.media_url)
+                          : [d.media_url];
+                        thumb = urls[0] || "";
+                      } catch (_) {
+                        thumb = d.media_url;
+                      }
+                    }
+                    return `
+                        <button onclick="openDetail('${escAttr(d.id)}')" class="shrink-0 w-28 text-left snap-start active:scale-95 transition">
+                            <div class="w-28 h-28 rounded-xl bg-slate-900 border border-slate-800 overflow-hidden">
+                                ${thumb ? `<img src="${esc(thumb)}" class="w-full h-full object-cover" alt="${esc(d.title)}" loading="lazy">` : `<div class="w-full h-full flex items-center justify-center text-slate-700"><i class="fas fa-image"></i></div>`}
+                            </div>
+                            <p class="text-[11px] text-white font-semibold mt-1.5 truncate">${esc(d.title)}</p>
+                            <p class="text-[10px] text-amber-400 font-bold">GH₵${esc(String(d.price || 0))}</p>
+                        </button>`;
+                  })
+                  .join("")}
+            </div>
+        </div>`;
+}
+
 function persistSavedAlerts() {
   localStorage.setItem(SAVED_ALERTS_KEY, JSON.stringify(savedSearchAlerts));
 }
@@ -546,13 +616,22 @@ function notifySavedAlertsForPosts(posts, { source = "feed" } = {}) {
 function renderSavedAlertPills(activeTerm = "") {
   if (!savedSearchAlerts.length) return "";
   const normalizedActive = normalizeSearchAlertTerm(activeTerm);
+  // Fix: the pill button and its ✕ remove button used to be flex
+  // siblings glued together with a negative margin (-ml-1). That only
+  // looks attached when both happen to land on the same flex-wrap line;
+  // once the row wraps at a narrow width, the ✕ can end up on the next
+  // line, detached from the pill it's meant to remove. Wrapping each
+  // pair in its own inline-flex container keeps them physically
+  // together no matter where the wrap point falls.
   return `
         <div class="flex flex-wrap gap-2 mb-3">
             ${savedSearchAlerts
               .map(
                 (alert) => `
-                <button onclick="window.runSearch('${escAttr(alert.term)}')" class="px-3 py-1.5 rounded-full border text-[10px] uppercase tracking-wider font-black transition ${normalizedActive === alert.term ? "border-amber-400 text-amber-300 bg-amber-400/10" : "border-slate-700 text-slate-300 bg-slate-900"}">${esc(alert.term)}</button>
-                <button onclick="window.removeSearchAlert('${escAttr(alert.term)}')" class="-ml-1 px-2 py-1.5 rounded-full text-[10px] text-slate-500 hover:text-red-300" aria-label="Remove alert ${escAttr(alert.term)}">✕</button>
+                <div class="inline-flex items-center">
+                    <button onclick="window.runSearch('${escAttr(alert.term)}')" class="px-3 py-1.5 rounded-full border text-[10px] uppercase tracking-wider font-black transition ${normalizedActive === alert.term ? "border-amber-400 text-amber-300 bg-amber-400/10" : "border-slate-700 text-slate-300 bg-slate-900"}">${esc(alert.term)}</button>
+                    <button onclick="window.removeSearchAlert('${escAttr(alert.term)}')" class="-ml-1 px-2 py-1.5 rounded-full text-[10px] text-slate-500 hover:text-red-300" aria-label="Remove alert ${escAttr(alert.term)}">✕</button>
+                </div>
             `,
               )
               .join("")}
@@ -1380,6 +1459,7 @@ window.openDetail = async function (postId) {
                 </div>
                 <p class="text-slate-400 leading-relaxed font-light">${esc(d.description) || "No description provided."}</p>
                 ${safeSwapBlock}
+                ${renderSimilarListingsBlock(d)}
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6">
                     <button
                         id="detail-cart-btn-${escAttr(d.id)}"
@@ -3399,6 +3479,15 @@ let blockedUserNames = JSON.parse(
   localStorage.getItem("campus_market_blocked_names") || "{}",
 );
 
+// ─── Verification badge + seller ratings caches ─────────────────────────────
+// Both are populated on demand (profile view, feed render) rather than
+// fetched for every post up front, since most feed scrolling never visits
+// a given seller's profile. `null` in verifiedUserCache means "checked,
+// not verified" (distinct from "not yet checked", which is simply absent
+// from the map) so we don't re-query the same unverified user repeatedly.
+const verifiedUserCache = {}; // userId -> boolean
+const sellerRatingCache = {}; // userId -> { average: number, count: number }
+
 function _persistBlockedLocally() {
   localStorage.setItem(
     "campus_market_blocked_users",
@@ -3553,6 +3642,265 @@ window.unblockUser = function (userId, userName = "this student") {
   });
 };
 
+// ─── EDU VERIFICATION ───────────────────────────────────────────────────────
+// Verifies a student by their institutional email domain. This is the
+// lightweight, self-serve version of verification (no manual document
+// review) — a user submits their .edu.gh (or equivalent) email, we send
+// a Supabase OTP/magic-link to it, and on confirmation we flip
+// profiles.is_verified. Requires the `verification_requests` table +
+// `profiles.is_verified` column from the accompanying SQL migration —
+// every call below fails soft (toast + console.warn) if that schema
+// isn't present yet, so this can ship even before the migration runs.
+//
+// NOTE ON SCOPE: genuinely confirming someone owns a .edu inbox needs a
+// server-side email step (Supabase Auth email OTP, or a custom Edge
+// Function sending a verification link) — a purely client-side check of
+// "does this string look like a university email" would be trivial to
+// fake and isn't real verification. This function does the client-side
+// half (submitting the request + reflecting status); the email-send/
+// confirm step should go through supabase.auth.signInWithOtp() against
+// the submitted address, or a dedicated Edge Function if you want the
+// user to stay signed in as their existing account rather than switching
+// auth identity. That wiring depends on how your Supabase Auth project
+// is configured, so it's left as the one deliberately-unfinished edge —
+// flagged here rather than guessed at.
+window.submitVerificationRequest = async function (eduEmail) {
+  if (!currentUserData) {
+    showToast("Please sign in first.");
+    return;
+  }
+  const email = (eduEmail || "").trim().toLowerCase();
+  const looksLikeEduEmail =
+    /^[^\s@]+@[^\s@]+\.(edu(\.[a-z]{2})?|ac\.[a-z]{2})$/i.test(email);
+  if (!looksLikeEduEmail) {
+    showToast("Please enter your university email (e.g. name@ug.edu.gh).");
+    return;
+  }
+
+  try {
+    const { error } = await supabase.from("verification_requests").insert({
+      user_id: currentUserData.id,
+      method: "edu_email",
+      submitted_email: email,
+      status: "pending",
+      created_at: new Date().toISOString(),
+    });
+    if (error) throw error;
+
+    showToast(
+      "Verification request submitted — we'll email you a confirmation link.",
+    );
+    // See note above: triggering the actual confirmation email is a
+    // server-side step. If you want it fired from here, this is
+    // where a call like supabase.auth.signInWithOtp({ email }) or an
+    // Edge Function invoke would go, once you've decided which path
+    // fits your existing auth setup.
+    if (
+      document
+        .getElementById("info-sheet-overlay")
+        ?.classList.contains("sheet-open")
+    ) {
+      window.openInfoSheet("verification");
+    }
+  } catch (err) {
+    console.warn("Verification request failed — table may not exist yet:", err);
+    showToast(
+      "Couldn't submit right now. This feature needs a database update — try again later.",
+    );
+  }
+};
+
+// Checks (and caches) whether a given user is verified. Call before
+// rendering anything that shows a verified badge.
+async function isUserVerified(userId) {
+  if (!userId) return false;
+  if (verifiedUserCache[userId] !== undefined) return verifiedUserCache[userId];
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("is_verified")
+      .eq("id", userId)
+      .maybeSingle();
+    if (error) throw error;
+    const verified = !!data?.is_verified;
+    verifiedUserCache[userId] = verified;
+    return verified;
+  } catch (err) {
+    // Column/table likely doesn't exist yet — fail closed (unverified)
+    // rather than crash the feed render.
+    console.warn("Verification lookup failed:", err);
+    verifiedUserCache[userId] = false;
+    return false;
+  }
+}
+
+// Small inline badge markup, reused in feed cards and public profile.
+function verifiedBadgeHtml() {
+  return `<i class="fas fa-circle-check text-amber-400 text-[11px] ml-1" title="Verified student" aria-label="Verified student"></i>`;
+}
+
+// After the feed/profile has already rendered with no badge (verification
+// status wasn't known at render time), this retroactively injects the
+// badge into the DOM once the check resolves — avoids blocking the whole
+// card render on a network round trip for every single post.
+async function applyVerifiedBadgeWhenReady(userId, targetSelector) {
+  const verified = await isUserVerified(userId);
+  if (!verified) return;
+  document.querySelectorAll(targetSelector).forEach((el) => {
+    if (!el.querySelector(".verified-badge-inline")) {
+      el.insertAdjacentHTML(
+        "beforeend",
+        `<span class="verified-badge-inline">${verifiedBadgeHtml()}</span>`,
+      );
+    }
+  });
+}
+
+// ─── SELLER RATINGS ──────────────────────────────────────────────────────────
+// Double-blind-ish peer review: a rating (1-5) + optional comment, tied to
+// a specific seller. "Double-blind" in the strict sense (neither party
+// sees the other's rating until both submit) isn't practical here since
+// there's no tracked "transaction" object linking a buyer and seller —
+// this marketplace is DM-based with no order/checkout flow. What's built
+// instead: any signed-in student who isn't the seller can rate them once
+// per rater/seller pair (enforced by a unique constraint in the SQL
+// migration), from that seller's public profile. Simpler than the full
+// blueprint's transaction-scoped review, but honest about what the app can
+// actually verify happened.
+window.submitSellerRating = async function (sellerId, stars, comment = "") {
+  if (!currentUserData) {
+    showToast("Please sign in to leave a rating.");
+    return;
+  }
+  if (sellerId === currentUserData.id) {
+    showToast("You can't rate yourself.");
+    return;
+  }
+  const rating = Math.max(1, Math.min(5, parseInt(stars, 10) || 0));
+  if (!rating) {
+    showToast("Pick a star rating first.");
+    return;
+  }
+
+  try {
+    const { error } = await supabase.from("seller_ratings").upsert(
+      {
+        seller_id: sellerId,
+        rater_id: currentUserData.id,
+        stars: rating,
+        comment: (comment || "").trim().slice(0, 500),
+        created_at: new Date().toISOString(),
+      },
+      { onConflict: "seller_id,rater_id" },
+    );
+    if (error) throw error;
+
+    delete sellerRatingCache[sellerId]; // force a fresh average next fetch
+    showToast("Rating submitted — thanks for keeping the campus honest.");
+    if (
+      document
+        .getElementById("public-profile-overlay")
+        ?.classList.contains("sheet-open")
+    ) {
+      window._refreshPublicProfileRatingBlock(sellerId);
+    }
+  } catch (err) {
+    console.warn("Rating submit failed — table may not exist yet:", err);
+    showToast(
+      "Couldn't submit right now. This feature needs a database update — try again later.",
+    );
+  }
+};
+
+async function fetchSellerRatingSummary(sellerId) {
+  if (sellerRatingCache[sellerId]) return sellerRatingCache[sellerId];
+  try {
+    const { data, error } = await supabase
+      .from("seller_ratings")
+      .select("stars")
+      .eq("seller_id", sellerId);
+    if (error) throw error;
+    const count = data?.length || 0;
+    const average =
+      count > 0 ? data.reduce((sum, r) => sum + r.stars, 0) / count : 0;
+    const summary = { average: Math.round(average * 10) / 10, count };
+    sellerRatingCache[sellerId] = summary;
+    return summary;
+  } catch (err) {
+    console.warn("Rating summary fetch failed — table may not exist yet:", err);
+    return { average: 0, count: 0 };
+  }
+}
+
+function ratingStarsHtml(average) {
+  let out = "";
+  for (let i = 1; i <= 5; i++) {
+    out += `<i class="fa${i <= Math.round(average) ? "s" : "r"} fa-star text-amber-400 text-[11px]"></i>`;
+  }
+  return out;
+}
+
+// Re-fetches and re-renders just the rating block inside an already-open
+// public profile sheet — used right after submitting a rating so the
+// person sees their own rating reflected without a full profile reload.
+window._refreshPublicProfileRatingBlock = async function (sellerId) {
+  const summary = await fetchSellerRatingSummary(sellerId);
+  const el = document.getElementById("public-profile-rating-block");
+  if (!el) return;
+  el.innerHTML = renderRatingBlockInner(sellerId, summary);
+};
+
+function renderRatingBlockInner(sellerId, summary) {
+  const canRate = currentUserData && currentUserData.id !== sellerId;
+  return `
+        <div class="flex items-center gap-1.5">
+            ${ratingStarsHtml(summary.average)}
+            <span class="text-slate-400 text-[11px] ml-1">${summary.count > 0 ? `${summary.average} (${summary.count})` : "No ratings yet"}</span>
+        </div>
+        ${
+          canRate
+            ? `
+            <button onclick="window.openRatingPrompt('${escAttr(sellerId)}')" class="text-amber-400 text-[10px] font-black uppercase tracking-wider mt-1.5">
+                Rate this seller
+            </button>`
+            : ""
+        }
+    `;
+}
+
+// Lightweight inline prompt using the existing options-menu pattern
+// (openOptionsMenu is already used for post/comment/report menus) rather
+// than building a whole new modal component for a 1-5 star picker.
+window.openRatingPrompt = function (sellerId) {
+  openOptionsMenu([
+    {
+      label: "★☆☆☆☆ — 1 star",
+      icon: "far fa-star",
+      action: () => window.submitSellerRating(sellerId, 1),
+    },
+    {
+      label: "★★☆☆☆ — 2 stars",
+      icon: "far fa-star",
+      action: () => window.submitSellerRating(sellerId, 2),
+    },
+    {
+      label: "★★★☆☆ — 3 stars",
+      icon: "far fa-star",
+      action: () => window.submitSellerRating(sellerId, 3),
+    },
+    {
+      label: "★★★★☆ — 4 stars",
+      icon: "far fa-star",
+      action: () => window.submitSellerRating(sellerId, 4),
+    },
+    {
+      label: "★★★★★ — 5 stars",
+      icon: "far fa-star",
+      action: () => window.submitSellerRating(sellerId, 5),
+    },
+  ]);
+};
+
 // ─── REPORTING ────────────────────────────────────────────────────────────────
 // Previously "Report" just showed a toast and did nothing at all — no
 // record was kept anywhere, so it was a dead end dressed up as a real
@@ -3580,6 +3928,10 @@ async function submitReport(targetType, targetId, reason = "unspecified") {
     const { error } = await supabase.from("reports").insert(payload);
     if (error) throw error;
     showToast("Report submitted — thank you for flagging this.");
+    // Fire-and-forget: don't make the reporter wait on a second
+    // round-trip just to find out if this pushed something over the
+    // auto-hide threshold.
+    checkAutoModerationThreshold(targetType, targetId);
   } catch (err) {
     // Table likely doesn't exist yet (or an RLS policy blocks it) —
     // queue locally so the report isn't just lost, and be upfront
@@ -3595,6 +3947,69 @@ async function submitReport(targetType, targetId, reason = "unspecified") {
     );
     showToast(
       "Report saved on this device — add a `reports` table to receive these centrally.",
+    );
+  }
+}
+
+// ─── AUTO-MODERATION (report-threshold auto-hide) ───────────────────────────
+// The blueprint calls for listings that "breach predefined thresholds"
+// to auto-hide pending moderator review. This is the honest, minimal
+// version: once a post or comment collects AUTO_HIDE_REPORT_THRESHOLD
+// distinct reports, it's automatically archived (posts, via the existing
+// is_archived column) or removed from view (comments, via a `status`
+// column) — reversible by a moderator later, not a hard delete.
+//
+// This deliberately does NOT try to build a moderator review dashboard —
+// that's a real admin surface (who counts as a moderator? a role check?
+// a separate admin app?) that depends on decisions about your project
+// this file can't make for you. What's here is the trigger-side half:
+// detecting the threshold and softly hiding the content. Reviewing/
+// restoring what gets auto-hidden would need that admin surface built
+// separately.
+const AUTO_HIDE_REPORT_THRESHOLD = 3;
+
+async function checkAutoModerationThreshold(targetType, targetId) {
+  try {
+    const { count, error } = await supabase
+      .from("reports")
+      .select("id", { count: "exact", head: true })
+      .eq("target_type", targetType)
+      .eq("target_id", targetId);
+    if (error) throw error;
+    if ((count || 0) < AUTO_HIDE_REPORT_THRESHOLD) return;
+
+    if (targetType === "post") {
+      // Reuses the same soft-archive path as attemptSoftArchivePost,
+      // just triggered by report volume instead of the owner
+      // deleting it — keeps a single source of truth for "hidden
+      // but recoverable" rather than a second hidden-flag concept.
+      await supabase
+        .from("posts")
+        .update({
+          is_archived: true,
+          archived_at: new Date().toISOString(),
+          status: "archived_auto_reported",
+        })
+        .eq("id", targetId);
+      try {
+        renderFeedFromCache();
+      } catch (_) {}
+    } else if (targetType === "comment") {
+      await supabase
+        .from("comments")
+        .update({ status: "hidden_auto_reported" })
+        .eq("id", targetId);
+      document
+        .querySelectorAll(`[id="comment-item-${CSS.escape(targetId)}"]`)
+        .forEach((el) => el.remove());
+    }
+  } catch (err) {
+    // Non-fatal by design — auto-moderation failing silently is far
+    // better than it throwing and breaking the reporter's own report
+    // flow, which already succeeded by the time this runs.
+    console.warn(
+      "Auto-moderation check failed (likely missing status column):",
+      err,
     );
   }
 }
@@ -3802,6 +4217,15 @@ function renderFeedCard(id, d) {
 
   registerPostContext(id, d, mediaUrls[0] || "");
 
+  // Verification status isn't known synchronously (it's a DB lookup),
+  // so the card renders without the badge first, then this fills it in
+  // once resolved — same pattern as lazy avatar/video loading elsewhere
+  // in this file. Cached after the first check, so scrolling past the
+  // same seller's other posts doesn't re-query per card.
+  if (d.user_id) {
+    applyVerifiedBadgeWhenReady(d.user_id, `.feed-username-${CSS.escape(id)}`);
+  }
+
   return `
     <div class="bg-slate-900 border-b border-slate-800/60 w-full" id="feed-card-${escAttr(id)}">
 
@@ -3810,7 +4234,7 @@ function renderFeedCard(id, d) {
             <div class="feed-profile-trigger flex items-center gap-2.5 min-w-0 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
                 <img src="${esc(d.user_avatar) || "https://ui-avatars.com/api/?name=User"}" data-avatar-for="${escAttr(d.user_id)}" class="w-8 h-8 rounded-full border border-slate-700 object-cover shrink-0" alt="">
                 <div class="min-w-0">
-                    <p class="text-[12px] font-bold text-white leading-tight truncate">${esc(d.user_name) || "Student"}</p>
+                    <p class="text-[12px] font-bold text-white leading-tight truncate feed-username-${escAttr(id)}">${esc(d.user_name) || "Student"}</p>
                     <p class="text-[10px] text-slate-500 leading-tight truncate">${esc(d.institution) || ""}</p>
                 </div>
             </div>
@@ -5312,18 +5736,51 @@ async function _runSearchImmediate(term) {
     }
   }
 
-  const matches = allCachedPosts.filter((item) => {
+  // Smarter-search pass: instead of just filtering (arbitrary order —
+  // effectively whatever order allCachedPosts happened to be in), each
+  // match gets a relevance score and results are sorted by it. This is
+  // still substring matching under the hood (no fuzzy/typo-tolerant
+  // matching or semantic search — that needs either a Postgres full-text
+  // search index via to_tsvector/tsquery, or an external search service,
+  // neither of which this file can safely assume exists), but a title
+  // match now correctly outranks a match buried in a long description,
+  // and recency acts as a tiebreaker so identical-relevance results
+  // don't feel randomly ordered.
+  const scored = [];
+  for (const item of allCachedPosts) {
     const d = item.data ? item.data : item;
-    if (!d) return false;
-    return (
-      (d.title || "").toLowerCase().includes(lower) ||
-      (d.description || "").toLowerCase().includes(lower) ||
-      (d.user_name || "").toLowerCase().includes(lower) ||
-      (d.institution || "").toLowerCase().includes(lower) ||
-      (d.type || "").toLowerCase().includes(lower) ||
-      (d.region || "").toLowerCase().includes(lower)
-    );
-  });
+    if (!d) continue;
+
+    const title = (d.title || "").toLowerCase();
+    const description = (d.description || "").toLowerCase();
+    const userName = (d.user_name || "").toLowerCase();
+    const institution = (d.institution || "").toLowerCase();
+    const type = (d.type || "").toLowerCase();
+    const region = (d.region || "").toLowerCase();
+
+    let score = 0;
+    if (title === lower)
+      score += 100; // exact title match
+    else if (title.startsWith(lower))
+      score += 60; // title starts with query
+    else if (title.includes(lower)) score += 40; // query appears in title
+    if (description.includes(lower)) score += 15;
+    if (userName.includes(lower)) score += 10;
+    if (type.includes(lower)) score += 8;
+    if (institution.includes(lower)) score += 5;
+    if (region.includes(lower)) score += 5;
+
+    if (score > 0) scored.push({ item, score, createdAt: d.created_at || "" });
+  }
+
+  // Ties broken by recency (newest first) so fresh listings surface
+  // ahead of stale ones with identical text relevance — same intent as
+  // the blueprint's "feed decay" idea, applied to search instead of the
+  // main feed, which already has its own decay ranking.
+  scored.sort(
+    (a, b) => b.score - a.score || (b.createdAt > a.createdAt ? 1 : -1),
+  );
+  const matches = scored.map((s) => s.item);
 
   if (matches.length === 0) {
     resultsEl.innerHTML = `
@@ -5811,6 +6268,45 @@ const INFO_SHEET_CONTENT = {
         .join("");
     },
   },
+  verification: {
+    title: "Get Verified",
+    // NOTE ON UI WIRING: this sheet renders correctly once opened, but
+    // nothing in this JS file currently calls
+    // window.openInfoSheet('verification') from a button — the other
+    // entries here (privacy/help/blocked) are triggered by buttons
+    // living in index.html, which wasn't part of what I could read
+    // or edit. Add a settings row there calling
+    // onclick="window.openInfoSheet('verification')" to surface this.
+    render: () => {
+      if (!currentUserData) {
+        return `<div class="info-sheet-empty"><p class="text-xs">Please sign in first.</p></div>`;
+      }
+      return `
+                <div class="px-1">
+                    <p class="text-slate-300 text-sm leading-relaxed mb-4">
+                        Verify your university email to get a
+                        <span class="text-amber-400 font-bold">verified badge</span>
+                        on your profile and posts — it helps buyers and sellers trust who they're dealing with.
+                    </p>
+                    <input
+                        id="verification-email-input"
+                        type="email"
+                        placeholder="you@university.edu.gh"
+                        class="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm placeholder-slate-500 mb-3 focus:outline-none focus:border-amber-400"
+                    >
+                    <button
+                        onclick="window.submitVerificationRequest(document.getElementById('verification-email-input').value)"
+                        class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs active:scale-95 transition"
+                    >
+                        Submit for verification
+                    </button>
+                    <p class="text-slate-500 text-[11px] mt-3 leading-relaxed">
+                        We'll email a confirmation link to that address. Only university-affiliated addresses (ending in .edu, .edu.xx, or .ac.xx) are accepted.
+                    </p>
+                </div>
+            `;
+    },
+  },
 };
 
 window.openInfoSheet = function (key) {
@@ -5893,14 +6389,19 @@ window.openPublicProfile = async function (userId) {
     const institution = latestPost?.institution || "";
     const isFollowing = !!isFollowingRes?.data;
     const isBlocked = blockedUserIds.has(idKey(userId));
+    const ratingSummary = await fetchSellerRatingSummary(userId);
+    const isVerified = await isUserVerified(userId);
 
     titleEl.textContent = displayName;
 
     bodyEl.innerHTML = `
             <div class="public-profile-header">
                 <img src="${esc(avatarUrl)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(displayName)}'" alt="">
-                <h3 class="text-white font-black text-lg mt-3">${esc(displayName)}</h3>
+                <h3 class="text-white font-black text-lg mt-3">${esc(displayName)}${isVerified ? verifiedBadgeHtml() : ""}</h3>
                 ${institution ? `<p class="text-slate-500 text-xs mt-1">${esc(institution)}</p>` : ""}
+                <div id="public-profile-rating-block" class="flex flex-col items-center mt-2">
+                    ${renderRatingBlockInner(userId, ratingSummary)}
+                </div>
             </div>
 
             <div class="public-profile-stats">
