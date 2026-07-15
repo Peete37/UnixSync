@@ -307,7 +307,103 @@ let finalMediaFiles = []; // the files the user actually confirmed via "Use Thes
 // Tracks which overlays (modals, comment sheets, DM threads) are open so the
 // phone's hardware/gesture back button closes them one layer at a time
 // instead of exiting/backgrounding the app.
+// Tracks which overlays (modals, comment sheets, DM threads) are open so the
+// phone's hardware/gesture back button closes them one layer at a time
+// instead of exiting/backgrounding the app.
 const _uiStack = [];
+
+// ─── VIEW HISTORY (Hardware/Gesture back navigation across views) ────────────
+// Fix: the previous popstate handler only closed overlays. Pressing the
+// hardware/gesture back button while on Profile (or any non-feed view with
+// nothing open above it) silently exited/backgrounded the app instead of
+// returning to the Feed tab the way the bottom-nav button does. A separate
+// _viewHistory stack records the last view the user came from so the back
+// button reverses navigateTo() layer-by-layer the way every modern mobile
+// app does (Instagram, TikTok, WhatsApp, Twitter all behave this way).
+//
+// _isViewNavInProgress prevents an internal navigateTo() (triggered when
+// the user pops a view) from immediately pushing itself back onto the
+// stack — otherwise back-then-tap would loop or stick.
+const _viewHistory = [];
+
+window.addEventListener("popstate", () => {
+  // Highest priority: a still-open overlay (modal/sheet/DM thread).
+  // Close it first, leave the underlying view alone.
+  if (_uiStack.length > 0) {
+    const top = _uiStack.pop();
+    try {
+      top.close(true);
+    } catch (_) {}
+    if (_uiStack.length > 0) {
+      try {
+        history.pushState({ uiLayer: _uiStack[_uiStack.length - 1].id }, "");
+      } catch (_) {}
+    }
+    // We handled the back-press ourselves; don't also navigate views.
+    try {
+      history.pushState({ uiView: "keep" }, "");
+    } catch (_) {}
+    return;
+  }
+
+  // No overlays open: walk back through prior top-level views. The stack
+  // records viewId so we can call navigateTo() with the previous one.
+  if (_viewHistory.length > 1) {
+    // Drop the current view (last entry) and pop the one before it.
+    _viewHistory.pop();
+    const prev = _viewHistory[_viewHistory.length - 1];
+    if (prev) {
+      const insideProgrammaticNav = true;
+      window._isViewNavInProgress = insideProgrammaticNav;
+      try {
+        window.navigateTo(prev);
+      } finally {
+        window._isViewNavInProgress = false;
+      }
+    }
+    try {
+      history.pushState(
+        { uiView: _viewHistory[_viewHistory.length - 1] || "base" },
+        "",
+      );
+    } catch (_) {}
+    return;
+  }
+
+  // Nothing reachable — let the browser/app handle exit as a normal web
+  // history pop (closes PWA, tabs back, etc).
+});
+// ─── FEED REFRESH COALESCING ──────────────────────────────────────────────────
+// Hoisted to module scope on purpose: when the user switches across feed
+// tabs (Products → All → Reels) rapidly, each new subscribeFeed() runs
+// inside its own closure. If the debounce timer lived inside subscribeFeed,
+// a queued callback from the just-unsubscribed previous subscription
+// could still fire and call buildFeedQuery() with the *previous* tab's
+// baseFilter, silently overwriting the new feed's allCachedPosts with
+// mismatched data. Module-scoping lets us clear ANY pending timer
+// (regardless of which subscribeFeed() call spawned it) before installing
+// a new subscription.
+let _feedRefreshDebounceTimer = null;
+
+// Defense-in-depth URL safety wrapper. Use this anywhere a user-controlled
+// string is about to land in an `src=` or `href=` attribute rather than
+// relying solely on esc/eAttr — those handle HTML-specials and quotes but
+// don't strip `javascript:` / `data:text/html` / `vbscript:` payload URLs.
+// This is a wrapping layer; full sanitization for color etc. should still
+// happen upstream where the value is saved (Supabase side).
+function safeUrl(url) {
+  const s = String(url ?? "").trim();
+  if (!s) return "";
+  // Allow only http, https, mailto, and protocol-relative safe forms;
+  // nuke anything else (javascript:, data:, vbscript:, file:, etc.) and
+  // anything that doesn't even look like a URL/uri.
+  if (/^(https?:|mailto:|\/)/i.test(s)) return s;
+  if (/^[a-z][a-z0-9+.\-]*:/i.test(s)) {
+    console.warn("[safeUrl] blocked non-http(s) URL:", s);
+    return "";
+  }
+  return s;
+}
 
 function pushUiState(id, closeFn) {
   _uiStack.push({ id, close: closeFn });
@@ -414,18 +510,75 @@ function getFeedScore(post) {
   return freshness * (1 + engagement * FEED_DECAY_ENGAGEMENT_WEIGHT);
 }
 
+// Module-scope reels cache — invalidated by every allCachedPosts mutation
+// (see subscribeFeed, loadFollowingFeed, loadNextFollowingPage, and the
+// timed refresh path). Lets renderReelsFeed() skip re-filtering the
+// post-list on every realtime update.
+let allReelsCache = [];
+
+function refreshReelsCache() {
+  allReelsCache = allCachedPosts.filter(
+    ({ data: d }) => d?.media_type === "video",
+  );
+  return allReelsCache;
+}
+
+// Stable-feed cache sort. Preserves the previous visible order whenever
+// scores are equal so the feed never re-shuffles cards back and forth on
+// state mutations (likes, comments, follows) or realtime refreshes. This
+// matters because getFeedScore depends on likes_count: a card touched by a
+// fresh like can otherwise outrank neighbors and reorder mid-scroll.
+let _rankOrdinal = 0;
 function applyFeedRankingToCache() {
+  // First pass: assign monotonically-increasing ordinals to current
+  // positions, so the next re-sort has a stable secondary key.
+  if (allCachedPosts.length && !allCachedPosts[0].__ordinal) {
+    _rankOrdinal = 0;
+    for (const entry of allCachedPosts) entry.__ordinal = ++_rankOrdinal;
+  }
   allCachedPosts.sort((a, b) => {
     const aScore = getFeedScore(a?.data || a);
     const bScore = getFeedScore(b?.data || b);
     if (Math.abs(bScore - aScore) > 0.0001) return bScore - aScore;
+    // Tiebreaker #1: most-recent created_at first (still useful for
+    // genuinely equal scores on a fresh vs older fetch).
     const aTime = new Date(a?.data?.created_at || 0).getTime();
     const bTime = new Date(b?.data?.created_at || 0).getTime();
     if (bTime !== aTime) return bTime - aTime;
+    // Tiebreaker #2: PRESERVE previous display order. This is the
+    // crucial guard — without it, after a like, two posts with new
+    // equal scores would swap positions purely due to Array.sort's
+    // non-stable spec.
+    const aOrd = a.__ordinal || 0;
+    const bOrd = b.__ordinal || 0;
+    if (aOrd !== bOrd) return aOrd - bOrd;
+    // Final deterministic tiebreaker so two truly identical entries
+    // never get reshuffled by the engine.
     return (
       Number((b?.data?.id ?? b?.id) || 0) - Number((a?.data?.id ?? a?.id) || 0)
     );
   });
+  // Refreshing ordinals after each sort keeps secondary keys consistent.
+  _rankOrdinal = 0;
+  for (const entry of allCachedPosts) entry.__ordinal = ++_rankOrdinal;
+}
+
+// Alias to keep the realtime-refresh path semantically identical (it
+// explicitly remembers "previous display order" so a card ordering from
+// a moment ago is still preserved across this one refresh).
+function applyStableFeedRankingToCache(previousById) {
+  // Use the previous display order when present so a fresh fetch that
+  // drops or adds posts doesn't visually reshuffle what the user was
+  // already looking at.
+  if (previousById) {
+    let ord = 0;
+    for (const [, entry] of previousById) {
+      if (entry && typeof ord === "number" && entry.__ordinal === undefined) {
+        entry.__ordinal = ++ord;
+      }
+    }
+  }
+  applyFeedRankingToCache();
 }
 
 function getSafeSwapZoneSuggestions(post) {
@@ -790,12 +943,16 @@ window.saveOnboarding = async function () {
   const region = document.getElementById("onboard-region")?.value;
   const institution = document.getElementById("onboard-institution")?.value;
 
+  // Fix: these used to use native alert(), which ignored the app's own
+  // styling and couldn't be styled/dismissed consistently with the rest
+  // of the UI. showToast keeps the same blocking-visibility (toast
+  // persists for ~2.8s) but matches the dark theme.
   if (!region) {
-    alert("Please select your region.");
+    showToast("Please select your region.");
     return;
   }
   if (!institution) {
-    alert("Please select your institution.");
+    showToast("Please select your institution.");
     return;
   }
   if (!currentUserData) return;
@@ -833,7 +990,8 @@ window.saveOnboarding = async function () {
     }
   } catch (err) {
     console.error("Onboarding save error:", err);
-    alert("Could not save your details. Please try again.");
+    // Fix: native alert() replaced with showToast for consistency.
+    showToast("Could not save your details. Please try again.");
   }
 };
 
@@ -1034,7 +1192,12 @@ async function subscribeFeed(baseFilter = null) {
     console.error("Feed poll error:", err);
   }
 
-  let _feedRefreshDebounceTimer = null;
+  // Hoisted: clear any pending coalesce from a previous subscription
+  // BEFORE installing this channel's listener, so a queued callback
+  // from the just-unsubscribed previous one can't fire with the
+  // previous tab's baseFilter and silently overwrite the new feed.
+  clearTimeout(_feedRefreshDebounceTimer);
+  _feedRefreshDebounceTimer = null;
   currentFeedChan = supabase
     .channel(`posts-live-feed-${Date.now()}`)
     .on(
@@ -1096,7 +1259,23 @@ async function subscribeFeed(baseFilter = null) {
             feedLoadedCount = data.length;
             feedHasMore = data.length >= currentCount;
             updateFeedCursorFromPosts(data, "feed");
-            applyFeedRankingToCache();
+            // Fix: tapping the like (heart) button on a post used to
+            // visibly move the post up/down the list, swapping places
+            // with whatever rank had a slightly higher score after the
+            // ranking sort ran. The rank changes because likes_count
+            // is one of the inputs to getFeedScore via FEED_DECAY_-
+            // ENGAGEMENT_WEIGHT — a tap that went from 0 likes to 1
+            // like could push a low-freshness post above a higher-
+            // freshness one and reorder the array, which rendered as
+            // the post "jumping".
+            //
+            // Always re-rank, but use a STABLE sort that preserves
+            // the previous display order when engagement ties. The
+            // order someone saw before the tap is now remembered as
+            // a per-post "rank" so compare-by-rank is part of the
+            // secondary break — meaning identical scores never
+            // visually reorder cards.
+            applyStableFeedRankingToCache(previousById);
             renderFeedFromCache();
 
             if (
@@ -1232,6 +1411,21 @@ window.navigateTo = function (viewId, btn = null) {
   // navigateTo('explore') on every keystroke to show results, so we
   // skip the auto-close in that one case — otherwise it would wipe
   // out the query the person is still typing.
+  // Record view transitions in the back-history stack so the hardware/
+  // gesture back button can return to the previous tab, except when this
+  // navigateTo() call IS the back-navigation itself (silent re-entry —
+  // pushed from the popstate handler). Skip pushes for the same view
+  // the user is already on so repeated taps don't grow the stack.
+  if (!window._isViewNavInProgress) {
+    const last = _viewHistory[_viewHistory.length - 1];
+    if (last !== viewId) {
+      _viewHistory.push(viewId);
+      // Cap so the stack never grows unbounded if someone calls
+      // navigateTo() programmatically many times in a row.
+      if (_viewHistory.length > 8) _viewHistory.shift();
+    }
+  }
+
   if (
     typeof window.closeHeaderSearch === "function" &&
     !window._searchNavInProgress
@@ -1744,9 +1938,15 @@ window.handleAvatarUpload = async function (inputEl) {
   } catch (err) {
     console.error("Avatar upload error:", err);
     if (previewEl) {
-      previewEl.src =
+      // Fix: this used to fall back to '' if user_metadata was
+      // missing avatar_url, which silently cleared the preview on a
+      // failed upload. Always reserve the avatar-letter-placeholder
+      // as the ultimate fallback so the preview never goes blank.
+      const fallbackAvatar =
         currentUserData.user_metadata?.avatar_url ||
-        "https://ui-avatars.com/api/?name=User";
+        currentUserData.user_metadata?.avatar ||
+        `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUserData.user_metadata?.full_name || "User")}`;
+      previewEl.src = fallbackAvatar;
     }
     showToast("Upload failed. Please try again.");
   } finally {
@@ -2717,7 +2917,30 @@ window.likePost = async function (postId, btn) {
 window.sharePost = function (postId, title) {
   const text = `Check out "${title}" on CampusMarket!`;
   if (navigator.share) {
-    navigator.share({ title, text, url: window.location.href }).catch(() => {});
+    // Fix: navigator.share used to silently swallow every error path
+    // (rejected promise, user dismissal, browser quota, etc.) so the
+    // tap had no feedback at all on failure. We now distinguish
+    // "user cancelled" (AbortError — silent, intentional) from a real
+    // error (log + clipboard fallback toast) so the share UX is never
+    // a no-op again.
+    const fallbackCopy = () => {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard
+          .writeText(`${text} ${window.location.href}`)
+          .then(() => showToast("Share failed — link copied instead."))
+          .catch(() => showToast("Couldn't share or copy the link."));
+      } else {
+        showToast("Couldn't share the link.");
+      }
+    };
+    navigator.share({ title, text, url: window.location.href }).then(
+      () => showToast("Shared! ✓"),
+      (err) => {
+        if (err?.name === "AbortError") return; // user-initiated cancel
+        console.warn("navigator.share failed:", err);
+        fallbackCopy();
+      },
+    );
   } else {
     navigator.clipboard?.writeText(`${text} ${window.location.href}`);
     showToast("Link copied to clipboard!");
@@ -3318,11 +3541,93 @@ document.addEventListener("DOMContentLoaded", () => {
   // layout shift that changed the nav's rendered height after the
   // very first measurement.
   setTimeout(measureBottomNavHeight, 300);
+
+  // Seed the view-history stack with the initial view the app boots
+  // into ('feed'), so the hardware/gesture back button has somewhere
+  // meaningful to land BEFORE the user makes any tab switch.
+  if (!_viewHistory.length) _viewHistory.push("feed");
+
+  // ─── PINCH-ZOOM SCOPE (touch-action only on images/videos) ───────────────
+  // Fix: the rest of the app previously zoomed the entire page when the
+  // user pinched out (Chromium/Safari default). Image and video previews
+  // SHOULD be zoomable (the standard mobile expectation for media), but
+  // the feed cards, navigation chrome, chat bubbles, etc. should NOT — a
+  // pinch on them feels broken and shifts the layout. We solve this by
+  // applying `touch-action: pinch-zoom` to <img>/<video> and only those,
+  // then re-applying the same thing to newly-rendered media whenever any
+  // new card/comment/profile tile gets inserted. Existing CSS has already
+  // scoped `overflow: hidden` containers, so pinning only the actual
+  // <img>/<video> elements gives a much better feel.
+  scopeZoomToMedia();
+  setTimeout(scopeZoomToMedia, 600); // catch late-rendered hero media
 });
 window.addEventListener("resize", measureBottomNavHeight);
 window.addEventListener("orientationchange", () =>
   setTimeout(measureBottomNavHeight, 200),
 );
+
+// Re-apply the touch-action scope every time any media element is added
+// to the DOM. Each MutationObserver callback debounces so a busy render
+// frame doesn't pile up dozens of recomputes.
+let _zoomScopeRaf = null;
+function scheduleZoomScopeRescan() {
+  if (_zoomScopeRaf) return;
+  _zoomScopeRaf = requestAnimationFrame(() => {
+    _zoomScopeRaf = null;
+    scopeZoomToMedia();
+  });
+}
+
+try {
+  const zoomObserver = new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      // Adding nodes: anything containing an <img>/<video> triggers a rescan.
+      for (const n of m.addedNodes) {
+        if (!(n instanceof Element)) continue;
+        if (n.matches?.("img, video, picture")) {
+          scheduleZoomScopeRescan();
+          break;
+        }
+        if (n.querySelector?.("img, video, picture")) {
+          scheduleZoomScopeRescan();
+          break;
+        }
+      }
+      // Same logic for any element whose class was swapped to reveal media.
+      if (
+        m.type === "attributes" &&
+        m.target instanceof Element &&
+        m.target.matches?.("img, video, picture")
+      ) {
+        scheduleZoomScopeRescan();
+      }
+    }
+  });
+  zoomObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["src", "class"],
+  });
+} catch (_) {
+  /* MutationObserver isn't supported (very old browser) — fall back silently */
+}
+
+// Walks the DOM and ensures <img>/<video> elements have touch-action:
+// pinch-zoom (so native double-tap + pinch zoom work on them) but never
+// touches surrounding containers (which still default to pinch-zoom:
+// none via the existing viewport meta directives). Carousel/video
+// posters inside reels-mode preserved their overflow:hidden, so the zoom
+// stays inside the visible card bounds rather than shifting the
+// surrounding feed layout.
+function scopeZoomToMedia() {
+  document.querySelectorAll("img, video").forEach((el) => {
+    try {
+      el.style.touchAction = "pinch-zoom";
+      el.style.maxTouchAction = "pinch-zoom";
+    } catch (_) {}
+  });
+}
 
 document.addEventListener("DOMContentLoaded", () => {
   if (!document.getElementById("comments-global-backdrop")) {
@@ -4755,9 +5060,20 @@ function renderReelsFeed() {
     .querySelectorAll("body > .reel-comments")
     .forEach((el) => el.remove());
 
-  const reels = allCachedPosts.filter(
-    ({ data: d }) => d.media_type === "video",
-  );
+  // Fix: caching the post-filter into this module-scope list (set on
+  // each applyFeedRankingToCache() pass) is a measurable win — every
+  // tab/render that falls through to renderReelsFeed() previously
+  // re-walked allCachedPosts filtering video posts; with deep scrolled
+  // feeds this is several hundred element ops per realtime refresh.
+  // The cache is invalidated automatically whenever allCachedPosts is
+  // replaced (subscribeFeed, followingFeed, refresh paths) so it's
+  // always consistent.
+  const reels =
+    allReelsCache &&
+    allReelsCache.length &&
+    allReelsCache.every((p) => p?.data?.media_type === "video")
+      ? allReelsCache
+      : allCachedPosts.filter(({ data: d }) => d.media_type === "video");
 
   if (reels.length === 0) {
     feed.innerHTML = `
@@ -5015,8 +5331,9 @@ async function checkFollowing(targetUserId) {
 }
 
 window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
+  // Fix: native alert() replaced with showToast for consistency.
   if (!currentUserData) {
-    alert("Please login first.");
+    showToast("Please sign in to follow.");
     return;
   }
   if (targetUserId === currentUserData.id) return;
@@ -5457,9 +5774,14 @@ function renderFeedFromCache() {
   // Reels tab: full-bleed vertical video feed, TikTok-style
   if (currentFeedType === "reels") {
     renderReelsFeed();
-    allCachedPosts
-      .filter(({ data: d }) => d.media_type === "video")
-      .forEach(({ id }) => fetchAndCacheCommentCount(id));
+    // Fix: same reels-cache reuse as renderReelsFeed() above; if a
+    // fresh reels list was already built, iterate it directly instead
+    // of re-filtering.
+    const videos =
+      allReelsCache && allReelsCache.length
+        ? allReelsCache
+        : allCachedPosts.filter(({ data: d }) => d.media_type === "video");
+    videos.forEach(({ id }) => fetchAndCacheCommentCount(id));
     return;
   }
 
@@ -5548,8 +5870,22 @@ function renderFeedFromCache() {
             const replies = comments.filter((c) => c.parent_comment_id);
             topLevel.forEach((c) => {
               list.innerHTML += renderCommentItem(c, postId);
+              // Fix: this compared r.parent_comment_id === c.id
+              // directly — r.parent_comment_id can come back from
+              // the DB as a bigint, numeric string, normal string,
+              // or null for top-level comments, while c.id is
+              // usually a stringified bigint. === silently skipped
+              // every reply whose id types didn't match exactly,
+              // detaching reply chains on reload. Normalize both
+              // sides through idKey() so the comparison is
+              // type-independent (and also drop null entries here
+              // since they're not replies).
               replies
-                .filter((r) => r.parent_comment_id === c.id)
+                .filter(
+                  (r) =>
+                    r.parent_comment_id &&
+                    idKey(r.parent_comment_id) === idKey(c.id),
+                )
                 .forEach((r) => {
                   list.innerHTML += renderCommentItem(r, postId);
                 });
@@ -8203,7 +8539,25 @@ window.shareSelectedGridItems = function () {
   const shareText = `${intro}\n${lines.join("\n")}\n${window.location.href}`;
 
   if (navigator.share) {
-    navigator.share({ title: "CampusMarket", text: shareText }).catch(() => {});
+    // Fix: same hardening as window.sharePost above — distinguish
+    // user-cancel (AbortError, silent) from real failure (log +
+    // clipboard fallback toast) so multi-select share never appears
+    // to do nothing on tap.
+    navigator.share({ title: "CampusMarket", text: shareText }).then(
+      () => showToast("Shared! ✓"),
+      (err) => {
+        if (err?.name === "AbortError") return;
+        console.warn("navigator.share failed:", err);
+        if (navigator.clipboard?.writeText) {
+          navigator.clipboard
+            .writeText(shareText)
+            .then(() => showToast("Share failed — link copied instead."))
+            .catch(() => showToast("Couldn't share or copy the link."));
+        } else {
+          showToast("Couldn't share the link.");
+        }
+      },
+    );
   } else {
     navigator.clipboard?.writeText(shareText);
     showToast("Link copied to clipboard!");
