@@ -5681,17 +5681,16 @@ async function loadFollowingFeed() {
     updateFeedCursorFromPosts(posts, "following");
     applyFeedRankingToCache();
 
-    feed.innerHTML = "";
-    posts.forEach((d) => {
-      feed.innerHTML += renderFeedCard(d.id, d);
-      wireCarouselCounters(d.id);
-      fetchAndCacheCommentCount(d.id);
-    });
-
-    feed.innerHTML += `
+    feed.innerHTML =
+      posts.map((d) => renderFeedCard(d.id, d)).join("") +
+      `
             <div id="feed-load-more-sentinel" class="py-6">
                 ${feedHasMore ? "" : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`}
             </div>`;
+    posts.forEach((d) => {
+      wireCarouselCounters(d.id);
+      fetchAndCacheCommentCount(d.id);
+    });
 
     setupFeedVideoObserver();
     setupFeedCommentAutoClose();
