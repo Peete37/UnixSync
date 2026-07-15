@@ -417,22 +417,6 @@ function popUiState(id) {
   if (idx !== -1) _uiStack.splice(idx, 1);
 }
 
-window.addEventListener("popstate", () => {
-  if (_uiStack.length > 0) {
-    const top = _uiStack.pop();
-    try {
-      top.close(true);
-    } catch (_) {}
-    // Re-arm a history entry so the next back-press is caught again
-    // if there's still something else open underneath.
-    if (_uiStack.length > 0) {
-      try {
-        history.pushState({ uiLayer: _uiStack[_uiStack.length - 1].id }, "");
-      } catch (_) {}
-    }
-  }
-});
-
 // Seed one base history entry so the first back-press when nothing is open
 // behaves like a normal app (doesn't feel broken), while genuinely letting
 // the browser/app handle exit navigation once the stack is empty.
@@ -3624,7 +3608,6 @@ function scopeZoomToMedia() {
   document.querySelectorAll("img, video").forEach((el) => {
     try {
       el.style.touchAction = "pinch-zoom";
-      el.style.maxTouchAction = "pinch-zoom";
     } catch (_) {}
   });
 }
@@ -5818,26 +5801,11 @@ function renderFeedFromCache() {
     return;
   }
 
-  feed.innerHTML = "";
-  allCachedPosts.forEach(({ id, data: d }) => {
-    feed.innerHTML += renderFeedCard(id, d);
-    wireCarouselCounters(id);
-    fetchAndCacheCommentCount(id);
-  });
-
-  // Infinite scroll: a sentinel div at the end of the list triggers
-  // loading the next page once it scrolls into view. Once there's
-  // genuinely nothing left, shows a "want to see more?" prompt offering
-  // to widen to the next scope tier (institution -> region ->
-  // everywhere) rather than just silently stopping with no feedback —
-  // unless already at 'everywhere' or on a tab scope doesn't apply to
-  // (Following), in which case it's just a plain "caught up" message
-  // since there's nowhere wider left to offer.
   const canWiden =
     currentCampusScope !== "everywhere" &&
     currentUserData?.institution &&
     currentFeedType !== "following";
-  feed.innerHTML += `
+  const sentinelHtml = `
         <div id="feed-load-more-sentinel" class="py-6 text-center space-y-2 px-6">
             ${
               feedHasMore
@@ -5847,6 +5815,19 @@ function renderFeedFromCache() {
                   : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
             }
         </div>`;
+
+  // Single assignment: build every card's HTML into one string first,
+  // then set innerHTML exactly once. Wiring (carousel counters, comment
+  // count fetches) happens afterward, over the now-rendered nodes —
+  // splitting render from wiring means the browser only ever parses
+  // and lays out the feed HTML one time per load, not once per card.
+  feed.innerHTML =
+    allCachedPosts.map(({ id, data: d }) => renderFeedCard(id, d)).join("") +
+    sentinelHtml;
+  allCachedPosts.forEach(({ id }) => {
+    wireCarouselCounters(id);
+    fetchAndCacheCommentCount(id);
+  });
 
   setupFeedVideoObserver();
   setupFeedCommentAutoClose();
