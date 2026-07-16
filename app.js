@@ -4737,7 +4737,10 @@ function pauseAllReelVideos() {
         // Fully release the source rather than just pausing, so the
         // browser drops any active media session / background decode
         // buffer instead of keeping it warm for a quick resume.
-        if (video.classList.contains("feed-lazy-video") && video.src) {
+        if (
+          (video.classList.contains("feed-lazy-video") || video.dataset.src) &&
+          video.src
+        ) {
           video.removeAttribute("src");
           video.load();
           video.dataset.loaded = "false";
@@ -4877,6 +4880,16 @@ function setupReelsIntersectionObserver(container = null) {
         const reelId = entry.target.id.replace("reel-card-", "");
 
         if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+          // Lazy-load: only assign the real src once this card is
+          // actually the one in view. mediaEl.dataset.src is only
+          // ever set when renderReelCard was called with lazy=true
+          // (the profile post viewer) — the normal Reels tab's
+          // cards have a real src from the start, so this is a
+          // no-op there.
+          if (mediaEl && mediaEl.dataset.src && !mediaEl.src) {
+            mediaEl.src = mediaEl.dataset.src;
+          }
+
           // This reel is the one in view: play it, unmuted only if the
           // user hasn't explicitly muted it before (default unmuted
           // like TikTok, matching tap-to-mute behavior already wired).
@@ -4922,7 +4935,7 @@ function setupReelsIntersectionObserver(container = null) {
     .forEach((card) => reelsIntersectionObserver.observe(card));
 }
 
-function renderReelCard(id, d) {
+function renderReelCard(id, d, lazy = false) {
   let mediaUrls = [];
   if (d.media_url) {
     if (d.media_url.startsWith("[")) {
@@ -4960,10 +4973,13 @@ function renderReelCard(id, d) {
 
   registerPostContext(id, d, isVideo ? "" : primaryUrl);
 
+  const srcAttr = lazy
+    ? `data-src="${esc(primaryUrl)}"`
+    : `src="${esc(primaryUrl)}"`;
   const mediaBlock = isVideo
-    ? `<video class="reel-video" src="${esc(primaryUrl)}" loop playsinline data-user-muted="false"
+    ? `<video class="reel-video" ${srcAttr} loop playsinline preload="none" data-user-muted="false"
             onclick="window._toggleReelMute(this)"></video>`
-    : `<img class="reel-video" src="${esc(primaryUrl)}" alt="${esc(d.title)}">`;
+    : `<img class="reel-video" ${srcAttr} ${lazy ? 'loading="lazy"' : ""} alt="${esc(d.title)}">`;
 
   return `
     <div class="reel-card" id="reel-card-${escAttr(id)}">
@@ -7205,7 +7221,9 @@ window.openProfilePostViewer = async function (userId, startPostId) {
       return;
     }
 
-    feed.innerHTML = posts.map((d) => renderReelCard(idKey(d.id), d)).join("");
+    feed.innerHTML = posts
+      .map((d) => renderReelCard(idKey(d.id), d, true))
+      .join("");
 
     // Jump straight to the tapped post — instant, not an animated
     // scroll — so opening post #7 of 13 doesn't visibly fly past
@@ -7213,7 +7231,15 @@ window.openProfilePostViewer = async function (userId, startPostId) {
     const targetCard = document.getElementById(
       `reel-card-${CSS.escape(idKey(startPostId))}`,
     );
-    if (targetCard) targetCard.scrollIntoView({ block: "start" });
+    if (targetCard) {
+      targetCard.scrollIntoView({ block: "start" });
+      // Load the tapped post's media right away instead of waiting
+      // for the observer's first (async) callback — everything
+      // else in the list stays lazy.
+      const targetMedia = targetCard.querySelector(".reel-video");
+      if (targetMedia && targetMedia.dataset.src)
+        targetMedia.src = targetMedia.dataset.src;
+    }
 
     setupReelsIntersectionObserver(feed);
   } catch (err) {
