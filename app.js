@@ -4730,6 +4730,7 @@ function pauseAllReelVideos() {
   document
     .querySelectorAll(".reel-video, .feed-lazy-video")
     .forEach((video) => {
+      if (video.tagName !== "VIDEO") return;
       try {
         video.pause();
         video.muted = true;
@@ -4859,19 +4860,20 @@ function setupFeedCommentAutoClose() {
   });
 }
 
-function setupReelsIntersectionObserver() {
+function setupReelsIntersectionObserver(container = null) {
   if (reelsIntersectionObserver) {
     reelsIntersectionObserver.disconnect();
     reelsIntersectionObserver = null;
   }
 
-  const feed = document.getElementById("posts-feed");
+  const feed = container || document.getElementById("posts-feed");
   if (!feed) return;
 
   reelsIntersectionObserver = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
-        const video = entry.target.querySelector(".reel-video");
+        const mediaEl = entry.target.querySelector(".reel-video");
+        const video = mediaEl && mediaEl.tagName === "VIDEO" ? mediaEl : null;
         const reelId = entry.target.id.replace("reel-card-", "");
 
         if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
@@ -4880,7 +4882,7 @@ function setupReelsIntersectionObserver() {
           // like TikTok, matching tap-to-mute behavior already wired).
           if (video) {
             document.querySelectorAll(".reel-video").forEach((v) => {
-              if (v !== video) {
+              if (v !== video && v.tagName === "VIDEO") {
                 v.pause();
                 v.muted = true;
                 v.currentTime = v.currentTime;
@@ -4933,7 +4935,8 @@ function renderReelCard(id, d) {
       mediaUrls = [d.media_url];
     }
   }
-  const videoUrl = mediaUrls[0] || "";
+  const isVideo = d.media_type === "video";
+  const primaryUrl = mediaUrls[0] || "";
 
   const isLiked = likedPostIds.has(idKey(id));
   const heartClass = isLiked
@@ -4955,13 +4958,16 @@ function renderReelCard(id, d) {
             <i class="fas fa-ellipsis-vertical text-white text-lg"></i>
         </button>`;
 
-  registerPostContext(id, d, videoUrl ? "" : mediaUrls[0] || "");
+  registerPostContext(id, d, isVideo ? "" : primaryUrl);
+
+  const mediaBlock = isVideo
+    ? `<video class="reel-video" src="${esc(primaryUrl)}" loop playsinline data-user-muted="false"
+            onclick="window._toggleReelMute(this)"></video>`
+    : `<img class="reel-video" src="${esc(primaryUrl)}" alt="${esc(d.title)}">`;
 
   return `
     <div class="reel-card" id="reel-card-${escAttr(id)}">
-        <video class="reel-video" src="${esc(videoUrl)}" loop playsinline data-user-muted="false"
-            onclick="window._toggleReelMute(this)"></video>
-
+        ${mediaBlock}
         <div class="reel-actions">
             <button onclick="likePost('${escAttr(id)}', this)" data-liked="${isLiked ? "true" : "false"}" class="reel-action-btn flex flex-col items-center">
                 <i class="${heartClass} text-2xl"></i>
@@ -5900,6 +5906,13 @@ window.filterFeed = function (type, clickedBtn = null) {
   currentFeedType = type;
   _feedLoadGeneration++;
 
+  if (
+    typeof window.closeHeaderSearch === "function" &&
+    !window._searchNavInProgress
+  ) {
+    window.closeHeaderSearch();
+  }
+
   // Remember the active tab so a refresh lands back where the person
   // actually was (Reels, Products, Services, Following...) instead of
   // always resetting to "All".
@@ -6498,10 +6511,8 @@ async function loadProfileStats() {
 
     const grid = document.getElementById("profile-grid");
     if (grid) {
-      grid.innerHTML = "";
-      postsRes.data?.forEach((d) => {
-        grid.innerHTML += renderGridItem(d.id, d);
-      });
+      grid.innerHTML =
+        postsRes.data?.map((d) => renderGridItem(d.id, d)).join("") || "";
     }
   } catch (err) {
     console.warn("Profile stats error:", err);
@@ -6925,8 +6936,8 @@ window.openPublicProfile = async function (userId) {
 
             <div class="public-profile-stats">
                 <div><span class="stat-value">${postsRes.data?.length || 0}</span><span class="stat-label">Posts</span></div>
-                <div><span class="stat-value">${followersRes.count || 0}</span><span class="stat-label">Followers</span></div>
-                <div><span class="stat-value">${followingRes.count || 0}</span><span class="stat-label">Following</span></div>
+                <div onclick="window.openFollowListModal('${escAttr(userId)}', 'followers')" class="cursor-pointer active:opacity-70 transition"><span class="stat-value">${followersRes.count || 0}</span><span class="stat-label">Followers</span></div>
+                <div onclick="window.openFollowListModal('${escAttr(userId)}', 'following')" class="cursor-pointer active:opacity-70 transition"><span class="stat-value">${followingRes.count || 0}</span><span class="stat-label">Following</span></div>
             </div>
 
             <div class="flex gap-2 mb-5">
@@ -7010,6 +7021,213 @@ window.closePublicProfile = function (fromPop = false) {
     .getElementById("public-profile-overlay")
     ?.classList.remove("sheet-open");
   if (!fromPop) popUiState("public-profile");
+};
+
+// Shows either the Followers or Following list for any user (your own
+// profile or someone else's public profile — both call this with their
+// own userId). The `follows` table already stores follower/following
+// name+avatar denormalized on each row (see toggleFollow's insert), so
+// this needs a single query with no extra profile lookups.
+// Thin wrapper for the logged-in person's own Followers/Following stat
+// boxes: those live in plain HTML with an inline onclick, which runs in
+// global scope — but currentUserData is a module-scoped variable (this
+// script loads as type="module"), not something on window. Resolving it
+// here, inside the module, avoids a ReferenceError that a direct
+// `currentUserData?.id` reference in the HTML onclick would otherwise hit.
+window.openMyFollowList = function (mode) {
+  if (!currentUserData) {
+    showToast("Please sign in first.");
+    return;
+  }
+  window.openFollowListModal(currentUserData.id, mode);
+};
+
+window.openFollowListModal = async function (userId, mode) {
+  if (!userId || (mode !== "followers" && mode !== "following")) return;
+
+  const overlay = document.getElementById("follow-list-overlay");
+  const titleEl = document.getElementById("follow-list-title");
+  const bodyEl = document.getElementById("follow-list-body");
+  if (!overlay || !bodyEl) return;
+
+  titleEl.textContent = mode === "followers" ? "Followers" : "Following";
+  bodyEl.innerHTML = `
+        <div class="flex items-center justify-center py-20">
+            <i class="fas fa-circle-notch fa-spin text-slate-600 text-xl"></i>
+        </div>`;
+  overlay.classList.add("sheet-open");
+  pushUiState("follow-list", () => window.closeFollowListModal(true));
+
+  try {
+    const query =
+      mode === "followers"
+        ? supabase
+            .from("follows")
+            .select("follower_id, follower_name, follower_avatar")
+            .eq("following_id", userId)
+        : supabase
+            .from("follows")
+            .select("following_id, following_name, following_avatar")
+            .eq("follower_id", userId);
+
+    const { data, error } = await query.order("created_at", {
+      ascending: false,
+    });
+    if (error) throw error;
+
+    if (!data || data.length === 0) {
+      bodyEl.innerHTML = `
+                <div class="text-center py-16 space-y-2">
+                    <p class="text-4xl">${mode === "followers" ? "👋" : "👥"}</p>
+                    <p class="font-bold text-white">${mode === "followers" ? "No followers yet" : "Not following anyone yet"}</p>
+                </div>`;
+      return;
+    }
+
+    const isOwnList = currentUserData && userId === currentUserData.id;
+
+    const rows = await Promise.all(
+      data.map(async (row) => {
+        const personId =
+          mode === "followers" ? row.follower_id : row.following_id;
+        const name =
+          (mode === "followers" ? row.follower_name : row.following_name) ||
+          "Student";
+        const avatar =
+          (mode === "followers" ? row.follower_avatar : row.following_avatar) ||
+          `https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(name)}`;
+
+        // Only "following" is unfollow-able from here — a followers
+        // list has no equivalent action for the person viewing it.
+        const unfollowBtn =
+          mode === "following" && isOwnList
+            ? `
+                <button
+                    onclick="event.stopPropagation(); window.unfollowFromList('${escAttr(personId)}')"
+                    class="shrink-0 bg-slate-800 border border-slate-700 text-white font-black px-4 py-2 rounded-xl uppercase tracking-wider text-[10px] active:scale-95 transition"
+                >Unfollow</button>`
+            : "";
+
+        return `
+                <div
+                    onclick="window.openPublicProfile('${escAttr(personId)}')"
+                    class="flex items-center gap-3 py-3 px-1 border-b border-slate-900 cursor-pointer active:bg-slate-900/40 transition"
+                >
+                    <img src="${esc(avatar)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(name)}'" class="w-11 h-11 rounded-full object-cover shrink-0" alt="">
+                    <span class="flex-1 text-white font-bold text-sm truncate">${esc(name)}</span>
+                    ${unfollowBtn}
+                </div>`;
+      }),
+    );
+
+    bodyEl.innerHTML = rows.join("");
+  } catch (err) {
+    console.error("Follow list fetch error:", err);
+    bodyEl.innerHTML = `<p class="text-center text-slate-500 text-sm py-16">Couldn't load this list. Try again.</p>`;
+  }
+};
+
+// Unfollow button inside the Following list — removes the row, then
+// re-renders the list in place so it disappears immediately instead of
+// requiring the person to close and reopen the modal to see it gone.
+window.unfollowFromList = async function (targetUserId) {
+  if (!currentUserData || !targetUserId) return;
+  try {
+    await supabase
+      .from("follows")
+      .delete()
+      .eq("follower_id", currentUserData.id)
+      .eq("following_id", targetUserId);
+    updateFollowButtons(targetUserId, false);
+    if (
+      !document
+        .getElementById("profile-container")
+        ?.classList.contains("hidden")
+    ) {
+      loadProfileStats();
+    }
+    window.openFollowListModal(currentUserData.id, "following");
+  } catch (err) {
+    console.error("Unfollow error:", err);
+    showToast("Couldn't unfollow — try again.");
+  }
+};
+
+window.closeFollowListModal = function (fromPop = false) {
+  document
+    .getElementById("follow-list-overlay")
+    ?.classList.remove("sheet-open");
+  if (!fromPop) popUiState("follow-list");
+};
+
+// Tapping any post tile on a profile grid (own or someone else's) opens
+// this instead of the single-post detail view — a full-bleed, Reels-style
+// vertical scroller through that user's whole post history, landing
+// exactly on the tapped post first (Instagram-style "view and scroll
+// continuously"). Own-profile posts reuse the already-cached
+// _ownProfilePostsById (populated by loadProfileStats) to skip a
+// redundant fetch; other users' posts are queried fresh since no
+// equivalent cache exists for them.
+window.openProfilePostViewer = async function (userId, startPostId) {
+  if (!userId) return;
+
+  const overlay = document.getElementById("profile-post-viewer");
+  const feed = document.getElementById("profile-post-viewer-feed");
+  if (!overlay || !feed) return;
+
+  feed.innerHTML = `
+        <div class="h-full flex items-center justify-center">
+            <i class="fas fa-circle-notch fa-spin text-slate-600 text-2xl"></i>
+        </div>`;
+  overlay.classList.add("sheet-open");
+  pauseAllReelVideos();
+  pushUiState("profile-post-viewer", () => window.closeProfilePostViewer(true));
+
+  try {
+    let posts;
+    const isOwnProfile = currentUserData && userId === currentUserData.id;
+
+    if (isOwnProfile && _ownProfilePostsById.size > 0) {
+      posts = Array.from(_ownProfilePostsById.values());
+    } else {
+      const { data, error } = await supabase
+        .from("posts")
+        .select(FEED_SELECT_COLUMNS)
+        .eq("user_id", userId)
+        .eq("is_archived", false)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      posts = data || [];
+    }
+
+    if (posts.length === 0) {
+      feed.innerHTML = `<div class="h-full flex items-center justify-center text-slate-500 text-sm">No posts to show.</div>`;
+      return;
+    }
+
+    feed.innerHTML = posts.map((d) => renderReelCard(idKey(d.id), d)).join("");
+
+    // Jump straight to the tapped post — instant, not an animated
+    // scroll — so opening post #7 of 13 doesn't visibly fly past
+    // posts 1-6 first.
+    const targetCard = document.getElementById(
+      `reel-card-${CSS.escape(idKey(startPostId))}`,
+    );
+    if (targetCard) targetCard.scrollIntoView({ block: "start" });
+
+    setupReelsIntersectionObserver(feed);
+  } catch (err) {
+    console.error("Profile post viewer error:", err);
+    feed.innerHTML = `<div class="h-full flex items-center justify-center text-slate-500 text-sm">Couldn't load posts. Try again.</div>`;
+  }
+};
+
+window.closeProfilePostViewer = function (fromPop = false) {
+  document
+    .getElementById("profile-post-viewer")
+    ?.classList.remove("sheet-open");
+  pauseAllReelVideos();
+  if (!fromPop) popUiState("profile-post-viewer");
 };
 
 function initSettingsToggles() {
@@ -8344,7 +8562,7 @@ function renderPublicGridItem(id, post) {
   const isVideo = d.media_type === "video";
 
   return `
-    <div class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition" onclick="openDetail('${escAttr(idKey(id))}')">
+    <div class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition" onclick="window.openProfilePostViewer('${escAttr(d.user_id)}', '${escAttr(idKey(id))}')">
         ${
           isVideo
             ? `<video class="w-full h-full object-cover" src="${mediaUrl}" preload="none" muted playsinline></video>
@@ -8446,7 +8664,7 @@ window._handleGridTileTap = function (id) {
   if (_gridSelectMode) {
     window._toggleGridTileSelection(id);
   } else {
-    openDetail(id);
+    window.openProfilePostViewer(currentUserData?.id, id);
   }
 };
 

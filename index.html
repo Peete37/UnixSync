@@ -284,6 +284,49 @@
         z-index: 30;
       }
 
+      /* Profile post viewer: tapping a grid post on any profile opens this
+       — a full-bleed, Reels-style vertical scroller (see req: "make viewing
+       from profile appear similar to reels... just like Instagram") scoped
+       to that one user's posts, snapped to the tapped post's index. Unlike
+       #posts-feed.reels-mode this is its own top-level overlay (not the
+       main feed swapping modes), so it covers the entire viewport including
+       the bottom nav, and toggles visibility via the sheet-open convention
+       shared with the other info-sheet overlays in this app. */
+      #profile-post-viewer {
+        position: fixed;
+        inset: 0;
+        z-index: 60;
+        background: #000;
+        display: none;
+        flex-direction: column;
+      }
+      #profile-post-viewer.sheet-open {
+        display: flex;
+      }
+      #profile-post-viewer-feed {
+        flex: 1;
+        overflow-y: auto;
+        scroll-snap-type: y mandatory;
+        scroll-behavior: auto;
+      }
+      #profile-post-viewer-feed::-webkit-scrollbar {
+        display: none;
+      }
+      #profile-post-viewer-back {
+        position: absolute;
+        top: max(env(safe-area-inset-top, 12px), 12px);
+        left: 12px;
+        z-index: 65;
+        width: 38px;
+        height: 38px;
+        border-radius: 9999px;
+        background: rgba(0, 0, 0, 0.45);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+      }
+
       .reel-card {
         position: relative;
         scroll-snap-align: start;
@@ -1598,7 +1641,10 @@
                   >Posts</span
                 >
               </div>
-              <div>
+              <div
+                onclick="window.openMyFollowList('followers')"
+                class="cursor-pointer active:opacity-70 transition"
+              >
                 <span
                   id="profile-followers-count"
                   class="block text-lg font-black text-white"
@@ -1609,7 +1655,10 @@
                   >Followers</span
                 >
               </div>
-              <div>
+              <div
+                onclick="window.openMyFollowList('following')"
+                class="cursor-pointer active:opacity-70 transition"
+              >
                 <span
                   id="profile-following-count"
                   class="block text-lg font-black text-white"
@@ -1996,6 +2045,36 @@
           </h2>
         </div>
         <div id="public-profile-body" class="info-sheet-body"></div>
+      </div>
+
+      <div id="follow-list-overlay" class="info-sheet-overlay">
+        <div class="info-sheet-header">
+          <button
+            class="info-sheet-back"
+            onclick="window.closeFollowListModal()"
+            aria-label="Back"
+          >
+            <i class="fas fa-arrow-left"></i>
+          </button>
+          <h2
+            id="follow-list-title"
+            class="text-white font-black text-sm uppercase tracking-widest"
+          >
+            Followers
+          </h2>
+        </div>
+        <div id="follow-list-body" class="info-sheet-body"></div>
+      </div>
+
+      <div id="profile-post-viewer">
+        <button
+          id="profile-post-viewer-back"
+          onclick="window.closeProfilePostViewer()"
+          aria-label="Back"
+        >
+          <i class="fas fa-arrow-left"></i>
+        </button>
+        <div id="profile-post-viewer-feed"></div>
       </div>
 
       <div class="bottom-nav-container">
