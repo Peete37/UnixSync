@@ -165,6 +165,7 @@ let currentFeedType = _validFeedTabs.includes(_savedFeedTab)
   ? _savedFeedTab
   : "all"; // tracks active tab: all | reels | following | product | skill
 let _feedLoadGeneration = 0;
+let _lastRenderedFeedGeneration = -1;
 
 // ─── CAMPUS SCOPE STATE ────────────────────────────────────────────────────────
 // Previously institution/region were pure display metadata — every tab
@@ -1174,8 +1175,10 @@ async function subscribeFeed(baseFilter = null) {
       }
     }
 
-    if (myGeneration !== _feedLoadGeneration) return; // superseded by a newer tab switch
-    renderFeedFromCache();
+    if (myGeneration >= _lastRenderedFeedGeneration) {
+      _lastRenderedFeedGeneration = myGeneration;
+      renderFeedFromCache();
+    }
   } catch (err) {
     console.error("Feed poll error:", err);
   }
@@ -4642,13 +4645,13 @@ function renderProductGridCard(id, d) {
     : "far fa-bookmark text-white/80";
 
   return `
-    <div class="bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden" id="grid-card-${escAttr(id)}">
-        <div class="relative aspect-square w-full bg-slate-950 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
+    <div class="masonry-card bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden mb-2.5" id="grid-card-${escAttr(id)}">
+        <div class="relative w-full bg-slate-950 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
             ${
               isVideo
-                ? `<video class="w-full h-full object-cover" muted loop playsinline preload="none" src="${esc(mediaUrl)}"></video>
+                ? `<video class="w-full h-auto block" muted loop playsinline preload="none" src="${esc(mediaUrl)}"></video>
                    <div class="absolute top-2 left-2 w-6 h-6 rounded-full bg-black/50 flex items-center justify-center text-white text-[10px]"><i class="fas fa-play"></i></div>`
-                : `<img class="w-full h-full object-cover" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
+                : `<img class="w-full h-auto block" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
             }
             <button
                 onclick="event.stopPropagation(); window.toggleCartItem('${escAttr(id)}')"
@@ -4695,7 +4698,7 @@ function renderProductGrid() {
     return;
   }
 
-  feed.innerHTML = `<div class="grid grid-cols-2 gap-2.5 py-2">${products
+  feed.innerHTML = `<div class="masonry-columns py-2">${products
     .map(({ id, data: d }) => renderProductGridCard(id, d))
     .join("")}</div>`;
 
@@ -4713,6 +4716,127 @@ function renderProductGrid() {
         </div>`;
   setupFeedLoadMoreObserver();
 }
+
+function renderServiceGridCard(id, d) {
+  let mediaUrl = "";
+  if (d.media_url) {
+    if (d.media_url.startsWith("[")) {
+      try {
+        mediaUrl = JSON.parse(d.media_url)[0];
+      } catch (_) {
+        mediaUrl = d.media_url;
+      }
+    } else {
+      mediaUrl = d.media_url;
+    }
+  }
+
+  const isVideo = d.media_type === "video";
+
+  return `
+    <div class="masonry-card-service bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden mb-3" id="grid-card-${escAttr(id)}">
+        <div class="relative w-full bg-slate-950 cursor-pointer" onclick="window.openServiceReelViewer('${escAttr(id)}')">
+            ${
+              isVideo
+                ? `<video class="w-full h-auto block" muted loop playsinline preload="none" src="${esc(mediaUrl)}"></video>
+                   <div class="absolute top-2.5 left-2.5 w-7 h-7 rounded-full bg-black/50 flex items-center justify-center text-white text-xs"><i class="fas fa-play"></i></div>`
+                : `<img class="w-full h-auto block" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
+            }
+            <div class="absolute top-2.5 right-2.5 bg-amber-400 text-black text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full">
+                <i class="fas fa-bolt text-[9px]"></i> Service
+            </div>
+            <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-3 pt-6 pb-2">
+                <span class="text-amber-400 font-black text-sm">GH₵${esc(String(d.price || 0))}</span>
+            </div>
+        </div>
+        <div class="p-3">
+            <p class="text-white text-sm font-bold leading-snug line-clamp-2">${esc(d.title)}</p>
+            <p class="text-slate-500 text-[11px] truncate mt-1">${esc(d.user_name) || "Student"}</p>
+        </div>
+    </div>`;
+}
+
+function renderServiceGrid() {
+  const feed = document.getElementById("posts-feed");
+  if (!feed) return;
+
+  feed.classList.add("grid-mode");
+
+  const services = allCachedPosts.filter(({ data: d }) => d.type === "skill");
+
+  if (services.length === 0) {
+    const isScopedEmpty =
+      currentCampusScope !== "everywhere" && currentUserData?.institution;
+    feed.innerHTML = isScopedEmpty
+      ? `
+            <div class="text-center py-16 space-y-3 px-6">
+                <p class="text-4xl">🛠️</p>
+                <p class="font-bold text-white">No services found</p>
+                ${buildScopeWidenPrompt({ contextLabel: "services" })}
+            </div>`
+      : `
+            <div class="text-center py-16 space-y-3">
+                <p class="text-4xl">🛠️</p>
+                <p class="font-bold text-white">No services yet</p>
+                <p class="text-slate-500 text-xs">Be the first to offer one!</p>
+            </div>`;
+    return;
+  }
+
+  feed.innerHTML = `<div class="masonry-columns-services py-2">${services
+    .map(({ id, data: d }) => renderServiceGridCard(id, d))
+    .join("")}</div>`;
+
+  const canWidenServices =
+    currentCampusScope !== "everywhere" && currentUserData?.institution;
+  feed.innerHTML += `
+        <div id="feed-load-more-sentinel" class="py-6 text-center space-y-2 px-6">
+            ${
+              feedHasMore
+                ? ""
+                : canWidenServices
+                  ? buildScopeWidenPrompt({ contextLabel: "services" })
+                  : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
+            }
+        </div>`;
+  setupFeedLoadMoreObserver();
+}
+
+// Tapping a service card opens a Reels-style continuous vertical scroller
+// through every currently-loaded service post, landing on the tapped one
+// first — reuses the same overlay/card renderer as the profile post
+// viewer (openProfilePostViewer), just scoped to "all cached service
+// posts" instead of "one user's posts".
+window.openServiceReelViewer = async function (startPostId) {
+  const overlay = document.getElementById("profile-post-viewer");
+  const feed = document.getElementById("profile-post-viewer-feed");
+  if (!overlay || !feed) return;
+
+  const services = allCachedPosts
+    .filter(({ data: d }) => d.type === "skill")
+    .map(({ data: d }) => d);
+  if (services.length === 0) return;
+
+  overlay.classList.add("sheet-open");
+  pauseAllReelVideos();
+  pushUiState("profile-post-viewer", () => window.closeProfilePostViewer(true));
+
+  feed.innerHTML = services
+    .map((d) => renderReelCard(idKey(d.id), d, true))
+    .join("");
+
+  const targetCard = document.getElementById(
+    `reel-card-${CSS.escape(idKey(startPostId))}`,
+  );
+  if (targetCard) {
+    targetCard.scrollIntoView({ block: "start" });
+    const targetMedia = targetCard.querySelector(".reel-video");
+    if (targetMedia && targetMedia.dataset.src)
+      targetMedia.src = targetMedia.dataset.src;
+  }
+
+  setupReelsIntersectionObserver(feed);
+};
 
 // ─── 12d. REELS FEED (TikTok-style full-bleed vertical video) ────────────────
 // Only the reel currently in view should play with sound / play at all;
@@ -4979,7 +5103,7 @@ function renderReelCard(id, d, lazy = false) {
   const mediaBlock = isVideo
     ? `<video class="reel-video" ${srcAttr} loop playsinline preload="none" data-user-muted="false"
             onclick="window._toggleReelMute(this)"></video>`
-    : `<img class="reel-video" ${srcAttr} ${lazy ? 'loading="lazy"' : ""} alt="${esc(d.title)}">`;
+    : `<img class="reel-video reel-photo-fit" ${srcAttr} ${lazy ? 'loading="lazy"' : ""} alt="${esc(d.title)}">`;
 
   return `
     <div class="reel-card" id="reel-card-${escAttr(id)}">
@@ -5314,17 +5438,34 @@ function renderCartListView() {
     return;
   }
   container.innerHTML = userCartList
-    .map(
-      (item) => `
-        <div class="flex items-center justify-between p-3 bg-slate-900 rounded-xl border border-slate-800">
+    .map((item) => {
+      let firstUrl = item.media_url || "";
+      if (firstUrl.startsWith("[")) {
+        try {
+          firstUrl = JSON.parse(firstUrl)[0] || "";
+        } catch (_) {
+          /* leave as-is */
+        }
+      }
+      const isVideo = item.media_type === "video";
+      const thumb = firstUrl
+        ? `<div class="relative w-14 h-14 rounded-lg overflow-hidden shrink-0 bg-slate-800">
+                   <img src="${esc(firstUrl)}" onerror="this.parentElement.innerHTML='<i class=\\'fas fa-image text-slate-600\\'></i>'; this.parentElement.classList.add('flex','items-center','justify-center');" class="w-full h-full object-cover" alt="">
+                   ${isVideo ? `<div class="absolute inset-0 flex items-center justify-center bg-black/30"><i class="fas fa-play text-white text-xs"></i></div>` : ""}
+               </div>`
+        : `<div class="w-14 h-14 rounded-lg shrink-0 bg-slate-800 flex items-center justify-center text-slate-600"><i class="fas fa-image"></i></div>`;
+
+      return `
+        <div class="flex items-center gap-3 justify-between p-3 bg-slate-900 rounded-xl border border-slate-800">
+            ${thumb}
             <div class="min-w-0 flex-1 cursor-pointer" onclick="openDetail('${escAttr(item.id)}')">
                 <p class="text-white font-bold text-sm truncate">${esc(item.title)}</p>
                 <p class="text-amber-400 font-extrabold text-xs">GH₵${esc(String(item.price))}</p>
             </div>
             <button onclick="window.toggleCartItem('${escAttr(item.id)}')" class="text-red-400 p-2"><i class="fas fa-trash-can"></i></button>
         </div>
-    `,
-    )
+    `;
+    })
     .join("");
 }
 
@@ -5806,9 +5947,17 @@ function renderFeedFromCache() {
   // playing audio in the background (e.g. switching All -> Products).
   pauseAllReelVideos();
 
-  // Products tab renders as a 4-square grid instead of the snap-scroll feed
+  // Products tab renders as a masonry grid instead of the snap-scroll feed
   if (currentFeedType === "product") {
     renderProductGrid();
+    return;
+  }
+
+  // Services tab: same masonry idea as Products, but its own card style
+  // (slightly bigger, per request) and its own continuous-scroll viewer
+  // on tap instead of the single-post detail view.
+  if (currentFeedType === "skill") {
+    renderServiceGrid();
     return;
   }
 
@@ -6486,7 +6635,7 @@ window.handlePostSubmission = async function () {
 async function loadProfileStats() {
   if (!currentUserData) return;
   try {
-    const [followersRes, followingRes, postsRes] = await Promise.all([
+    const [followersRes, followingRes, postsRes, bioRes] = await Promise.all([
       supabase
         .from("follows")
         .select("", { count: "exact", head: true })
@@ -6505,7 +6654,23 @@ async function loadProfileStats() {
         .eq("user_id", currentUserData.id)
         .eq("is_archived", false)
         .order("created_at", { ascending: false }),
+      supabase
+        .from("profiles")
+        .select("bio")
+        .eq("id", currentUserData.id)
+        .maybeSingle(),
     ]);
+
+    currentUserData.bio = bioRes.data?.bio || "";
+    const bioEl = document.getElementById("profile-ui-bio");
+    if (bioEl) {
+      if (currentUserData.bio) {
+        bioEl.textContent = currentUserData.bio;
+        bioEl.classList.remove("hidden");
+      } else {
+        bioEl.classList.add("hidden");
+      }
+    }
 
     const postsCount = postsRes.data ? postsRes.data.length : 0;
     setEl("profile-followers-count", followersRes.count || 0);
@@ -6562,6 +6727,7 @@ function populateAccountSettings() {
   if (!currentUserData) return;
   const nameInput = document.getElementById("settingsDisplayName");
   const emailInput = document.getElementById("settingsEmail");
+  const bioInput = document.getElementById("settingsBio");
   const metadata = currentUserData.user_metadata || {};
 
   if (nameInput && !nameInput.dataset.userEdited) {
@@ -6569,6 +6735,11 @@ function populateAccountSettings() {
   }
   if (emailInput) {
     emailInput.value = currentUserData.email || "";
+  }
+  if (bioInput && !bioInput.dataset.userEdited) {
+    bioInput.value = currentUserData.bio || "";
+    const counter = document.getElementById("settingsBioCount");
+    if (counter) counter.textContent = bioInput.value.length;
   }
 
   const stripName = document.getElementById("settingsCampusStripName");
@@ -6589,12 +6760,18 @@ document
     this.dataset.userEdited = "true";
   });
 
+document.getElementById("settingsBio")?.addEventListener("input", function () {
+  this.dataset.userEdited = "true";
+});
+
 document
   .getElementById("saveAccountBtn")
   ?.addEventListener("click", async () => {
     if (!currentUserData) return;
     const nameInput = document.getElementById("settingsDisplayName");
+    const bioInput = document.getElementById("settingsBio");
     const newName = nameInput?.value.trim();
+    const newBio = bioInput?.value.trim() || "";
 
     if (!newName) {
       showToast("Please enter a display name.");
@@ -6606,7 +6783,7 @@ document
 
       const { error } = await supabase
         .from("profiles")
-        .update({ name: newName })
+        .update({ name: newName, bio: newBio })
         .eq("id", currentUserData.id);
       if (error) throw error;
 
@@ -6621,6 +6798,7 @@ document
 
       if (!currentUserData.user_metadata) currentUserData.user_metadata = {};
       currentUserData.user_metadata.full_name = newName;
+      currentUserData.bio = newBio;
 
       allCachedPosts.forEach(({ data: d }) => {
         if (d.user_id === currentUserData.id) d.user_name = newName;
@@ -6629,8 +6807,19 @@ document
       const nameEl = document.getElementById("profile-ui-name");
       if (nameEl) nameEl.textContent = newName;
 
+      const bioEl = document.getElementById("profile-ui-bio");
+      if (bioEl) {
+        if (newBio) {
+          bioEl.textContent = newBio;
+          bioEl.classList.remove("hidden");
+        } else {
+          bioEl.classList.add("hidden");
+        }
+      }
+
       if (nameInput) delete nameInput.dataset.userEdited;
-      showToast("Name updated everywhere! ✓");
+      if (bioInput) delete bioInput.dataset.userEdited;
+      showToast("Profile updated everywhere! ✓");
     } catch (err) {
       console.error("Save name error:", err);
       showToast("Failed to update name. Please try again.");
@@ -6895,31 +7084,37 @@ window.openPublicProfile = async function (userId) {
   pushUiState("public-profile", () => window.closePublicProfile(true));
 
   try {
-    const [followersRes, followingRes, postsRes, isFollowingRes] =
-      await Promise.all([
-        supabase
-          .from("follows")
-          .select("", { count: "exact", head: true })
-          .eq("following_id", userId),
-        supabase
-          .from("follows")
-          .select("", { count: "exact", head: true })
-          .eq("follower_id", userId),
-        supabase
-          .from("posts")
-          .select("id, title, media_url, media_type, price")
-          .eq("user_id", userId)
-          .eq("is_archived", false)
-          .order("created_at", { ascending: false }),
-        currentUserData
-          ? supabase
-              .from("follows")
-              .select("id")
-              .eq("follower_id", currentUserData.id)
-              .eq("following_id", userId)
-              .maybeSingle()
-          : Promise.resolve({ data: null }),
-      ]);
+    const [
+      followersRes,
+      followingRes,
+      postsRes,
+      isFollowingRes,
+      profileRowRes,
+    ] = await Promise.all([
+      supabase
+        .from("follows")
+        .select("", { count: "exact", head: true })
+        .eq("following_id", userId),
+      supabase
+        .from("follows")
+        .select("", { count: "exact", head: true })
+        .eq("follower_id", userId),
+      supabase
+        .from("posts")
+        .select("id, title, media_url, media_type, price")
+        .eq("user_id", userId)
+        .eq("is_archived", false)
+        .order("created_at", { ascending: false }),
+      currentUserData
+        ? supabase
+            .from("follows")
+            .select("id")
+            .eq("follower_id", currentUserData.id)
+            .eq("following_id", userId)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      supabase.from("profiles").select("bio").eq("id", userId).maybeSingle(),
+    ]);
 
     // The name/institution/avatar aren't stored anywhere queryable by
     // user id alone (profiles are keyed by auth, not duplicated per
@@ -6945,6 +7140,7 @@ window.openPublicProfile = async function (userId) {
                 <img src="${esc(avatarUrl)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(displayName)}'" alt="">
                 <h3 class="text-white font-black text-lg mt-3">${esc(displayName)}${isVerified ? verifiedBadgeHtml() : ""}</h3>
                 ${institution ? `<p class="text-slate-500 text-xs mt-1">${esc(institution)}</p>` : ""}
+                ${profileRowRes.data?.bio ? `<p class="text-slate-300 text-xs mt-2 leading-snug px-4">${esc(profileRowRes.data.bio)}</p>` : ""}
                 <div id="public-profile-rating-block" class="flex flex-col items-center mt-2">
                     ${renderRatingBlockInner(userId, ratingSummary)}
                 </div>
