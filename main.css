@@ -100,17 +100,17 @@ body {
   min-height: 100vh;
 }
 
-/* Centers the whole app as a fixed-width column on anything wider
-       than a phone, the same way Instagram/TikTok's desktop sites work —
-       this app's entire interaction model (press-and-hold selection,
-       bottom sheets, a bottom nav bar, full-bleed vertical reels) is
-       built specifically for a narrow, mobile-shaped screen, so widening
-       it isn't a matter of adding breakpoints; the content itself is
-       designed to be exactly this width. A subtle side border and shadow
-       make the boundary look deliberate rather than like the page is
-       simply too narrow for the window.
-    */
-@media (min-width: 481px) {
+/* Centers the whole app as a fixed-width column on tablets and
+       narrow windows (481-1023px) — the same way Instagram/TikTok's
+       mobile-web experience holds up on a tablet: this width range isn't
+       generous enough for a real 3-zone desktop layout (sidebar + feed +
+       details rail) to feel deliberate rather than cramped, so it keeps
+       the phone-shaped interaction model with a bordered/shadowed edge
+       that reads as intentional rather than "just too narrow for the
+       window." True desktop (1024px+, see further below) gets its own,
+       substantially different layout instead of trying to stretch this
+       same column wider. */
+@media (min-width: 481px) and (max-width: 1023px) {
   body {
     display: flex;
     justify-content: center;
@@ -123,18 +123,191 @@ body {
     border-right: 1px solid rgba(255, 255, 255, 0.06);
     box-shadow: 0 0 60px rgba(0, 0, 0, 0.5);
     position: relative;
-    /* A no-op transform (translateZ(0) changes nothing visually) is
-           the standard technique for making an element establish a new
-           containing block for any position:fixed descendants — without
-           this, the reels feed, bottom nav, and every modal/overlay
-           (which are all position:fixed, anchored to the viewport by
-           design) would ignore this 448px column entirely and still
-           span the full width of the browser window on desktop, which
-           would completely defeat the point of centering everything
-           else. With it, "fixed" descendants behave as if they were
-           fixed to THIS element instead of the browser viewport. */
     transform: translateZ(0);
   }
+}
+
+/* ── DESKTOP LAYOUT (1024px+) ──────────────────────────────────────
+       A genuine three-zone layout instead of a centered phone column:
+       a fixed left sidebar nav (replacing the bottom nav, which hides
+       entirely at this width), a comfortably-wide but still readable
+       centered feed column (a single post/reel stretched to fill a
+       27" monitor looks broken, not "desktop" — Twitter/Instagram's own
+       desktop sites cap the feed column for the same reason), and the
+       leftover space on the right reserved for a details rail (see
+       .desktop-right-rail). #app-shell itself stops being a narrow
+       fixed-width box and instead becomes the full-width flex
+       container that lays out sidebar + feed + rail side by side. */
+@media (min-width: 1024px) {
+  body {
+    background: #020617;
+  }
+  #app-shell {
+    width: 100%;
+    max-width: 1400px;
+    margin: 0 auto;
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 32px;
+    padding: 0 24px;
+    position: relative;
+    transform: translateZ(0);
+  }
+
+  .bottom-nav-container {
+    display: none;
+  }
+
+  .sidebar-nav {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    width: 240px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 28px 12px;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .sidebar-nav-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px 24px;
+  }
+  .sidebar-nav-logo {
+    width: 36px;
+    height: 36px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #fbbf24, #f59e0b);
+    color: #020617;
+    font-weight: 900;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    letter-spacing: -0.02em;
+  }
+  .sidebar-nav-wordmark {
+    font-weight: 800;
+    font-size: 17px;
+    color: #fff;
+    letter-spacing: -0.01em;
+  }
+
+  .sidebar-nav-btn {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 13px 14px;
+    border-radius: 14px;
+    color: #94a3b8;
+    font-size: 15px;
+    font-weight: 600;
+    text-align: left;
+    transition:
+      background 0.15s ease,
+      color 0.15s ease;
+  }
+  .sidebar-nav-btn i {
+    width: 22px;
+    text-align: center;
+    font-size: 18px;
+  }
+  .sidebar-nav-btn:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: #fff;
+  }
+  .sidebar-nav-btn.nav-active {
+    background: rgba(251, 191, 36, 0.1);
+    color: #fbbf24;
+  }
+  .sidebar-nav-create {
+    margin-top: 10px;
+    background: #fbbf24;
+    color: #020617;
+    font-weight: 800;
+    justify-content: center;
+  }
+  .sidebar-nav-create:hover {
+    background: #fcd34d;
+    color: #020617;
+  }
+  .sidebar-nav-create i {
+    width: auto;
+  }
+
+  /* The feed column: same #app-shell-shaped content, just given
+         breathing room instead of being pinned to a hard 448px edge —
+         still capped, not stretched full-bleed, so a single post/reel
+         doesn't look absurd at 3x its intended width. */
+  #feed-container,
+  #explore-container,
+  #dms-container,
+  #profile-container,
+  #cart-container {
+    max-width: 520px;
+  }
+
+  main {
+    width: 100%;
+    max-width: 520px;
+    padding-bottom: 40px !important;
+  }
+
+  /* Reels need their own full-height treatment even on desktop —
+         #posts-feed.reels-mode already goes position: fixed, full
+         viewport by design (see its own rule), which is correct on
+         mobile but would otherwise ignore the sidebar entirely and
+         cover it on desktop. Constraining reels-mode to sit inside the
+         feed column's own width/position here keeps the sidebar visible
+         and clickable even while Reels is active. */
+  #posts-feed.reels-mode {
+    position: sticky !important;
+    left: auto !important;
+    right: auto !important;
+    width: 520px !important;
+    max-width: 520px !important;
+    top: 0 !important;
+    bottom: auto !important;
+    height: 100vh !important;
+    margin: 0 auto !important;
+  }
+
+  .desktop-right-rail {
+    display: flex;
+  }
+}
+
+/* Hidden by default (mobile/tablet) — only ever shown inside the
+       1024px+ desktop layout above, which flips this to display: flex. */
+.desktop-right-rail {
+  display: none;
+  position: sticky;
+  top: 28px;
+  width: 320px;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 28px;
+}
+.desktop-rail-card {
+  background: #0b1220;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 18px;
+}
+.desktop-rail-card h3 {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+  margin-bottom: 12px;
 }
 
 .sr-only {

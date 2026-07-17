@@ -15,6 +15,12 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=5.0"
     />
     <title>Unix-Sync</title>
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="apple-mobile-web-app-title" content="CampusMarket" />
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <link rel="manifest" href="manifest.json" />
     <link
@@ -44,772 +50,894 @@
         multiple
       />
 
-      <!-- Single merged header row: search toggle · scrollable tabs · saved icon.
+      <!-- Everything from here through just before the mobile bottom nav
+           is the actual app content (header/tabs, feed, explore, dms,
+           profile, cart, every modal/overlay). On desktop (1024px+) this
+           whole block becomes the CENTER column, sitting between the new
+           sidebar nav and the right rail -- see .desktop-center-column
+           in main.css. On mobile/tablet it is unaffected: no width or
+           position changes apply to it below that breakpoint. -->
+      <!-- Desktop sidebar nav: only visible at wider viewports (see
+       .sidebar-nav's media query in main.css), replacing the bottom nav
+       there entirely rather than trying to reshape one element into two
+       very different layouts. Mirrors the exact same five actions via
+       the exact same onclick handlers as the mobile nav above — no JS
+       changes needed for the buttons themselves. IDs are suffixed
+       -desktop since several of the mobile nav's ids are targeted
+       directly by app.js (unread badge count, sign-in/profile label
+       swap, active-tab highlighting) — syncSidebarNavState() below
+       mirrors those same updates onto this nav's elements. -->
+      <nav class="sidebar-nav" aria-label="Primary">
+        <div class="sidebar-nav-brand">
+          <div class="sidebar-nav-logo">CM</div>
+          <span class="sidebar-nav-wordmark">CampusMarket</span>
+        </div>
+        <button
+          id="nav-btn-feed-desktop"
+          class="sidebar-nav-btn"
+          onclick="window.navigateTo('feed', this)"
+        >
+          <i class="fas fa-home"></i>
+          <span>Home</span>
+        </button>
+        <button
+          id="nav-btn-explore-desktop"
+          class="sidebar-nav-btn"
+          onclick="window.navigateTo('explore', this)"
+        >
+          <i class="fas fa-search"></i>
+          <span>Explore</span>
+        </button>
+        <button
+          class="sidebar-nav-btn sidebar-nav-create"
+          onclick="window.togglePostModal()"
+        >
+          <i class="fas fa-plus"></i>
+          <span>Create</span>
+        </button>
+        <button
+          id="nav-btn-dms-desktop"
+          class="sidebar-nav-btn relative"
+          onclick="window.navigateTo('dms', this)"
+        >
+          <i class="fas fa-envelope"></i>
+          <span>DMs</span>
+          <span id="dms-unread-badge-desktop" class="nav-cart-badge hidden"
+            >0</span
+          >
+        </button>
+        <button
+          id="auth-profile-nav-desktop"
+          class="sidebar-nav-btn"
+          onclick="window.navigateTo('profile', this)"
+        >
+          <i class="fas fa-sign-in-alt"></i>
+          <span>Sign In</span>
+        </button>
+      </nav>
+      <div class="desktop-center-column">
+        <!-- Single merged header row: search toggle · scrollable tabs · saved icon.
        No wordmark — icons only, TikTok-style. Becomes fully transparent/
        overlay-only when the Reels tab is active (see .header-reels-mode). -->
-      <div class="site-header" id="site-header">
-        <div class="header-row">
-          <button
-            class="header-icon-btn shrink-0"
-            id="search-toggle-btn"
-            onclick="window.toggleHeaderSearch()"
-            aria-label="Search"
-          >
-            <i class="fas fa-search text-xs"></i>
-          </button>
+        <div class="site-header" id="site-header">
+          <div class="header-row">
+            <button
+              class="header-icon-btn shrink-0"
+              id="search-toggle-btn"
+              onclick="window.toggleHeaderSearch()"
+              aria-label="Search"
+            >
+              <i class="fas fa-search text-xs"></i>
+            </button>
 
-          <div
-            id="feed-tabs"
-            class="feed-tabs-scroll flex-1 flex items-center gap-4 overflow-x-auto no-scrollbar text-[11px] font-bold tracking-wider uppercase"
-          >
-            <button
-              onclick="window.filterFeed('all', this)"
-              data-tab="all"
-              class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+            <div
+              id="feed-tabs"
+              class="feed-tabs-scroll flex-1 flex items-center gap-4 overflow-x-auto no-scrollbar text-[11px] font-bold tracking-wider uppercase"
             >
-              All
-            </button>
+              <button
+                onclick="window.filterFeed('all', this)"
+                data-tab="all"
+                class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+              >
+                All
+              </button>
+              <button
+                onclick="window.filterFeed('reels', this)"
+                data-tab="reels"
+                class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+              >
+                Reels
+              </button>
+              <button
+                onclick="window.filterFeed('following', this)"
+                data-tab="following"
+                class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+              >
+                Following
+              </button>
+              <button
+                onclick="window.filterFeed('product', this)"
+                data-tab="product"
+                class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+              >
+                Products
+              </button>
+              <button
+                onclick="window.filterFeed('skill', this)"
+                data-tab="skill"
+                class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+              >
+                Services
+              </button>
+            </div>
+            <script>
+              // Fix: the "All" tab used to be hardcoded as visually active
+              // directly in this markup, so on every refresh — even when the
+              // person was last viewing Reels/Products/Following/Services —
+              // the browser painted "All" as highlighted for a brief moment
+              // before app.js finished booting and corrected it. This tiny
+              // synchronous script runs immediately as the browser parses this
+              // exact spot in the HTML (before the rest of the page even
+              // renders), reading the same localStorage key app.js uses to
+              // restore the active feed tab, so the correct tab is already
+              // highlighted at first paint — no flash, and no dependency on
+              // app.js (a deferred module) finishing first.
+              (function () {
+                try {
+                  const validTabs = [
+                    "all",
+                    "reels",
+                    "following",
+                    "product",
+                    "skill",
+                  ];
+                  const saved = localStorage.getItem("campus_market_feed_tab");
+                  const activeTab = validTabs.includes(saved) ? saved : "all";
+                  document
+                    .querySelectorAll("#feed-tabs .feed-tab-btn")
+                    .forEach((btn) => {
+                      const isActive = btn.dataset.tab === activeTab;
+                      btn.classList.toggle("text-amber-400", isActive);
+                      btn.classList.toggle("text-slate-500", !isActive);
+                      btn.classList.toggle("border-amber-400", isActive);
+                      btn.classList.toggle("border-transparent", !isActive);
+                    });
+                } catch (_) {
+                  // localStorage can throw in some locked-down/private-browsing
+                  // contexts — falling back to the default "All" highlight
+                  // (already the else-branch above) is a fine degrade.
+                }
+              })();
+            </script>
+
             <button
-              onclick="window.filterFeed('reels', this)"
-              data-tab="reels"
-              class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
+              id="nav-btn-cart"
+              class="header-icon-btn shrink-0"
+              onclick="
+                window.navigateTo(
+                  'cart',
+                  document.getElementById('nav-btn-cart'),
+                )
+              "
+              aria-label="Saved items"
             >
-              Reels
-            </button>
-            <button
-              onclick="window.filterFeed('following', this)"
-              data-tab="following"
-              class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
-            >
-              Following
-            </button>
-            <button
-              onclick="window.filterFeed('product', this)"
-              data-tab="product"
-              class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
-            >
-              Products
-            </button>
-            <button
-              onclick="window.filterFeed('skill', this)"
-              data-tab="skill"
-              class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300"
-            >
-              Services
+              <i class="fas fa-bookmark text-xs"></i>
+              <span id="header-cart-badge" class="badge-dot hidden">0</span>
             </button>
           </div>
-          <script>
-            // Fix: the "All" tab used to be hardcoded as visually active
-            // directly in this markup, so on every refresh — even when the
-            // person was last viewing Reels/Products/Following/Services —
-            // the browser painted "All" as highlighted for a brief moment
-            // before app.js finished booting and corrected it. This tiny
-            // synchronous script runs immediately as the browser parses this
-            // exact spot in the HTML (before the rest of the page even
-            // renders), reading the same localStorage key app.js uses to
-            // restore the active feed tab, so the correct tab is already
-            // highlighted at first paint — no flash, and no dependency on
-            // app.js (a deferred module) finishing first.
-            (function () {
-              try {
-                const validTabs = [
-                  "all",
-                  "reels",
-                  "following",
-                  "product",
-                  "skill",
-                ];
-                const saved = localStorage.getItem("campus_market_feed_tab");
-                const activeTab = validTabs.includes(saved) ? saved : "all";
-                document
-                  .querySelectorAll("#feed-tabs .feed-tab-btn")
-                  .forEach((btn) => {
-                    const isActive = btn.dataset.tab === activeTab;
-                    btn.classList.toggle("text-amber-400", isActive);
-                    btn.classList.toggle("text-slate-500", !isActive);
-                    btn.classList.toggle("border-amber-400", isActive);
-                    btn.classList.toggle("border-transparent", !isActive);
-                  });
-              } catch (_) {
-                // localStorage can throw in some locked-down/private-browsing
-                // contexts — falling back to the default "All" highlight
-                // (already the else-branch above) is a fine degrade.
-              }
-            })();
-          </script>
 
-          <button
-            id="nav-btn-cart"
-            class="header-icon-btn shrink-0"
-            onclick="
-              window.navigateTo('cart', document.getElementById('nav-btn-cart'))
-            "
-            aria-label="Saved items"
-          >
-            <i class="fas fa-bookmark text-xs"></i>
-            <span id="header-cart-badge" class="badge-dot hidden">0</span>
-          </button>
+          <div class="search-wrap hidden" id="header-search-wrap">
+            <i class="fas fa-search"></i>
+            <label for="campus-global-search" class="sr-only"
+              >Search campus gigs or items</label
+            >
+            <input
+              type="text"
+              id="campus-global-search"
+              name="campus-global-search"
+              placeholder="Search campus gigs or items..."
+              oninput="window.runSearch(this.value)"
+            />
+          </div>
         </div>
 
-        <div class="search-wrap hidden" id="header-search-wrap">
-          <i class="fas fa-search"></i>
-          <label for="campus-global-search" class="sr-only"
-            >Search campus gigs or items</label
-          >
-          <input
-            type="text"
-            id="campus-global-search"
-            name="campus-global-search"
-            placeholder="Search campus gigs or items..."
-            oninput="window.runSearch(this.value)"
-          />
-        </div>
-      </div>
-
-      <main class="px-4 pt-4 max-w-md mx-auto">
-        <div id="feed-container" class="pb-24">
-          <!-- Campus scope banner: shows whether the feed is scoped to the
+        <main class="px-4 pt-4 max-w-md mx-auto">
+          <div id="feed-container" class="pb-24">
+            <!-- Campus scope banner: shows whether the feed is scoped to the
            person's own institution or opened up to everywhere, with a
            one-tap toggle. Hidden entirely on Reels (its own overlay
            header has no room, and reels are typically browsed more
            broadly anyway) and hidden for anyone without a saved
            institution yet (nothing to scope by). -->
-          <button
-            id="campus-scope-banner"
-            onclick="window.toggleCampusScope()"
-            class="hidden w-full flex items-center justify-between gap-2 bg-slate-900/70 border border-slate-800/60 rounded-2xl px-3.5 py-2.5 mb-3 text-left active:scale-[0.99] transition"
-          >
-            <div class="flex items-center gap-2 min-w-0">
-              <i
-                class="fas fa-location-dot text-amber-400 text-xs shrink-0"
-              ></i>
+            <button
+              id="campus-scope-banner"
+              onclick="window.toggleCampusScope()"
+              class="hidden w-full flex items-center justify-between gap-2 bg-slate-900/70 border border-slate-800/60 rounded-2xl px-3.5 py-2.5 mb-3 text-left active:scale-[0.99] transition"
+            >
+              <div class="flex items-center gap-2 min-w-0">
+                <i
+                  class="fas fa-location-dot text-amber-400 text-xs shrink-0"
+                ></i>
+                <span
+                  id="campus-scope-label"
+                  class="text-white text-xs font-bold truncate"
+                  >Your Campus</span
+                >
+              </div>
               <span
-                id="campus-scope-label"
-                class="text-white text-xs font-bold truncate"
-                >Your Campus</span
+                class="text-amber-400 text-[10px] font-black uppercase tracking-wider shrink-0"
+                >Switch</span
               >
-            </div>
-            <span
-              class="text-amber-400 text-[10px] font-black uppercase tracking-wider shrink-0"
-              >Switch</span
-            >
-          </button>
-
-          <div id="posts-feed"></div>
-        </div>
-
-        <div id="explore-container" class="hidden pb-24 space-y-4">
-          <div class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl">
-            <h2
-              class="text-white font-black text-sm uppercase tracking-wider mb-2"
-            >
-              Discover Hub
-            </h2>
-            <p class="text-slate-400 text-xs">
-              Search results and specialized category parameters sync directly
-              inside this viewport wrapper.
-            </p>
-          </div>
-          <div id="search-results" class="space-y-4"></div>
-        </div>
-
-        <div id="dms-container" class="hidden pb-24 space-y-4">
-          <div
-            id="dms-auth-gate"
-            class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6"
-          >
-            <p class="text-3xl">🔐</p>
-            <p class="font-black text-white uppercase tracking-tight text-sm">
-              Sign in to access DMs
-            </p>
-            <p class="text-slate-500 text-xs max-w-xs mx-auto">
-              Create an account or sign in to message vendors and student
-              sellers directly.
-            </p>
-            <button
-              onclick="window.openLoginModal()"
-              class="mt-2 bg-amber-400 text-black font-black px-6 py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
-            >
-              Sign In
             </button>
+
+            <div id="posts-feed"></div>
           </div>
 
-          <div id="dms-content" class="hidden space-y-4"></div>
-        </div>
-
-        <div id="cart-container" class="hidden pb-24 space-y-4">
-          <div class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl">
-            <h2
-              class="text-white font-black text-sm uppercase tracking-wider mb-1"
-            >
-              Saved Items
-            </h2>
-            <p class="text-slate-400 text-xs">
-              Everything you've bookmarked across CampusMarket lives here.
-            </p>
-          </div>
-          <div id="cart-items-wrapper" class="space-y-3"></div>
-        </div>
-
-        <div id="profile-container" class="hidden pb-24 space-y-6">
-          <div
-            id="profile-auth-gate"
-            class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6"
-          >
-            <p class="text-3xl">👤</p>
-            <p class="font-black text-white uppercase tracking-tight text-sm">
-              Sign in to view your profile
-            </p>
-            <p class="text-slate-500 text-xs max-w-xs mx-auto">
-              Create an account to post listings, track followers, and manage
-              your campus presence.
-            </p>
-            <button
-              onclick="window.openLoginModal()"
-              class="mt-2 bg-amber-400 text-black font-black px-6 py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
-            >
-              Sign In
-            </button>
-          </div>
-
-          <div id="profile-content" class="hidden space-y-6">
+          <div id="explore-container" class="hidden pb-24 space-y-4">
             <div
-              class="flex items-center gap-4 bg-slate-900 border border-slate-800/60 p-5 rounded-3xl"
+              class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl"
             >
-              <div
-                class="relative group cursor-pointer w-16 h-16 flex-shrink-0"
-                onclick="document.getElementById('avatarFileInput').click()"
+              <h2
+                class="text-white font-black text-sm uppercase tracking-wider mb-2"
               >
-                <img
-                  id="profile-ui-avatar"
-                  src="https://ui-avatars.com/api/?name=User"
-                  class="w-16 h-16 rounded-full border-2 border-amber-400 object-cover bg-slate-800 transition group-hover:opacity-75 no-browser-menu"
-                  style="
-                    -webkit-touch-callout: none;
-                    -webkit-user-select: none;
-                    user-select: none;
-                    -webkit-user-drag: none;
-                    pointer-events: auto;
-                  "
-                  draggable="false"
-                  oncontextmenu="return false;"
-                  alt="Avatar"
-                />
-                <div
-                  class="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition duration-150"
-                >
-                  <i class="fas fa-camera text-white text-xs"></i>
-                </div>
-                <label for="avatarFileInput" class="sr-only"
-                  >Upload profile avatar</label
-                >
-                <input
-                  type="file"
-                  id="avatarFileInput"
-                  name="avatarFileInput"
-                  accept="image/*"
-                  class="hidden"
-                  onchange="
-                    window.handleAvatarUpload && window.handleAvatarUpload(this)
-                  "
-                />
-              </div>
-              <div class="flex-1 min-w-0">
-                <h2
-                  id="profile-ui-name"
-                  class="text-white font-black text-xl uppercase tracking-tight truncate"
-                >
-                  Campus Student
-                </h2>
-                <p
-                  id="profile-ui-location"
-                  class="text-slate-400 text-xs truncate"
-                >
-                  Global Network
-                </p>
-                <span
-                  class="inline-block mt-1.5 bg-amber-400/10 text-amber-400 border border-amber-400/20 text-[9px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded"
-                  >Student Account</span
-                >
-                <p
-                  id="profile-ui-bio"
-                  class="text-slate-300 text-xs mt-2 leading-snug hidden"
-                ></p>
-              </div>
+                Discover Hub
+              </h2>
+              <p class="text-slate-400 text-xs">
+                Search results and specialized category parameters sync directly
+                inside this viewport wrapper.
+              </p>
             </div>
+            <div id="search-results" class="space-y-4"></div>
+          </div>
 
+          <div id="dms-container" class="hidden pb-24 space-y-4">
             <div
-              class="grid grid-cols-3 gap-3 bg-slate-900/50 border border-slate-800/60 p-4 rounded-2xl text-center"
+              id="dms-auth-gate"
+              class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6"
             >
-              <div>
-                <span
-                  id="profile-posts-count"
-                  class="block text-lg font-black text-white"
-                  >0</span
-                >
-                <span
-                  class="text-[9px] uppercase tracking-wider font-bold text-slate-500"
-                  >Posts</span
-                >
-              </div>
-              <div
-                onclick="window.openMyFollowList('followers')"
-                class="cursor-pointer active:opacity-70 transition"
-              >
-                <span
-                  id="profile-followers-count"
-                  class="block text-lg font-black text-white"
-                  >0</span
-                >
-                <span
-                  class="text-[9px] uppercase tracking-wider font-bold text-slate-500"
-                  >Followers</span
-                >
-              </div>
-              <div
-                onclick="window.openMyFollowList('following')"
-                class="cursor-pointer active:opacity-70 transition"
-              >
-                <span
-                  id="profile-following-count"
-                  class="block text-lg font-black text-white"
-                  >0</span
-                >
-                <span
-                  class="text-[9px] uppercase tracking-wider font-bold text-slate-500"
-                  >Following</span
-                >
-              </div>
-            </div>
-
-            <div class="flex border-b border-slate-900 text-sm">
+              <p class="text-3xl">🔐</p>
+              <p class="font-black text-white uppercase tracking-tight text-sm">
+                Sign in to access DMs
+              </p>
+              <p class="text-slate-500 text-xs max-w-xs mx-auto">
+                Create an account or sign in to message vendors and student
+                sellers directly.
+              </p>
               <button
-                onclick="window.switchProfileTab('posts', this)"
-                class="profile-subtab-btn flex-1 py-3 text-center text-amber-400 font-bold border-b-2 border-amber-400 uppercase tracking-wider text-xs focus:outline-none"
+                onclick="window.openLoginModal()"
+                class="mt-2 bg-amber-400 text-black font-black px-6 py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
               >
-                My Gigs & Posts
-              </button>
-              <button
-                onclick="window.switchProfileTab('settings', this)"
-                class="profile-subtab-btn flex-1 py-3 text-center text-slate-500 font-bold border-b-2 border-transparent uppercase tracking-wider text-xs focus:outline-none hover:text-slate-300"
-              >
-                Campus Settings
+                Sign In
               </button>
             </div>
 
-            <div class="profile-tab-contents">
-              <div id="profile-subview-posts" class="profile-subview">
+            <div id="dms-content" class="hidden space-y-4"></div>
+          </div>
+
+          <div id="cart-container" class="hidden pb-24 space-y-4">
+            <div
+              class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl"
+            >
+              <h2
+                class="text-white font-black text-sm uppercase tracking-wider mb-1"
+              >
+                Saved Items
+              </h2>
+              <p class="text-slate-400 text-xs">
+                Everything you've bookmarked across CampusMarket lives here.
+              </p>
+            </div>
+            <div id="cart-items-wrapper" class="space-y-3"></div>
+          </div>
+
+          <div id="profile-container" class="hidden pb-24 space-y-6">
+            <div
+              id="profile-auth-gate"
+              class="text-center py-16 space-y-4 bg-slate-900 border border-slate-800/60 rounded-3xl p-6"
+            >
+              <p class="text-3xl">👤</p>
+              <p class="font-black text-white uppercase tracking-tight text-sm">
+                Sign in to view your profile
+              </p>
+              <p class="text-slate-500 text-xs max-w-xs mx-auto">
+                Create an account to post listings, track followers, and manage
+                your campus presence.
+              </p>
+              <button
+                onclick="window.openLoginModal()"
+                class="mt-2 bg-amber-400 text-black font-black px-6 py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition"
+              >
+                Sign In
+              </button>
+            </div>
+
+            <div id="profile-content" class="hidden space-y-6">
+              <div
+                class="flex items-center gap-4 bg-slate-900 border border-slate-800/60 p-5 rounded-3xl"
+              >
                 <div
-                  id="grid-select-toolbar"
-                  class="hidden items-center justify-between mb-3 bg-slate-900 border border-slate-800 rounded-2xl px-4 py-2.5"
+                  class="relative group cursor-pointer w-16 h-16 flex-shrink-0"
+                  onclick="document.getElementById('avatarFileInput').click()"
                 >
-                  <button
-                    onclick="window.exitGridSelectMode()"
-                    class="text-slate-400 text-xs font-bold uppercase tracking-wider"
-                  >
-                    Cancel
-                  </button>
-                  <span
-                    id="grid-select-count"
-                    class="text-white text-xs font-bold"
-                    >0 selected</span
-                  >
-                  <div class="flex items-center gap-4">
-                    <button
-                      onclick="window.shareSelectedGridItems()"
-                      class="text-amber-400 text-xs font-black uppercase tracking-wider flex items-center gap-1.5"
-                    >
-                      <i class="fas fa-share-nodes"></i> Share
-                    </button>
-                    <button
-                      onclick="window.deleteSelectedGridItems()"
-                      class="text-red-400 text-xs font-black uppercase tracking-wider flex items-center gap-1.5"
-                    >
-                      <i class="fas fa-trash-can"></i> Delete
-                    </button>
-                  </div>
-                </div>
-                <div id="profile-grid" class="grid grid-cols-3 gap-2"></div>
-              </div>
-
-              <div id="profile-subview-settings" class="profile-subview hidden">
-                <div class="campus-id-strip">
-                  <span class="badge-dot"></span>
-                  <div class="min-w-0">
-                    <p
-                      class="text-white text-xs font-bold truncate"
-                      id="settingsCampusStripName"
-                    >
-                      Campus Account
-                    </p>
-                    <p
-                      class="text-slate-400 text-[11px] truncate"
-                      id="settingsCampusStripInst"
-                    >
-                      Set your institution below
-                    </p>
-                  </div>
-                </div>
-
-                <div class="settings-card">
-                  <div class="settings-card-header">
-                    <span class="settings-card-icon"
-                      ><i class="fas fa-user"></i
-                    ></span>
-                    <h3
-                      class="text-white font-black text-xs uppercase tracking-widest"
-                    >
-                      Account
-                    </h3>
-                  </div>
-                  <div class="px-4 pb-4 space-y-3">
-                    <div>
-                      <label
-                        for="settingsDisplayName"
-                        class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
-                        >Display Name</label
-                      >
-                      <input
-                        type="text"
-                        id="settingsDisplayName"
-                        name="settingsDisplayName"
-                        placeholder="Your name"
-                        class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        for="settingsBio"
-                        class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
-                        >Bio</label
-                      >
-                      <textarea
-                        id="settingsBio"
-                        name="settingsBio"
-                        maxlength="150"
-                        rows="3"
-                        placeholder="Tell people a bit about yourself or what you offer..."
-                        oninput="
-                          document.getElementById(
-                            'settingsBioCount',
-                          ).textContent = this.value.length
-                        "
-                        class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400 resize-none"
-                      ></textarea>
-                      <p class="text-right text-[9px] text-slate-600 mt-1">
-                        <span id="settingsBioCount">0</span>/150
-                      </p>
-                    </div>
-                    <div>
-                      <label
-                        for="settingsEmail"
-                        class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
-                        >Email</label
-                      >
-                      <input
-                        type="email"
-                        id="settingsEmail"
-                        name="settingsEmail"
-                        disabled
-                        class="w-full mt-1 bg-slate-950 border border-slate-800 text-slate-500 text-sm rounded-xl px-3 py-2.5 cursor-not-allowed"
-                      />
-                    </div>
-                    <button
-                      id="saveAccountBtn"
-                      class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-2.5 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
-                    >
-                      Save Name
-                    </button>
-                  </div>
-                </div>
-
-                <div class="settings-card">
-                  <div class="settings-card-header">
-                    <span class="settings-card-icon"
-                      ><i class="fas fa-map-marker-alt"></i
-                    ></span>
-                    <h3
-                      class="text-white font-black text-xs uppercase tracking-widest"
-                    >
-                      Local Campus Selection
-                    </h3>
-                  </div>
-                  <div class="px-4 pb-4 space-y-3">
-                    <div>
-                      <label
-                        for="profileRegion"
-                        class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
-                        >Your Region</label
-                      >
-                      <select
-                        id="profileRegion"
-                        name="profileRegion"
-                        class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
-                      ></select>
-                    </div>
-                    <div>
-                      <label
-                        for="profileInstitution"
-                        class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
-                        >Your Institution</label
-                      >
-                      <select
-                        id="profileInstitution"
-                        name="profileInstitution"
-                        class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
-                      ></select>
-                    </div>
-                    <button
-                      id="saveLocationBtn"
-                      class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 mt-2 shadow-lg shadow-amber-400/10"
-                    >
-                      Save Selection Changes
-                    </button>
-                  </div>
-                </div>
-
-                <div class="settings-card">
-                  <div class="settings-card-header">
-                    <span class="settings-card-icon"
-                      ><i class="fas fa-wifi"></i
-                    ></span>
-                    <h3
-                      class="text-white font-black text-xs uppercase tracking-widest"
-                    >
-                      Data & Playback
-                    </h3>
-                  </div>
-                  <div>
-                    <label class="settings-row cursor-pointer">
-                      <div class="min-w-0">
-                        <p class="text-white text-xs font-bold">
-                          Data Saver Mode
-                        </p>
-                        <p class="text-slate-500 text-[10px] mt-0.5">
-                          Lower image/video quality to use less data
-                        </p>
-                      </div>
-                      <input
-                        type="checkbox"
-                        id="settingsDataSaver"
-                        class="settings-switch"
-                      />
-                    </label>
-                    <label class="settings-row cursor-pointer">
-                      <div class="min-w-0">
-                        <p class="text-white text-xs font-bold">
-                          Autoplay Videos
-                        </p>
-                        <p class="text-slate-500 text-[10px] mt-0.5">
-                          Play videos automatically while scrolling
-                        </p>
-                      </div>
-                      <input
-                        type="checkbox"
-                        id="settingsAutoplay"
-                        checked
-                        class="settings-switch"
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                <div class="settings-card">
-                  <div class="settings-card-header">
-                    <span class="settings-card-icon"
-                      ><i class="fas fa-bell"></i
-                    ></span>
-                    <h3
-                      class="text-white font-black text-xs uppercase tracking-widest"
-                    >
-                      Notifications
-                    </h3>
-                  </div>
-                  <div>
-                    <label class="settings-row cursor-pointer">
-                      <p class="text-white text-xs font-bold">Messages</p>
-                      <input
-                        type="checkbox"
-                        id="settingsNotifyMessages"
-                        checked
-                        class="settings-switch"
-                      />
-                    </label>
-                    <label class="settings-row cursor-pointer">
-                      <p class="text-white text-xs font-bold">
-                        Likes & Comments
-                      </p>
-                      <input
-                        type="checkbox"
-                        id="settingsNotifyEngagement"
-                        checked
-                        class="settings-switch"
-                      />
-                    </label>
-                    <label class="settings-row cursor-pointer">
-                      <p class="text-white text-xs font-bold">New Followers</p>
-                      <input
-                        type="checkbox"
-                        id="settingsNotifyFollows"
-                        checked
-                        class="settings-switch"
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                <div class="settings-card">
-                  <div class="settings-card-header">
-                    <span class="settings-card-icon"
-                      ><i class="fas fa-shield-halved"></i
-                    ></span>
-                    <h3
-                      class="text-white font-black text-xs uppercase tracking-widest"
-                    >
-                      Privacy & Support
-                    </h3>
-                  </div>
-                  <div>
-                    <button
-                      onclick="window.openInfoSheet('verification')"
-                      class="settings-row settings-row-link"
-                    >
-                      <span class="text-xs font-bold">Get Verified</span>
-                      <i class="fas fa-chevron-right chev"></i>
-                    </button>
-                    <button
-                      onclick="window.openInfoSheet('blocked')"
-                      class="settings-row settings-row-link"
-                    >
-                      <span class="text-xs font-bold">Blocked Users</span>
-                      <i class="fas fa-chevron-right chev"></i>
-                    </button>
-                    <button
-                      onclick="window.openInfoSheet('archived')"
-                      class="settings-row settings-row-link"
-                    >
-                      <span class="text-xs font-bold">Archived Posts</span>
-                      <i class="fas fa-chevron-right chev"></i>
-                    </button>
-                    <button
-                      onclick="window.openInfoSheet('help')"
-                      class="settings-row settings-row-link"
-                    >
-                      <span class="text-xs font-bold">Help & Support</span>
-                      <i class="fas fa-chevron-right chev"></i>
-                    </button>
-                    <button
-                      onclick="window.openInfoSheet('privacy')"
-                      class="settings-row settings-row-link"
-                    >
-                      <span class="text-xs font-bold">Privacy Policy</span>
-                      <i class="fas fa-chevron-right chev"></i>
-                    </button>
-                  </div>
-                </div>
-
-                <div class="pt-2 space-y-2">
-                  <button
-                    onclick="window.signOutUser()"
-                    class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
-                  >
-                    <i class="fas fa-sign-out-alt mr-2"></i>Sign Out
-                  </button>
-                  <button
-                    onclick="
-                      window.confirmDeleteAccount &&
-                        window.confirmDeleteAccount()
+                  <img
+                    id="profile-ui-avatar"
+                    src="https://ui-avatars.com/api/?name=User"
+                    class="w-16 h-16 rounded-full border-2 border-amber-400 object-cover bg-slate-800 transition group-hover:opacity-75 no-browser-menu"
+                    style="
+                      -webkit-touch-callout: none;
+                      -webkit-user-select: none;
+                      user-select: none;
+                      -webkit-user-drag: none;
+                      pointer-events: auto;
                     "
-                    class="w-full bg-red-950/40 hover:bg-red-950/60 border border-red-900/50 text-red-400 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                    draggable="false"
+                    oncontextmenu="return false;"
+                    alt="Avatar"
+                  />
+                  <div
+                    class="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition duration-150"
                   >
-                    <i class="fas fa-triangle-exclamation mr-2"></i>Delete
-                    Account
-                  </button>
-                  <p class="text-center text-slate-600 text-[10px] pt-1">
-                    CampusMarket v1.0 · Ghana
+                    <i class="fas fa-camera text-white text-xs"></i>
+                  </div>
+                  <label for="avatarFileInput" class="sr-only"
+                    >Upload profile avatar</label
+                  >
+                  <input
+                    type="file"
+                    id="avatarFileInput"
+                    name="avatarFileInput"
+                    accept="image/*"
+                    class="hidden"
+                    onchange="
+                      window.handleAvatarUpload &&
+                        window.handleAvatarUpload(this)
+                    "
+                  />
+                </div>
+                <div class="flex-1 min-w-0">
+                  <h2
+                    id="profile-ui-name"
+                    class="text-white font-black text-xl uppercase tracking-tight truncate"
+                  >
+                    Campus Student
+                  </h2>
+                  <p
+                    id="profile-ui-location"
+                    class="text-slate-400 text-xs truncate"
+                  >
+                    Global Network
                   </p>
+                  <span
+                    class="inline-block mt-1.5 bg-amber-400/10 text-amber-400 border border-amber-400/20 text-[9px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded"
+                    >Student Account</span
+                  >
+                  <p
+                    id="profile-ui-bio"
+                    class="text-slate-300 text-xs mt-2 leading-snug hidden"
+                  ></p>
+                </div>
+              </div>
+
+              <div
+                class="grid grid-cols-3 gap-3 bg-slate-900/50 border border-slate-800/60 p-4 rounded-2xl text-center"
+              >
+                <div>
+                  <span
+                    id="profile-posts-count"
+                    class="block text-lg font-black text-white"
+                    >0</span
+                  >
+                  <span
+                    class="text-[9px] uppercase tracking-wider font-bold text-slate-500"
+                    >Posts</span
+                  >
+                </div>
+                <div
+                  onclick="window.openMyFollowList('followers')"
+                  class="cursor-pointer active:opacity-70 transition"
+                >
+                  <span
+                    id="profile-followers-count"
+                    class="block text-lg font-black text-white"
+                    >0</span
+                  >
+                  <span
+                    class="text-[9px] uppercase tracking-wider font-bold text-slate-500"
+                    >Followers</span
+                  >
+                </div>
+                <div
+                  onclick="window.openMyFollowList('following')"
+                  class="cursor-pointer active:opacity-70 transition"
+                >
+                  <span
+                    id="profile-following-count"
+                    class="block text-lg font-black text-white"
+                    >0</span
+                  >
+                  <span
+                    class="text-[9px] uppercase tracking-wider font-bold text-slate-500"
+                    >Following</span
+                  >
+                </div>
+              </div>
+
+              <div class="flex border-b border-slate-900 text-sm">
+                <button
+                  onclick="window.switchProfileTab('posts', this)"
+                  class="profile-subtab-btn flex-1 py-3 text-center text-amber-400 font-bold border-b-2 border-amber-400 uppercase tracking-wider text-xs focus:outline-none"
+                >
+                  My Gigs & Posts
+                </button>
+                <button
+                  onclick="window.switchProfileTab('settings', this)"
+                  class="profile-subtab-btn flex-1 py-3 text-center text-slate-500 font-bold border-b-2 border-transparent uppercase tracking-wider text-xs focus:outline-none hover:text-slate-300"
+                >
+                  Campus Settings
+                </button>
+              </div>
+
+              <div class="profile-tab-contents">
+                <div id="profile-subview-posts" class="profile-subview">
+                  <div
+                    id="grid-select-toolbar"
+                    class="hidden items-center justify-between mb-3 bg-slate-900 border border-slate-800 rounded-2xl px-4 py-2.5"
+                  >
+                    <button
+                      onclick="window.exitGridSelectMode()"
+                      class="text-slate-400 text-xs font-bold uppercase tracking-wider"
+                    >
+                      Cancel
+                    </button>
+                    <span
+                      id="grid-select-count"
+                      class="text-white text-xs font-bold"
+                      >0 selected</span
+                    >
+                    <div class="flex items-center gap-4">
+                      <button
+                        onclick="window.shareSelectedGridItems()"
+                        class="text-amber-400 text-xs font-black uppercase tracking-wider flex items-center gap-1.5"
+                      >
+                        <i class="fas fa-share-nodes"></i> Share
+                      </button>
+                      <button
+                        onclick="window.deleteSelectedGridItems()"
+                        class="text-red-400 text-xs font-black uppercase tracking-wider flex items-center gap-1.5"
+                      >
+                        <i class="fas fa-trash-can"></i> Delete
+                      </button>
+                    </div>
+                  </div>
+                  <div id="profile-grid" class="grid grid-cols-3 gap-2"></div>
+                </div>
+
+                <div
+                  id="profile-subview-settings"
+                  class="profile-subview hidden"
+                >
+                  <div class="campus-id-strip">
+                    <span class="badge-dot"></span>
+                    <div class="min-w-0">
+                      <p
+                        class="text-white text-xs font-bold truncate"
+                        id="settingsCampusStripName"
+                      >
+                        Campus Account
+                      </p>
+                      <p
+                        class="text-slate-400 text-[11px] truncate"
+                        id="settingsCampusStripInst"
+                      >
+                        Set your institution below
+                      </p>
+                    </div>
+                  </div>
+
+                  <div class="settings-card">
+                    <div class="settings-card-header">
+                      <span class="settings-card-icon"
+                        ><i class="fas fa-user"></i
+                      ></span>
+                      <h3
+                        class="text-white font-black text-xs uppercase tracking-widest"
+                      >
+                        Account
+                      </h3>
+                    </div>
+                    <div class="px-4 pb-4 space-y-3">
+                      <div>
+                        <label
+                          for="settingsDisplayName"
+                          class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                          >Display Name</label
+                        >
+                        <input
+                          type="text"
+                          id="settingsDisplayName"
+                          name="settingsDisplayName"
+                          placeholder="Your name"
+                          class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          for="settingsBio"
+                          class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                          >Bio</label
+                        >
+                        <textarea
+                          id="settingsBio"
+                          name="settingsBio"
+                          maxlength="150"
+                          rows="3"
+                          placeholder="Tell people a bit about yourself or what you offer..."
+                          oninput="
+                            document.getElementById(
+                              'settingsBioCount',
+                            ).textContent = this.value.length
+                          "
+                          class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400 resize-none"
+                        ></textarea>
+                        <p class="text-right text-[9px] text-slate-600 mt-1">
+                          <span id="settingsBioCount">0</span>/150
+                        </p>
+                      </div>
+                      <div>
+                        <label
+                          for="settingsEmail"
+                          class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                          >Email</label
+                        >
+                        <input
+                          type="email"
+                          id="settingsEmail"
+                          name="settingsEmail"
+                          disabled
+                          class="w-full mt-1 bg-slate-950 border border-slate-800 text-slate-500 text-sm rounded-xl px-3 py-2.5 cursor-not-allowed"
+                        />
+                      </div>
+                      <button
+                        id="saveAccountBtn"
+                        class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-2.5 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                      >
+                        Save Name
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="settings-card">
+                    <div class="settings-card-header">
+                      <span class="settings-card-icon"
+                        ><i class="fas fa-map-marker-alt"></i
+                      ></span>
+                      <h3
+                        class="text-white font-black text-xs uppercase tracking-widest"
+                      >
+                        Local Campus Selection
+                      </h3>
+                    </div>
+                    <div class="px-4 pb-4 space-y-3">
+                      <div>
+                        <label
+                          for="profileRegion"
+                          class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                          >Your Region</label
+                        >
+                        <select
+                          id="profileRegion"
+                          name="profileRegion"
+                          class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
+                        ></select>
+                      </div>
+                      <div>
+                        <label
+                          for="profileInstitution"
+                          class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                          >Your Institution</label
+                        >
+                        <select
+                          id="profileInstitution"
+                          name="profileInstitution"
+                          class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
+                        ></select>
+                      </div>
+                      <button
+                        id="saveLocationBtn"
+                        class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 mt-2 shadow-lg shadow-amber-400/10"
+                      >
+                        Save Selection Changes
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="settings-card">
+                    <div class="settings-card-header">
+                      <span class="settings-card-icon"
+                        ><i class="fas fa-wifi"></i
+                      ></span>
+                      <h3
+                        class="text-white font-black text-xs uppercase tracking-widest"
+                      >
+                        Data & Playback
+                      </h3>
+                    </div>
+                    <div>
+                      <label class="settings-row cursor-pointer">
+                        <div class="min-w-0">
+                          <p class="text-white text-xs font-bold">
+                            Data Saver Mode
+                          </p>
+                          <p class="text-slate-500 text-[10px] mt-0.5">
+                            Lower image/video quality to use less data
+                          </p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          id="settingsDataSaver"
+                          class="settings-switch"
+                        />
+                      </label>
+                      <label class="settings-row cursor-pointer">
+                        <div class="min-w-0">
+                          <p class="text-white text-xs font-bold">
+                            Autoplay Videos
+                          </p>
+                          <p class="text-slate-500 text-[10px] mt-0.5">
+                            Play videos automatically while scrolling
+                          </p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          id="settingsAutoplay"
+                          checked
+                          class="settings-switch"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div class="settings-card">
+                    <div class="settings-card-header">
+                      <span class="settings-card-icon"
+                        ><i class="fas fa-bell"></i
+                      ></span>
+                      <h3
+                        class="text-white font-black text-xs uppercase tracking-widest"
+                      >
+                        Notifications
+                      </h3>
+                    </div>
+                    <div>
+                      <label class="settings-row cursor-pointer">
+                        <p class="text-white text-xs font-bold">Messages</p>
+                        <input
+                          type="checkbox"
+                          id="settingsNotifyMessages"
+                          checked
+                          class="settings-switch"
+                        />
+                      </label>
+                      <label class="settings-row cursor-pointer">
+                        <p class="text-white text-xs font-bold">
+                          Likes & Comments
+                        </p>
+                        <input
+                          type="checkbox"
+                          id="settingsNotifyEngagement"
+                          checked
+                          class="settings-switch"
+                        />
+                      </label>
+                      <label class="settings-row cursor-pointer">
+                        <p class="text-white text-xs font-bold">
+                          New Followers
+                        </p>
+                        <input
+                          type="checkbox"
+                          id="settingsNotifyFollows"
+                          checked
+                          class="settings-switch"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div class="settings-card">
+                    <div class="settings-card-header">
+                      <span class="settings-card-icon"
+                        ><i class="fas fa-shield-halved"></i
+                      ></span>
+                      <h3
+                        class="text-white font-black text-xs uppercase tracking-widest"
+                      >
+                        Privacy & Support
+                      </h3>
+                    </div>
+                    <div>
+                      <button
+                        onclick="window.openInfoSheet('verification')"
+                        class="settings-row settings-row-link"
+                      >
+                        <span class="text-xs font-bold">Get Verified</span>
+                        <i class="fas fa-chevron-right chev"></i>
+                      </button>
+                      <button
+                        onclick="window.openInfoSheet('blocked')"
+                        class="settings-row settings-row-link"
+                      >
+                        <span class="text-xs font-bold">Blocked Users</span>
+                        <i class="fas fa-chevron-right chev"></i>
+                      </button>
+                      <button
+                        onclick="window.openInfoSheet('archived')"
+                        class="settings-row settings-row-link"
+                      >
+                        <span class="text-xs font-bold">Archived Posts</span>
+                        <i class="fas fa-chevron-right chev"></i>
+                      </button>
+                      <button
+                        onclick="window.openInfoSheet('help')"
+                        class="settings-row settings-row-link"
+                      >
+                        <span class="text-xs font-bold">Help & Support</span>
+                        <i class="fas fa-chevron-right chev"></i>
+                      </button>
+                      <button
+                        onclick="window.openInfoSheet('privacy')"
+                        class="settings-row settings-row-link"
+                      >
+                        <span class="text-xs font-bold">Privacy Policy</span>
+                        <i class="fas fa-chevron-right chev"></i>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="pt-2 space-y-2">
+                    <button
+                      onclick="window.signOutUser()"
+                      class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                    >
+                      <i class="fas fa-sign-out-alt mr-2"></i>Sign Out
+                    </button>
+                    <button
+                      onclick="
+                        window.confirmDeleteAccount &&
+                          window.confirmDeleteAccount()
+                      "
+                      class="w-full bg-red-950/40 hover:bg-red-950/60 border border-red-900/50 text-red-400 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                    >
+                      <i class="fas fa-triangle-exclamation mr-2"></i>Delete
+                      Account
+                    </button>
+                    <p class="text-center text-slate-600 text-[10px] pt-1">
+                      CampusMarket v1.0 · Ghana
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      </main>
+        </main>
 
-      <!-- Info sheet: full-screen panel used for Privacy Policy, Help & Support,
+        <!-- Info sheet: full-screen panel used for Privacy Policy, Help & Support,
        and Blocked Users. Content is filled in by window.openInfoSheet(). -->
-      <div id="info-sheet-overlay" class="info-sheet-overlay">
-        <div class="info-sheet-header">
-          <button
-            class="info-sheet-back"
-            onclick="window.closeInfoSheet()"
-            aria-label="Back"
-          >
-            <i class="fas fa-arrow-left"></i>
-          </button>
-          <h2
-            id="info-sheet-title"
-            class="text-white font-black text-sm uppercase tracking-widest"
-          >
-            Loading
-          </h2>
+        <div id="info-sheet-overlay" class="info-sheet-overlay">
+          <div class="info-sheet-header">
+            <button
+              class="info-sheet-back"
+              onclick="window.closeInfoSheet()"
+              aria-label="Back"
+            >
+              <i class="fas fa-arrow-left"></i>
+            </button>
+            <h2
+              id="info-sheet-title"
+              class="text-white font-black text-sm uppercase tracking-widest"
+            >
+              Loading
+            </h2>
+          </div>
+          <div id="info-sheet-body" class="info-sheet-body"></div>
         </div>
-        <div id="info-sheet-body" class="info-sheet-body"></div>
-      </div>
 
-      <!-- Public profile: someone ELSE's profile, opened by tapping their name/
+        <!-- Public profile: someone ELSE's profile, opened by tapping their name/
        avatar on a post. Distinct from #profile-container, which is always
        the signed-in person's own profile — that view has editable settings,
        account deletion, etc. that would never make sense here, so this is
        a separate, purpose-built read-only view rather than trying to
        repurpose the owner's profile screen for two different jobs. -->
-      <div id="public-profile-overlay" class="info-sheet-overlay">
-        <div class="info-sheet-header">
+        <div id="public-profile-overlay" class="info-sheet-overlay">
+          <div class="info-sheet-header">
+            <button
+              class="info-sheet-back"
+              onclick="window.closePublicProfile()"
+              aria-label="Back"
+            >
+              <i class="fas fa-arrow-left"></i>
+            </button>
+            <h2
+              id="public-profile-title"
+              class="text-white font-black text-sm uppercase tracking-widest"
+            >
+              Profile
+            </h2>
+          </div>
+          <div id="public-profile-body" class="info-sheet-body"></div>
+        </div>
+
+        <div id="follow-list-overlay" class="info-sheet-overlay">
+          <div class="info-sheet-header">
+            <button
+              class="info-sheet-back"
+              onclick="window.closeFollowListModal()"
+              aria-label="Back"
+            >
+              <i class="fas fa-arrow-left"></i>
+            </button>
+            <h2
+              id="follow-list-title"
+              class="text-white font-black text-sm uppercase tracking-widest"
+            >
+              Followers
+            </h2>
+          </div>
+          <div id="follow-list-body" class="info-sheet-body"></div>
+        </div>
+
+        <div id="profile-post-viewer">
           <button
-            class="info-sheet-back"
-            onclick="window.closePublicProfile()"
+            id="profile-post-viewer-back"
+            onclick="window.closeProfilePostViewer()"
             aria-label="Back"
           >
             <i class="fas fa-arrow-left"></i>
           </button>
-          <h2
-            id="public-profile-title"
-            class="text-white font-black text-sm uppercase tracking-widest"
-          >
-            Profile
-          </h2>
+          <div id="profile-post-viewer-feed"></div>
         </div>
-        <div id="public-profile-body" class="info-sheet-body"></div>
       </div>
+      <!-- /desktop-center-column -->
 
-      <div id="follow-list-overlay" class="info-sheet-overlay">
-        <div class="info-sheet-header">
+      <aside class="desktop-right-rail">
+        <div class="desktop-rail-card">
+          <h3>Campus Scope</h3>
+          <p class="text-slate-400 text-xs leading-relaxed mb-3">
+            Browsing everywhere shows listings from every campus. Switch to your
+            own institution to see what's nearby.
+          </p>
           <button
-            class="info-sheet-back"
-            onclick="window.closeFollowListModal()"
-            aria-label="Back"
+            onclick="window.toggleCampusScope()"
+            class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black text-xs py-2.5 rounded-xl transition active:scale-95"
           >
-            <i class="fas fa-arrow-left"></i>
+            Switch Scope
           </button>
-          <h2
-            id="follow-list-title"
-            class="text-white font-black text-sm uppercase tracking-widest"
-          >
-            Followers
-          </h2>
         </div>
-        <div id="follow-list-body" class="info-sheet-body"></div>
-      </div>
-
-      <div id="profile-post-viewer">
-        <button
-          id="profile-post-viewer-back"
-          onclick="window.closeProfilePostViewer()"
-          aria-label="Back"
-        >
-          <i class="fas fa-arrow-left"></i>
-        </button>
-        <div id="profile-post-viewer-feed"></div>
-      </div>
+        <div class="desktop-rail-card">
+          <h3>Quick Tips</h3>
+          <ul class="space-y-2.5 text-xs text-slate-400 leading-relaxed">
+            <li class="flex gap-2">
+              <i class="fas fa-bolt text-amber-400 mt-0.5 shrink-0"></i>
+              <span
+                >Tag listings as a Product or Service so they show up in the
+                right tab.</span
+              >
+            </li>
+            <li class="flex gap-2">
+              <i
+                class="fas fa-shield-halved text-amber-400 mt-0.5 shrink-0"
+              ></i>
+              <span>Meet at a Safe Swap Zone on campus for any handover.</span>
+            </li>
+            <li class="flex gap-2">
+              <i class="fas fa-message text-amber-400 mt-0.5 shrink-0"></i>
+              <span
+                >Reply fast — buyers usually message a few sellers at
+                once.</span
+              >
+            </li>
+          </ul>
+        </div>
+      </aside>
 
       <div class="bottom-nav-container">
         <nav class="bottom-nav">

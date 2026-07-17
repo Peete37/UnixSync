@@ -247,15 +247,19 @@ function isConversationUnread(conv) {
 }
 
 function updateDmUnreadBadge() {
-  const badge = document.getElementById("dms-unread-badge");
-  if (!badge) return;
   const unreadCount = conversationsCache.filter(isConversationUnread).length;
-  if (unreadCount > 0) {
-    badge.textContent = unreadCount > 9 ? "9+" : unreadCount;
-    badge.classList.remove("hidden");
-  } else {
-    badge.classList.add("hidden");
-  }
+  [
+    document.getElementById("dms-unread-badge"),
+    document.getElementById("dms-unread-badge-desktop"),
+  ].forEach((badge) => {
+    if (!badge) return;
+    if (unreadCount > 0) {
+      badge.textContent = unreadCount > 9 ? "9+" : unreadCount;
+      badge.classList.remove("hidden");
+    } else {
+      badge.classList.add("hidden");
+    }
+  });
 }
 
 // Fix: post ids come back from Supabase as a JS `number` (posts.id is
@@ -1581,8 +1585,8 @@ window.openDetail = async function (postId) {
       const slides = mediaUrls
         .map((url, i) =>
           d.media_type === "video"
-            ? `<video class="carousel-slide w-full aspect-video object-cover shrink-0 snap-start" ${i === 0 ? "autoplay" : ""} controls src="${esc(url)}"></video>`
-            : `<img class="carousel-slide w-full object-cover shrink-0 snap-start" src="${esc(url)}" alt="Image ${i + 1}">`,
+            ? `<video class="carousel-slide w-full max-h-[600px] object-contain bg-black shrink-0 snap-start" ${i === 0 ? "autoplay" : ""} controls src="${esc(url)}"></video>`
+            : `<img class="carousel-slide w-full max-h-[600px] object-contain bg-black shrink-0 snap-start" src="${esc(url)}" alt="Image ${i + 1}">`,
         )
         .join("");
       mediaBlock = `
@@ -1597,8 +1601,8 @@ window.openDetail = async function (postId) {
     } else if (mediaUrls.length === 1) {
       mediaBlock =
         d.media_type === "video"
-          ? `<video class="w-full aspect-video object-cover" controls autoplay src="${esc(mediaUrls[0])}"></video>`
-          : `<img class="w-full object-cover" src="${esc(mediaUrls[0])}" alt="Post Media">`;
+          ? `<video class="w-full max-h-[600px] object-contain bg-black" controls autoplay src="${esc(mediaUrls[0])}"></video>`
+          : `<img class="w-full object-contain bg-black" src="${esc(mediaUrls[0])}" alt="Post Media">`;
     }
 
     const followBlock =
@@ -3502,6 +3506,17 @@ window._closeCommentSheet = function (postId, fromPop = false) {
     commentSection.classList.add("hidden");
   }
   openCommentIds.delete(postId);
+
+  // Stop watching for new comments on this post now that its sheet is
+  // closed — otherwise the realtime subscription just keeps running in
+  // the background, re-rendering into a sheet nobody can see (and,
+  // worse, into DOM nodes that may since have been destroyed by a
+  // later feed re-render).
+  if (currentCommentsChan?._topic === `comments-live-${postId}`) {
+    supabase.removeChannel(currentCommentsChan);
+    currentCommentsChan = null;
+  }
+
   if (!fromPop) popUiState(`comments-${postId}`);
 };
 
@@ -4461,7 +4476,7 @@ function renderFeedCard(id, d) {
     const slides = mediaUrls
       .map((url, i) =>
         d.media_type === "video"
-          ? `<video class="feed-lazy-video w-full aspect-[4/5] object-cover shrink-0 snap-start bg-slate-950" muted loop playsinline preload="none" data-src="${esc(url)}" poster=""></video>`
+          ? `<video class="feed-lazy-video w-full max-h-[600px] object-contain shrink-0 snap-start bg-black" muted loop playsinline preload="none" data-src="${esc(url)}" poster=""></video>`
           : `<img class="w-full max-h-[500px] object-contain bg-slate-950 shrink-0 snap-start" src="${esc(url)}" alt="${esc(d.title)} ${i + 1}" loading="lazy">`,
       )
       .join("");
@@ -4478,7 +4493,7 @@ function renderFeedCard(id, d) {
     mediaBlock =
       d.media_type === "video"
         ? `<div onclick="openDetail('${escAttr(id)}')" class="w-full bg-black cursor-pointer">
-                <video class="feed-lazy-video w-full aspect-[4/5] object-cover bg-slate-950" muted loop playsinline preload="none" data-src="${esc(mediaUrls[0])}"></video>
+                <video class="feed-lazy-video w-full max-h-[600px] object-contain bg-black" muted loop playsinline preload="none" data-src="${esc(mediaUrls[0])}"></video>
                </div>`
         : `<div onclick="openDetail('${escAttr(id)}')" class="w-full cursor-pointer">
                 <img class="w-full max-h-[500px] object-contain bg-slate-950" src="${esc(mediaUrls[0])}" alt="${esc(d.title)}" loading="lazy">
@@ -4886,6 +4901,11 @@ function pauseAllReelVideos() {
   document
     .getElementById("comments-global-backdrop")
     ?.classList.remove("backdrop-open");
+  openCommentIds.clear();
+  if (currentCommentsChan) {
+    supabase.removeChannel(currentCommentsChan);
+    currentCommentsChan = null;
+  }
 }
 
 // Lazy-loads and lazy-plays videos inside regular feed cards (All /
@@ -5190,10 +5210,21 @@ function renderReelsFeed() {
   // regenerating the reel cards below, remove any such relocated
   // sheets from body — otherwise the fresh markup would create new
   // elements with the same #comments-{id}, leaving stale duplicates
-  // behind with the same ID.
+  // behind with the same ID. Also tear down the realtime comments
+  // channel here — this function runs on every tab switch back to
+  // Reels, every refresh, and every pagination load, so leaving the
+  // channel running against a node that's about to be deleted was the
+  // most frequently-hit path behind comments looking frozen/stuck on
+  // stale content: the subscription kept firing in the background,
+  // updating a DOM node nobody could see or that no longer existed.
   document
     .querySelectorAll("body > .reel-comments")
     .forEach((el) => el.remove());
+  openCommentIds.clear();
+  if (currentCommentsChan) {
+    supabase.removeChannel(currentCommentsChan);
+    currentCommentsChan = null;
+  }
 
   // Fix: caching the post-filter into this module-scope list (set on
   // each applyFeedRankingToCache() pass) is a measurable win — every
@@ -8425,6 +8456,16 @@ if (activeAuthChange) {
           window.navigateTo("profile", authProfileNav);
         };
       }
+      const authProfileNavDesktop = document.getElementById(
+        "auth-profile-nav-desktop",
+      );
+      if (authProfileNavDesktop) {
+        authProfileNavDesktop.innerHTML = `<i class="fas fa-user"></i><span>Profile</span>`;
+        authProfileNavDesktop.onclick = function (e) {
+          e.stopPropagation();
+          window.navigateTo("profile", authProfileNavDesktop);
+        };
+      }
 
       const avatarEl = document.getElementById("profile-ui-avatar");
       const nameEl = document.getElementById("profile-ui-name");
@@ -8550,6 +8591,16 @@ if (activeAuthChange) {
       if (authProfileNav) {
         authProfileNav.innerHTML = `<i class="fas fa-sign-in-alt text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>`;
         authProfileNav.onclick = function (e) {
+          e.stopPropagation();
+          window.openLoginModal();
+        };
+      }
+      const authProfileNavDesktopOut = document.getElementById(
+        "auth-profile-nav-desktop",
+      );
+      if (authProfileNavDesktopOut) {
+        authProfileNavDesktopOut.innerHTML = `<i class="fas fa-sign-in-alt"></i><span>Sign In</span>`;
+        authProfileNavDesktopOut.onclick = function (e) {
           e.stopPropagation();
           window.openLoginModal();
         };
