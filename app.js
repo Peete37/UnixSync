@@ -1629,7 +1629,8 @@ window.openDetail = async function (postId) {
 
     content.innerHTML = `
             <div class="w-full bg-slate-950 relative">${mediaBlock}</div>
-            <div class="p-6 space-y-4">
+            <div class="p-6 space-y-4 bg-[#0f172a] rounded-t-3xl -mt-4 relative shadow-[0_-12px_24px_-8px_rgba(0,0,0,0.5)]">
+                <div class="w-10 h-1 rounded-full bg-slate-700/60 mx-auto -mt-1.5 mb-1"></div>
                 <div class="flex justify-between items-center gap-4">
                     <h1 class="text-2xl font-bold text-white uppercase tracking-tighter">${esc(d.title) || "Campus Item"}</h1>
                     <span class="text-amber-400 font-black text-xl shrink-0">GH₵${esc(String(d.price || 0))}</span>
@@ -4461,7 +4462,7 @@ function renderFeedCard(id, d) {
       .map((url, i) =>
         d.media_type === "video"
           ? `<video class="feed-lazy-video w-full aspect-[4/5] object-cover shrink-0 snap-start bg-slate-950" muted loop playsinline preload="none" data-src="${esc(url)}" poster=""></video>`
-          : `<img class="w-full aspect-[4/5] object-cover shrink-0 snap-start" src="${esc(url)}" alt="${esc(d.title)} ${i + 1}" loading="lazy">`,
+          : `<img class="w-full max-h-[500px] object-contain bg-slate-950 shrink-0 snap-start" src="${esc(url)}" alt="${esc(d.title)} ${i + 1}" loading="lazy">`,
       )
       .join("");
     mediaBlock = `
@@ -4480,7 +4481,7 @@ function renderFeedCard(id, d) {
                 <video class="feed-lazy-video w-full aspect-[4/5] object-cover bg-slate-950" muted loop playsinline preload="none" data-src="${esc(mediaUrls[0])}"></video>
                </div>`
         : `<div onclick="openDetail('${escAttr(id)}')" class="w-full cursor-pointer">
-                <img class="w-full aspect-[4/5] object-cover" src="${esc(mediaUrls[0])}" alt="${esc(d.title)}" loading="lazy">
+                <img class="w-full max-h-[500px] object-contain bg-slate-950" src="${esc(mediaUrls[0])}" alt="${esc(d.title)}" loading="lazy">
                </div>`;
   }
 
@@ -4645,7 +4646,7 @@ function renderProductGridCard(id, d) {
         <div class="relative w-full bg-slate-950 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
             ${
               isVideo
-                ? `<video class="w-full h-auto block" muted loop playsinline preload="none" src="${esc(mediaUrl)}"></video>
+                ? `<video class="w-full h-auto block" muted loop playsinline preload="metadata" src="${esc(mediaUrl)}#t=0.1"></video>
                    <div class="absolute top-2 left-2 w-6 h-6 rounded-full bg-black/50 flex items-center justify-center text-white text-[10px]"><i class="fas fa-play"></i></div>`
                 : `<img class="w-full h-auto block" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
             }
@@ -4734,7 +4735,7 @@ function renderServiceGridCard(id, d) {
         <div class="relative w-full bg-slate-950 cursor-pointer" onclick="window.openServiceReelViewer('${escAttr(id)}')">
             ${
               isVideo
-                ? `<video class="w-full h-auto block" muted loop playsinline preload="none" src="${esc(mediaUrl)}"></video>
+                ? `<video class="w-full h-auto block" muted loop playsinline preload="metadata" src="${esc(mediaUrl)}#t=0.1"></video>
                    <div class="absolute top-2.5 left-2.5 w-7 h-7 rounded-full bg-black/50 flex items-center justify-center text-white text-xs"><i class="fas fa-play"></i></div>`
                 : `<img class="w-full h-auto block" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
             }
@@ -5222,7 +5223,7 @@ function renderReelsFeed() {
   }
 
   feed.innerHTML = reels
-    .map(({ id, data: d }) => renderReelCard(id, d))
+    .map(({ id, data: d }) => renderReelCard(id, d, true))
     .join("");
   setupReelsIntersectionObserver();
 }
@@ -8783,7 +8784,7 @@ function renderPublicGridItem(id, post) {
     <div class="relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition" onclick="window.openProfilePostViewer('${escAttr(d.user_id)}', '${escAttr(idKey(id))}')">
         ${
           isVideo
-            ? `<video class="w-full h-full object-cover" src="${mediaUrl}" preload="none" muted playsinline></video>
+            ? `<video class="w-full h-full object-cover" src="${mediaUrl}#t=0.1" preload="metadata" muted playsinline></video>
                <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
             : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
         }
@@ -8834,7 +8835,7 @@ function renderGridItem(id, post) {
         <span class="grid-tile-check"><i class="fas fa-check"></i></span>
         ${
           isVideo
-            ? `<video class="w-full h-full object-cover" src="${mediaUrl}" preload="none" muted playsinline></video>
+            ? `<video class="w-full h-full object-cover" src="${mediaUrl}#t=0.1" preload="metadata" muted playsinline></video>
                <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
             : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
         }
