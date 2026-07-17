@@ -1078,35 +1078,32 @@
 
       <div
         id="login-modal"
-        class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+        class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4"
       >
         <div
-          class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl"
+          class="bg-[#0b1220] border border-white/10 rounded-[2rem] p-7 w-full max-w-sm space-y-6 shadow-2xl"
         >
-          <div class="flex justify-between items-center">
-            <h2
-              class="text-white font-black text-base uppercase tracking-tight"
-            >
-              Access CampusMarket
-            </h2>
+          <div class="flex items-center gap-3">
             <button
               onclick="window.closeLoginModal()"
-              class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm"
-              aria-label="Close modal"
+              class="w-9 h-9 shrink-0 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white transition"
+              aria-label="Close"
             >
-              <i class="fas fa-times"></i>
+              <i class="fas fa-arrow-left text-xs"></i>
             </button>
+            <h2 class="text-white font-extrabold text-lg tracking-tight">
+              Sign In
+            </h2>
           </div>
-          <div class="text-center py-2 space-y-1">
-            <div class="text-3xl">🔐</div>
-            <p class="text-slate-300 text-xs">
-              Sign in to create listings, message vendors, and personalise your
-              feed.
-            </p>
-          </div>
+
+          <p class="text-slate-400 text-xs leading-relaxed -mt-2">
+            Sign in to create listings, message vendors, and personalise your
+            feed.
+          </p>
+
           <button
             onclick="window.login()"
-            class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md"
+            class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3.5 px-4 rounded-full text-sm transition active:scale-95 shadow-md"
           >
             <i class="fab fa-google text-base text-red-500"></i>
             Continue with Google
@@ -1118,48 +1115,48 @@
               event.preventDefault();
               window.loginWithEmail();
             "
-            class="space-y-3"
+            class="space-y-4"
           >
             <div>
               <label
                 for="login-email"
-                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
-                >Email Address</label
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5 ml-1 tracking-widest"
+                >Email</label
               >
               <div class="relative">
                 <i
-                  class="fas fa-envelope absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                  class="fas fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
                 ></i>
                 <input
                   type="email"
                   id="login-email"
                   name="login-email"
                   placeholder="student@university.edu.gh"
-                  class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+                  class="w-full bg-white/5 border border-white/10 text-white text-sm rounded-full pl-10 pr-4 py-3 focus:outline-none focus:border-amber-400/70 focus:bg-white/[0.07] transition font-medium placeholder:text-slate-600"
                 />
               </div>
             </div>
             <div>
               <label
                 for="login-password"
-                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5 ml-1 tracking-widest"
                 >Password</label
               >
               <div class="relative">
                 <i
-                  class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                  class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
                 ></i>
                 <input
                   type="password"
                   id="login-password"
                   name="login-password"
                   placeholder="••••••••"
-                  class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-10 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+                  class="w-full bg-white/5 border border-white/10 text-white text-sm rounded-full pl-10 pr-11 py-3 focus:outline-none focus:border-amber-400/70 focus:bg-white/[0.07] transition font-medium placeholder:text-slate-600"
                 />
                 <button
                   type="button"
                   onclick="window.togglePasswordVisibility()"
-                  class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs"
+                  class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs"
                   aria-label="Toggle password visibility"
                 >
                   <i id="pw-eye-icon" class="fas fa-eye"></i>
@@ -1168,13 +1165,13 @@
             </div>
             <button
               type="submit"
-              class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20"
+              class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3.5 rounded-full text-sm transition active:scale-95 shadow-lg shadow-amber-400/20 mt-2"
             >
               Sign In
             </button>
           </form>
 
-          <p class="text-center text-[10px] text-slate-500">
+          <p class="text-center text-xs text-slate-500">
             No account?
             <button
               onclick="window.showSignupView()"
@@ -1188,28 +1185,27 @@
 
       <div
         id="signup-modal"
-        class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+        class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4"
       >
         <div
-          class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-6 w-full max-w-sm space-y-5 shadow-2xl"
+          class="bg-[#0b1220] border border-white/10 rounded-[2rem] p-7 w-full max-w-sm space-y-6 shadow-2xl"
         >
-          <div class="flex justify-between items-center">
-            <h2
-              class="text-white font-black text-base uppercase tracking-tight"
-            >
-              Create Account
-            </h2>
+          <div class="flex items-center gap-3">
             <button
               onclick="window.closeSignupModal()"
-              class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition text-sm"
-              aria-label="Close modal"
+              class="w-9 h-9 shrink-0 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white transition"
+              aria-label="Close"
             >
-              <i class="fas fa-times"></i>
+              <i class="fas fa-arrow-left text-xs"></i>
             </button>
+            <h2 class="text-white font-extrabold text-lg tracking-tight">
+              Create Account
+            </h2>
           </div>
+
           <button
             onclick="window.login()"
-            class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-md"
+            class="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-3.5 px-4 rounded-full text-sm transition active:scale-95 shadow-md"
           >
             <i class="fab fa-google text-base text-red-500"></i>
             Sign up with Google
@@ -1221,74 +1217,74 @@
               event.preventDefault();
               window.signUpWithEmail();
             "
-            class="space-y-3"
+            class="space-y-4"
           >
             <div>
               <label
                 for="signup-name"
-                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5 ml-1 tracking-widest"
                 >Full Name</label
               >
               <div class="relative">
                 <i
-                  class="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                  class="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
                 ></i>
                 <input
                   type="text"
                   id="signup-name"
                   name="signup-name"
                   placeholder="Your full name"
-                  class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+                  class="w-full bg-white/5 border border-white/10 text-white text-sm rounded-full pl-10 pr-4 py-3 focus:outline-none focus:border-amber-400/70 focus:bg-white/[0.07] transition font-medium placeholder:text-slate-600"
                 />
               </div>
             </div>
             <div>
               <label
                 for="signup-email"
-                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
-                >Email Address</label
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5 ml-1 tracking-widest"
+                >Email</label
               >
               <div class="relative">
                 <i
-                  class="fas fa-envelope absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                  class="fas fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
                 ></i>
                 <input
                   type="email"
                   id="signup-email"
                   name="signup-email"
                   placeholder="student@university.edu.gh"
-                  class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+                  class="w-full bg-white/5 border border-white/10 text-white text-sm rounded-full pl-10 pr-4 py-3 focus:outline-none focus:border-amber-400/70 focus:bg-white/[0.07] transition font-medium placeholder:text-slate-600"
                 />
               </div>
             </div>
             <div>
               <label
                 for="signup-password"
-                class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5 ml-1 tracking-widest"
                 >Password</label
               >
               <div class="relative">
                 <i
-                  class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                  class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
                 ></i>
                 <input
                   type="password"
                   id="signup-password"
                   name="signup-password"
                   placeholder="Min 8 characters"
-                  class="w-full bg-slate-800 border border-slate-700 text-white text-xs rounded-xl pl-8 pr-3 py-2.5 focus:outline-none focus:border-amber-400 transition font-medium"
+                  class="w-full bg-white/5 border border-white/10 text-white text-sm rounded-full pl-10 pr-4 py-3 focus:outline-none focus:border-amber-400/70 focus:bg-white/[0.07] transition font-medium placeholder:text-slate-600"
                 />
               </div>
             </div>
             <button
               type="submit"
-              class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg shadow-amber-400/20"
+              class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3.5 rounded-full text-sm transition active:scale-95 shadow-lg shadow-amber-400/20 mt-2"
             >
               Create Account
             </button>
           </form>
 
-          <p class="text-center text-[10px] text-slate-500">
+          <p class="text-center text-xs text-slate-500">
             Already have an account?
             <button
               onclick="window.showLoginView()"

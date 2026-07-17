@@ -796,9 +796,7 @@ window.saveSearchAlert = function (term) {
   });
   persistSavedAlerts();
   showToast(`Saved alert for "${normalized}"`);
-  const searchInput =
-    document.getElementById("searchInput") ||
-    document.getElementById("search-input");
+  const searchInput = document.getElementById("campus-global-search");
   window.runSearch(searchInput?.value || normalized);
 };
 
@@ -809,9 +807,7 @@ window.removeSearchAlert = function (term) {
   savedSearchAlerts.splice(idx, 1);
   persistSavedAlerts();
   showToast(`Removed alert for "${normalized}"`);
-  const searchInput =
-    document.getElementById("searchInput") ||
-    document.getElementById("search-input");
+  const searchInput = document.getElementById("campus-global-search");
   window.runSearch(searchInput?.value || "");
 };
 
