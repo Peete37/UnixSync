@@ -1633,8 +1633,8 @@ window.openDetail = async function (postId) {
 
     content.innerHTML = `
             <div class="w-full bg-slate-950 relative">${mediaBlock}</div>
-            <div class="p-6 space-y-4 bg-[#0f172a] rounded-t-3xl -mt-4 relative shadow-[0_-12px_24px_-8px_rgba(0,0,0,0.5)]">
-                <div class="w-10 h-1 rounded-full bg-slate-700/60 mx-auto -mt-1.5 mb-1"></div>
+            <div class="p-6 space-y-4 bg-[#0f172a] rounded-t-3xl relative shadow-[0_-12px_24px_-8px_rgba(0,0,0,0.5)]">
+                <div class="w-10 h-1 rounded-full bg-slate-700/60 mx-auto -mt-1 mb-1"></div>
                 <div class="flex justify-between items-center gap-4">
                     <h1 class="text-2xl font-bold text-white uppercase tracking-tighter">${esc(d.title) || "Campus Item"}</h1>
                     <span class="text-amber-400 font-black text-xl shrink-0">GH₵${esc(String(d.price || 0))}</span>

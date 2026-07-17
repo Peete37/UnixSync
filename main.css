@@ -281,6 +281,55 @@ body {
   .desktop-right-rail {
     display: flex;
   }
+
+  /* Post detail view: side-by-side (media left, details right) on
+         desktop instead of the mobile stacked layout — this was also
+         the real fix for the info panel overlapping/hiding the media,
+         since the two are now beside each other, never one on top of
+         the other. #detail-content's own children (the media div and
+         the info-panel div, both direct children injected by
+         openDetail in app.js) become a flex row here; the info panel
+         gets its own scrollbar since long descriptions/Safe Swap
+         Zones/You Might Also Like sections shouldn't force the whole
+         modal taller than the screen. */
+  #detail-modal .modal-inner {
+    max-width: 920px;
+    width: 90vw;
+  }
+  #detail-content {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    max-height: 88vh;
+  }
+  #detail-content > div:first-child {
+    width: 50%;
+    flex-shrink: 0;
+    max-height: 88vh;
+    display: flex;
+    align-items: center;
+    background: #000;
+  }
+  #detail-content > div:first-child img,
+  #detail-content > div:first-child video {
+    max-height: 88vh !important;
+    width: 100%;
+  }
+  #detail-content > div:first-child > div.relative {
+    width: 100%;
+    height: 88vh;
+  }
+  #detail-content > div:first-child #detail-carousel {
+    height: 100%;
+  }
+  #detail-content > div:last-child {
+    width: 50%;
+    overflow-y: auto;
+    max-height: 88vh;
+    border-radius: 0 !important;
+    margin-top: 0 !important;
+    box-shadow: none !important;
+  }
 }
 
 /* Hidden by default (mobile/tablet) — only ever shown inside the
