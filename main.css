@@ -32,6 +32,17 @@ html {
   touch-action: pan-x pan-y;
 }
 
+/* Desktop sidebar nav is hidden by default on every screen size — the
+   1024px+ desktop media query further down is the ONLY place that ever
+   makes it visible again (display: flex there). Without this explicit
+   base rule, an element with no matching CSS is rendered with plain
+   browser defaults, fully visible — which is exactly what was
+   happening on mobile: raw unstyled nav text (Home, Explore, Create,
+   DMs, Profile) stacked above the real mobile header on every phone. */
+.sidebar-nav {
+  display: none;
+}
+
 /* ─── CUSTOM SCROLLBAR (TikTok Sleek Scrollbar) ─────────────────────────────────────── */
 .tiktok-scrollbar {
   /* Firefox configuration */
@@ -153,7 +164,6 @@ body {
     gap: 32px;
     padding: 0 24px;
     position: relative;
-    transform: translateZ(0);
   }
 
   .bottom-nav-container {
@@ -253,6 +263,60 @@ body {
     max-width: 520px;
   }
 
+  /* This wrapper holds literally all of the app's main content
+         (header/tabs, feed, explore, dms, profile, cart, every
+         modal/overlay) as a single flex item sitting between the
+         sidebar and the right rail. flex: 1 lets it actually claim the
+         available row space (an unstyled flex item has no explicit
+         basis and can end up auto-sized to its content in
+         unpredictable ways); min-width: 0 is the standard fix for flex
+         items with wide content (like a full-bleed video/reel column)
+         refusing to shrink below their content's intrinsic width;
+         position: relative gives its position:sticky/fixed descendants
+         (the Reels player, in particular) a real containing block to
+         size and position against instead of falling back to the
+         viewport in ways that could leave them with no resolvable
+         height at all. */
+  .desktop-center-column {
+    flex: 1;
+    min-width: 0;
+    max-width: 520px;
+    position: relative;
+  }
+  .desktop-center-column .site-header.header-reels-mode {
+    position: sticky;
+    left: auto;
+    right: auto;
+    width: 100%;
+    max-width: 520px;
+    margin: 0 auto;
+  }
+
+  /* Same full-viewport-width bug as the reels header above, for
+         two more mobile-first fixed bottom sheets that lost their
+         confinement to a narrow column when #app-shell's transform
+         (which used to make it the containing block for every
+         position:fixed descendant) was removed to fix the page-scroll
+         clipping bug. Unlike the reels header, both of these are always
+         appended directly to document.body by JS when opened (see
+         toggleComments/openPostOptionsMenu) — never actually nested
+         inside .desktop-center-column — so this can't be scoped via
+         ancestry and instead centers them directly at this breakpoint. */
+  .reel-comments,
+  .options-menu-sheet {
+    left: 50% !important;
+    right: auto !important;
+    width: 100% !important;
+    max-width: 520px !important;
+    transform: translateX(-50%) translateY(100%) !important;
+  }
+  .reel-comments.comments-open {
+    transform: translateX(-50%) translateY(0) !important;
+  }
+  .options-menu-sheet.menu-open {
+    transform: translateX(-50%) translateY(0) !important;
+  }
+
   main {
     width: 100%;
     max-width: 520px;
@@ -329,6 +393,34 @@ body {
     border-radius: 0 !important;
     margin-top: 0 !important;
     box-shadow: none !important;
+  }
+
+  /* Products keep the same modal width as the default side-by-side
+         layout above, but stacked instead — media on top, details
+         below — per direct request rather than beside each other. */
+  #detail-modal.is-product-detail #detail-content {
+    flex-direction: column;
+    max-height: 88vh;
+    overflow-y: auto;
+  }
+  #detail-modal.is-product-detail #detail-content > div:first-child {
+    width: 100%;
+    max-height: 55vh;
+  }
+  #detail-modal.is-product-detail #detail-content > div:first-child img,
+  #detail-modal.is-product-detail #detail-content > div:first-child video {
+    max-height: 55vh !important;
+  }
+  #detail-modal.is-product-detail
+    #detail-content
+    > div:first-child
+    > div.relative {
+    height: 55vh;
+  }
+  #detail-modal.is-product-detail #detail-content > div:last-child {
+    width: 100%;
+    max-height: none;
+    overflow-y: visible;
   }
 }
 

@@ -1572,6 +1572,14 @@ window.openDetail = async function (postId) {
     const isFollowing =
       !isOwn && viewer ? await checkFollowing(d.user_id) : false;
 
+    // Tags the modal with the post's own type (product/skill/etc) so
+    // desktop CSS can give Products its own layout — same width as
+    // the default side-by-side view, but with details stacked below
+    // the media instead of beside it (see #detail-modal.is-product-detail
+    // in main.css).
+    modal.classList.remove("is-product-detail");
+    if (d.type === "product") modal.classList.add("is-product-detail");
+
     let mediaUrls = [];
     if (d.media_url) {
       if (d.media_url.startsWith("[")) {
