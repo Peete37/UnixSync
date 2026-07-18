@@ -1002,6 +1002,11 @@ function applyLocationToUI(institution, region) {
 // ─── 6. AUTH ACTIONS ──────────────────────────────────────────────────────────
 window.login = async function () {
   try {
+    // Let the button's own :active press state actually get painted
+    // before the modal disappears — closing it in the same tick as
+    // the click left no visible sign the tap registered at all, even
+    // though sign-in itself worked correctly underneath.
+    await new Promise((resolve) => setTimeout(resolve, 150));
     document.getElementById("login-modal")?.classList.add("hidden");
     document.getElementById("signup-modal")?.classList.add("hidden");
     await signInWithGoogle();
@@ -4837,15 +4842,17 @@ window.openServiceReelViewer = async function (startPostId) {
     .map((d) => renderReelCard(idKey(d.id), d, true))
     .join("");
 
-  const targetCard = document.getElementById(
-    `reel-card-${CSS.escape(idKey(startPostId))}`,
-  );
-  if (targetCard) {
-    targetCard.scrollIntoView({ block: "start" });
-    const targetMedia = targetCard.querySelector(".reel-video");
-    if (targetMedia && targetMedia.dataset.src)
-      targetMedia.src = targetMedia.dataset.src;
-  }
+  requestAnimationFrame(() => {
+    const targetCard = document.getElementById(
+      `reel-card-${CSS.escape(idKey(startPostId))}`,
+    );
+    if (targetCard) {
+      targetCard.scrollIntoView({ block: "start" });
+      const targetMedia = targetCard.querySelector(".reel-video");
+      if (targetMedia && targetMedia.dataset.src)
+        targetMedia.src = targetMedia.dataset.src;
+    }
+  });
 
   setupReelsIntersectionObserver(feed);
 };
@@ -7451,19 +7458,25 @@ window.openProfilePostViewer = async function (userId, startPostId) {
 
     // Jump straight to the tapped post — instant, not an animated
     // scroll — so opening post #7 of 13 doesn't visibly fly past
-    // posts 1-6 first.
-    const targetCard = document.getElementById(
-      `reel-card-${CSS.escape(idKey(startPostId))}`,
-    );
-    if (targetCard) {
-      targetCard.scrollIntoView({ block: "start" });
-      // Load the tapped post's media right away instead of waiting
-      // for the observer's first (async) callback — everything
-      // else in the list stays lazy.
-      const targetMedia = targetCard.querySelector(".reel-video");
-      if (targetMedia && targetMedia.dataset.src)
-        targetMedia.src = targetMedia.dataset.src;
-    }
+    // posts 1-6 first. Deferred one frame: scrolling in the same
+    // tick as the innerHTML assignment above risks the browser not
+    // having finished laying out the freshly-inserted cards yet,
+    // which combined with this container's mandatory scroll-snap
+    // could land on (and snap to) the wrong card entirely.
+    requestAnimationFrame(() => {
+      const targetCard = document.getElementById(
+        `reel-card-${CSS.escape(idKey(startPostId))}`,
+      );
+      if (targetCard) {
+        targetCard.scrollIntoView({ block: "start" });
+        // Load the tapped post's media right away instead of waiting
+        // for the observer's first (async) callback — everything
+        // else in the list stays lazy.
+        const targetMedia = targetCard.querySelector(".reel-video");
+        if (targetMedia && targetMedia.dataset.src)
+          targetMedia.src = targetMedia.dataset.src;
+      }
+    });
 
     setupReelsIntersectionObserver(feed);
   } catch (err) {
