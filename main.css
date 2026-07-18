@@ -422,6 +422,25 @@ body {
     max-height: none;
     overflow-y: visible;
   }
+
+  /* Services viewer stays the Reels-style continuous scroller on
+         desktop (per explicit decision), just windowed down to match
+         the main detail modal's proportions instead of covering the
+         whole screen. */
+  #profile-post-viewer.is-service-viewer {
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.85);
+  }
+  #profile-post-viewer.is-service-viewer #profile-post-viewer-feed {
+    flex: none;
+    width: 420px;
+    max-width: 90vw;
+    height: 88vh;
+    border-radius: 24px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
 }
 
 /* Hidden by default (mobile/tablet) — only ever shown inside the
@@ -478,7 +497,8 @@ body {
   transition:
     background 0.25s ease,
     border-color 0.25s ease,
-    opacity 0.25s ease;
+    opacity 0.25s ease,
+    transform 0.25s ease;
 }
 
 /* TikTok-style: on the Reels tab the header becomes a transparent
@@ -1182,6 +1202,10 @@ main {
 
 .bottom-nav-hidden {
   transform: translateY(100%);
+}
+
+.site-header.header-hidden {
+  transform: translateY(-100%);
 }
 
 .no-browser-menu {

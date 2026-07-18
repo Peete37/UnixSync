@@ -1598,13 +1598,13 @@ window.openDetail = async function (postId) {
       const slides = mediaUrls
         .map((url, i) =>
           d.media_type === "video"
-            ? `<video class="carousel-slide w-full max-h-[600px] object-contain bg-black shrink-0 snap-start" ${i === 0 ? "autoplay" : ""} controls src="${esc(url)}"></video>`
-            : `<img class="carousel-slide w-full max-h-[600px] object-contain bg-black shrink-0 snap-start" src="${esc(url)}" alt="Image ${i + 1}">`,
+            ? `<video class="carousel-slide w-full h-[420px] object-contain bg-black shrink-0 snap-start" ${i === 0 ? "autoplay" : ""} controls src="${esc(url)}"></video>`
+            : `<img class="carousel-slide w-full h-[420px] object-contain bg-black shrink-0 snap-start" src="${esc(url)}" alt="Image ${i + 1}">`,
         )
         .join("");
       mediaBlock = `
                 <div class="relative w-full">
-                    <div id="detail-carousel" class="flex overflow-x-auto snap-x snap-mandatory scroll-smooth no-scrollbar" style="scroll-snap-type:x mandatory;">
+                    <div id="detail-carousel" class="flex overflow-x-auto snap-x snap-mandatory scroll-smooth no-scrollbar h-[420px]" style="scroll-snap-type:x mandatory;">
                         ${slides}
                     </div>
                     <div class="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
@@ -4842,7 +4842,7 @@ window.openServiceReelViewer = async function (startPostId) {
     .map(({ data: d }) => d);
   if (services.length === 0) return;
 
-  overlay.classList.add("sheet-open");
+  overlay.classList.add("sheet-open", "is-service-viewer");
   pauseAllReelVideos();
   pushUiState("profile-post-viewer", () => window.closeProfilePostViewer(true));
 
@@ -7434,6 +7434,7 @@ window.openProfilePostViewer = async function (userId, startPostId) {
         <div class="h-full flex items-center justify-center">
             <i class="fas fa-circle-notch fa-spin text-slate-600 text-2xl"></i>
         </div>`;
+  overlay.classList.remove("is-service-viewer");
   overlay.classList.add("sheet-open");
   pauseAllReelVideos();
   pushUiState("profile-post-viewer", () => window.closeProfilePostViewer(true));
@@ -7496,7 +7497,7 @@ window.openProfilePostViewer = async function (userId, startPostId) {
 window.closeProfilePostViewer = function (fromPop = false) {
   document
     .getElementById("profile-post-viewer")
-    ?.classList.remove("sheet-open");
+    ?.classList.remove("sheet-open", "is-service-viewer");
   pauseAllReelVideos();
   if (!fromPop) popUiState("profile-post-viewer");
 };
@@ -8670,17 +8671,21 @@ window.addEventListener(
   "scroll",
   () => {
     const bottomNav = document.querySelector(".bottom-nav-container");
-    if (!bottomNav) return;
+    const header = document.getElementById("site-header");
     const currentScrollY = window.scrollY;
 
     if (currentScrollY < 20) {
-      bottomNav.classList.remove("bottom-nav-hidden");
+      bottomNav?.classList.remove("bottom-nav-hidden");
+      header?.classList.remove("header-hidden");
+      lastScrollY = currentScrollY;
       return;
     }
     if (currentScrollY > lastScrollY) {
-      bottomNav.classList.add("bottom-nav-hidden");
+      bottomNav?.classList.add("bottom-nav-hidden");
+      header?.classList.add("header-hidden");
     } else {
-      bottomNav.classList.remove("bottom-nav-hidden");
+      bottomNav?.classList.remove("bottom-nav-hidden");
+      header?.classList.remove("header-hidden");
     }
     lastScrollY = currentScrollY;
   },
