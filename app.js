@@ -506,6 +506,80 @@ function getFeedScore(post) {
 // post-list on every realtime update.
 let allReelsCache = [];
 
+// Separate pool for the All feed's "Suggested Reels" injection (see
+// interleaveSuggestedReels) — deliberately NOT the same data as
+// allReelsCache/allCachedPosts, since those only ever reflect whatever
+// page of the main feed happens to be currently loaded. This pulls its
+// own broader set of recent/popular video posts, independent of
+// whatever the person has scrolled to, matching how Instagram's
+// suggested content is a genuinely separate recommendation surface
+// rather than a reshuffling of what's already on screen.
+let suggestedReelsPool = [];
+let _suggestedReelsFetchedAt = 0;
+
+async function fetchSuggestedReelsPool() {
+  // Refetching on every single render would be wasteful for content
+  // that's explicitly supplementary — five minutes is a reasonable
+  // balance between "feels fresh" and "not hammering the DB every
+  // time someone opens the All tab".
+  if (
+    Date.now() - _suggestedReelsFetchedAt < 5 * 60 * 1000 &&
+    suggestedReelsPool.length > 0
+  ) {
+    return suggestedReelsPool;
+  }
+  try {
+    const { data, error } = await supabase
+      .from("posts")
+      .select(FEED_SELECT_COLUMNS)
+      .eq("media_type", "video")
+      .eq("is_archived", false)
+      .order("created_at", { ascending: false })
+      .limit(60);
+    if (error) throw error;
+    suggestedReelsPool = (data || [])
+      .map((d) => ({ id: d.id, data: d, score: getFeedScore(d) }))
+      .sort((a, b) => b.score - a.score);
+    _suggestedReelsFetchedAt = Date.now();
+  } catch (err) {
+    console.error("Suggested reels fetch error:", err);
+    // Leave whatever pool (even empty) already exists rather than
+    // throwing — this is supplementary content, a failed fetch here
+    // should never block or break the main feed rendering.
+  }
+  return suggestedReelsPool;
+}
+
+// Weaves suggested-reel cards in among the regular feed cards at
+// semi-random spacing (3-6 posts apart) rather than a fixed interval —
+// matching the request that there shouldn't be one specific predictable
+// spot, the same way Instagram doesn't inject its Suggested Reels at an
+// exact fixed cadence either. Cards already visible as regular posts in
+// this feed page are skipped so the same post never appears twice.
+function interleaveSuggestedReels(regularCardsHtml, pool, alreadyShownIds) {
+  if (!pool || pool.length === 0) return regularCardsHtml;
+
+  const available = pool.filter(({ id }) => !alreadyShownIds.has(idKey(id)));
+  if (available.length === 0) return regularCardsHtml;
+
+  let poolIndex = 0;
+  let sinceLastInsert = 0;
+  let nextGap = 3 + Math.floor(Math.random() * 4); // 3-6 posts apart
+  const merged = [];
+
+  for (const cardHtml of regularCardsHtml) {
+    merged.push(cardHtml);
+    sinceLastInsert++;
+    if (sinceLastInsert >= nextGap && poolIndex < available.length) {
+      const { id, data: d } = available[poolIndex++];
+      merged.push(renderFeedCard(id, d, { suggested: true }));
+      sinceLastInsert = 0;
+      nextGap = 3 + Math.floor(Math.random() * 4);
+    }
+  }
+  return merged;
+}
+
 function refreshReelsCache() {
   allReelsCache = allCachedPosts.filter(
     ({ data: d }) => d?.media_type === "video",
@@ -2957,6 +3031,24 @@ window.sharePost = function (postId, title) {
   }
 };
 
+// Copies a real, working link to this specific post (?post=ID) — unlike
+// sharePost's fallback (which just copies window.location.href, the
+// generic app URL), this actually resolves to the post when opened, since
+// the app checks for ?post=ID on boot and opens that detail view.
+window.copyPostLink = function (postId) {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.searchParams.set("post", postId);
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard
+      .writeText(url.toString())
+      .then(() => showToast("Link copied! ✓"))
+      .catch(() => showToast("Couldn't copy the link."));
+  } else {
+    showToast("Couldn't copy the link.");
+  }
+};
+
 // downloadMedia was removed entirely — post media (photos/videos) is no
 // longer downloadable from anywhere in the app. This is separate from the
 // avatar long-press "Save" button, which only ever lets someone save
@@ -3815,6 +3907,31 @@ let blockedUserNames = JSON.parse(
   localStorage.getItem("campus_market_blocked_names") || "{}",
 );
 
+// Bulk-loaded set of user ids the viewer currently follows — lets every
+// feed card render its Follow/Following button with the CORRECT state
+// up front (previously hardcoded to data-active="false" on every card,
+// so a person you already followed still showed "+ Follow" until you
+// tapped it once). Same pattern as blockedUserIds: synced from Supabase
+// once at boot, kept in sync locally by toggleFollow's own success path.
+const followingUserIds = new Set();
+
+async function syncFollowingIds() {
+  if (!currentUserData) return;
+  try {
+    const { data, error } = await supabase
+      .from("follows")
+      .select("following_id")
+      .eq("follower_id", currentUserData.id);
+    if (error) throw error;
+    followingUserIds.clear();
+    (data || []).forEach((row) =>
+      followingUserIds.add(idKey(row.following_id)),
+    );
+  } catch (err) {
+    console.error("Following sync error:", err);
+  }
+}
+
 // ─── Verification badge + seller ratings caches ─────────────────────────────
 // Both are populated on demand (profile view, feed render) rather than
 // fetched for every post up front, since most feed scrolling never visits
@@ -4396,9 +4513,30 @@ window.openPostOptionsMenu = function (
   isOwn,
   authorId = null,
   authorName = "this student",
+  isSuggested = false,
 ) {
+  const sharedItems = [
+    {
+      label: "View Profile",
+      icon: "fas fa-user",
+      action: () => window.openPublicProfile(authorId),
+    },
+    {
+      label: "Copy Link",
+      icon: "fas fa-link",
+      action: () => window.copyPostLink(postId),
+    },
+    {
+      label: "Why you're seeing this post",
+      icon: "fas fa-circle-info",
+      action: () => window.openWhySeeingPost(authorId, isSuggested),
+    },
+  ];
+
   const items = isOwn
     ? [
+        ...sharedItems,
+        { divider: true },
         {
           label: "Archive or delete listing",
           icon: "fas fa-box-archive",
@@ -4407,6 +4545,8 @@ window.openPostOptionsMenu = function (
         },
       ]
     : [
+        ...sharedItems,
+        { divider: true },
         {
           label: "Report listing",
           icon: "fas fa-flag",
@@ -4459,7 +4599,8 @@ window.openCommentOptionsMenu = function (
   openOptionsMenu(items);
 };
 
-function renderFeedCard(id, d) {
+function renderFeedCard(id, d, options = {}) {
+  const isSuggested = !!options.suggested;
   const viewer = currentUserData;
   const showFollow = viewer && d.user_id !== viewer.id;
   const isOwnPost = viewer && d.user_id === viewer.id;
@@ -4513,20 +4654,21 @@ function renderFeedCard(id, d) {
                </div>`;
   }
 
+  const isFollowingPoster = followingUserIds.has(idKey(d.user_id));
   const followBlock = showFollow
     ? `
         <button
-            class="follow-btn px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700 ml-2"
+            class="follow-btn px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 ${isFollowingPoster ? "bg-slate-700 text-slate-300 border border-slate-600" : "bg-slate-800 text-slate-300 border border-slate-700"} ml-2"
             data-follow-uid="${esc(d.user_id)}"
-            data-active="false"
+            data-active="${isFollowingPoster}"
             onclick="toggleFollow('${escAttr(d.user_id)}','${escAttr(d.user_name)}','${escAttr(d.user_avatar)}')">
-            + Follow
+            ${isFollowingPoster ? "✓ Following" : "+ Follow"}
         </button>`
     : "";
 
   const deleteBlock = `
         <button
-            onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')"
+            onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}', ${isSuggested ? "true" : "false"})"
             class="post-options-trigger"
             aria-label="More options">
             <i class="fas fa-ellipsis-vertical"></i>
@@ -4571,7 +4713,7 @@ function renderFeedCard(id, d) {
                 <img src="${esc(d.user_avatar) || "https://ui-avatars.com/api/?name=User"}" data-avatar-for="${escAttr(d.user_id)}" class="w-8 h-8 rounded-full border border-slate-700 object-cover shrink-0" alt="">
                 <div class="min-w-0">
                     <p class="text-[12px] font-bold text-white leading-tight truncate feed-username-${escAttr(id)}">${esc(d.user_name) || "Student"}</p>
-                    <p class="text-[10px] text-slate-500 leading-tight truncate">${esc(d.institution) || ""}</p>
+                    <p class="text-[10px] text-slate-500 leading-tight truncate">${isSuggested ? '<span class="text-amber-400/80 font-semibold">Suggested</span>' : esc(d.institution) || ""}</p>
                 </div>
             </div>
             <div class="flex items-center gap-1 shrink-0">
@@ -5574,6 +5716,10 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
 };
 
 function updateFollowButtons(targetUserId, isFollowing) {
+  const key = idKey(targetUserId);
+  if (isFollowing) followingUserIds.add(key);
+  else followingUserIds.delete(key);
+
   const cardClass = isFollowing
     ? "follow-btn px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600 ml-2"
     : "follow-btn px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700 ml-2";
@@ -6050,6 +6196,41 @@ function renderFeedFromCache() {
   feed.innerHTML =
     allCachedPosts.map(({ id, data: d }) => renderFeedCard(id, d)).join("") +
     sentinelHtml;
+
+  // Instagram-style Suggested Reels: woven into the All tab specifically,
+  // at semi-random spacing rather than a fixed slot (see
+  // interleaveSuggestedReels). Fetched and spliced in after the regular
+  // feed has already painted, so this never delays the primary content.
+  if (currentFeedType === "all" && allCachedPosts.length > 0) {
+    const myGeneration = _feedLoadGeneration;
+    fetchSuggestedReelsPool().then((pool) => {
+      if (myGeneration !== _feedLoadGeneration) return; // superseded by a newer tab switch
+      const currentFeed = document.getElementById("posts-feed");
+      if (!currentFeed || currentFeedType !== "all") return;
+
+      const alreadyShownIds = new Set(
+        allCachedPosts.map(({ id }) => idKey(id)),
+      );
+      const regularCards = allCachedPosts.map(({ id, data: d }) =>
+        renderFeedCard(id, d),
+      );
+      const merged = interleaveSuggestedReels(
+        regularCards,
+        pool,
+        alreadyShownIds,
+      );
+      currentFeed.innerHTML = merged.join("") + sentinelHtml;
+
+      allCachedPosts.forEach(({ id }) => {
+        wireCarouselCounters(id);
+        fetchAndCacheCommentCount(id);
+      });
+      setupFeedVideoObserver();
+      setupFeedCommentAutoClose();
+      setupFeedLoadMoreObserver();
+    });
+  }
+
   allCachedPosts.forEach(({ id }) => {
     wireCarouselCounters(id);
     fetchAndCacheCommentCount(id);
@@ -7085,6 +7266,33 @@ async function loadArchivedPostsIntoSheet() {
     })
     .join("");
 }
+
+window.openWhySeeingPost = function (posterId, isSuggested) {
+  const overlay = document.getElementById("info-sheet-overlay");
+  const titleEl = document.getElementById("info-sheet-title");
+  const bodyEl = document.getElementById("info-sheet-body");
+  if (!overlay || !titleEl || !bodyEl) return;
+
+  const isFollowed = followingUserIds.has(idKey(posterId));
+  let reasonHtml;
+  if (isSuggested) {
+    reasonHtml = `<p>This is a <strong class="text-white">suggested</strong> post — a recent or popular listing from someone you don't follow yet, mixed into your feed the way suggested content works on most apps.</p>`;
+  } else if (isFollowed) {
+    reasonHtml = `<p>You're seeing this because you <strong class="text-white">follow</strong> this seller.</p>`;
+  } else {
+    reasonHtml = `<p>You're seeing this because it's a <strong class="text-white">recent listing</strong> on CampusMarket. Posts you're more likely to be interested in — based on recency and engagement — are shown higher in your feed.</p>`;
+  }
+
+  titleEl.textContent = "Why you're seeing this post";
+  bodyEl.innerHTML = `
+        <div class="p-6 space-y-4 text-sm text-slate-300 leading-relaxed">
+            ${reasonHtml}
+            <p class="text-slate-500 text-xs">Following or unfollowing sellers changes what shows up here going forward.</p>
+        </div>`;
+  bodyEl.scrollTop = 0;
+  overlay.classList.add("sheet-open");
+  pushUiState("info-sheet", () => window.closeInfoSheet(true));
+};
 
 window.openInfoSheet = function (key) {
   const entry = INFO_SHEET_CONTENT[key];
@@ -8571,6 +8779,7 @@ if (activeAuthChange) {
         // person's posts never flash on screen for a moment before
         // being filtered out.
         await syncBlockedUsers();
+        await syncFollowingIds();
 
         updateCampusScopeBanner();
         const savedTabBtn = document.querySelector(
@@ -8581,6 +8790,19 @@ if (activeAuthChange) {
           loadProfileStats();
         } catch (_) {}
         _initAvatarLongPress();
+
+        // If this page was opened via a shared post link
+        // (?post=ID, see the Copy Link menu item), open that
+        // post's detail view once the feed has finished its
+        // initial load -- otherwise a copied/shared link would
+        // just open the app fresh with no way to reach the
+        // specific post it pointed to.
+        try {
+          const sharedPostId = new URLSearchParams(window.location.search).get(
+            "post",
+          );
+          if (sharedPostId) window.openDetail(sharedPostId);
+        } catch (_) {}
 
         // Populate the DMs unread badge immediately on sign-in,
         // rather than only after the person happens to open the DMs
