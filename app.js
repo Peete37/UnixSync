@@ -4811,6 +4811,20 @@ function renderProductGridCard(id, d) {
     ? "fas fa-bookmark text-amber-400"
     : "far fa-bookmark text-white/80";
 
+  const viewer = currentUserData;
+  const showFollow = viewer && d.user_id !== viewer.id;
+  const isFollowingPoster = followingUserIds.has(idKey(d.user_id));
+  const followBlock = showFollow
+    ? `
+        <button
+            onclick="event.stopPropagation(); toggleFollow('${escAttr(d.user_id)}','${escAttr(d.user_name)}','${escAttr(d.user_avatar)}')"
+            class="w-full mt-1.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 ${isFollowingPoster ? "bg-slate-700 text-slate-300 border border-slate-600" : "bg-slate-800 text-slate-300 border border-slate-700"}"
+            data-follow-uid="${esc(d.user_id)}"
+            data-active="${isFollowingPoster}">
+            ${isFollowingPoster ? "✓ Following" : "+ Follow"}
+        </button>`
+    : "";
+
   return `
     <div class="masonry-card bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden mb-2.5" id="grid-card-${escAttr(id)}">
         <div class="relative w-full bg-slate-950 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
@@ -4832,6 +4846,7 @@ function renderProductGridCard(id, d) {
         <div class="p-2">
             <p class="text-white text-[11px] font-semibold leading-snug line-clamp-1">${esc(d.title)}</p>
             <p class="text-slate-500 text-[9px] truncate mt-0.5">${esc(d.user_name) || "Student"}</p>
+            ${followBlock}
         </div>
     </div>`;
 }
@@ -4900,6 +4915,20 @@ function renderServiceGridCard(id, d) {
 
   const isVideo = d.media_type === "video";
 
+  const viewer = currentUserData;
+  const showFollow = viewer && d.user_id !== viewer.id;
+  const isFollowingPoster = followingUserIds.has(idKey(d.user_id));
+  const followBlock = showFollow
+    ? `
+        <button
+            onclick="event.stopPropagation(); toggleFollow('${escAttr(d.user_id)}','${escAttr(d.user_name)}','${escAttr(d.user_avatar)}')"
+            class="w-full mt-1.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 ${isFollowingPoster ? "bg-slate-700 text-slate-300 border border-slate-600" : "bg-slate-800 text-slate-300 border border-slate-700"}"
+            data-follow-uid="${esc(d.user_id)}"
+            data-active="${isFollowingPoster}">
+            ${isFollowingPoster ? "✓ Following" : "+ Follow"}
+        </button>`
+    : "";
+
   return `
     <div class="masonry-card-service bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden mb-3" id="grid-card-${escAttr(id)}">
         <div class="relative w-full bg-slate-950 cursor-pointer" onclick="window.openServiceReelViewer('${escAttr(id)}')">
@@ -4919,6 +4948,7 @@ function renderServiceGridCard(id, d) {
         <div class="p-3">
             <p class="text-white text-sm font-bold leading-snug line-clamp-2">${esc(d.title)}</p>
             <p class="text-slate-500 text-[11px] truncate mt-1">${esc(d.user_name) || "Student"}</p>
+            ${followBlock}
         </div>
     </div>`;
 }
@@ -5728,6 +5758,10 @@ function updateFollowButtons(targetUserId, isFollowing) {
     ? "follow-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600"
     : "follow-btn px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition active:scale-95 bg-amber-400 text-black";
 
+  const gridClass = isFollowing
+    ? "w-full mt-1.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-700 text-slate-300 border border-slate-600"
+    : "w-full mt-1.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition active:scale-95 bg-slate-800 text-slate-300 border border-slate-700";
+
   const label = isFollowing ? "✓ Following" : "+ Follow";
 
   document
@@ -5735,7 +5769,13 @@ function updateFollowButtons(targetUserId, isFollowing) {
     .forEach((btn) => {
       btn.textContent = label;
       btn.dataset.active = String(isFollowing);
-      btn.className = btn.id === "follow-btn-detail" ? detailClass : cardClass;
+      if (btn.id === "follow-btn-detail") {
+        btn.className = detailClass;
+      } else if (btn.closest(".masonry-card, .masonry-card-service")) {
+        btn.className = gridClass;
+      } else {
+        btn.className = cardClass;
+      }
     });
 }
 
