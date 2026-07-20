@@ -517,6 +517,24 @@ let allReelsCache = [];
 let suggestedReelsPool = [];
 let _suggestedReelsFetchedAt = 0;
 
+// Interleaving cursor state, made persistent across page loads (rather
+// than local to a single interleaveSuggestedReels call) specifically so
+// incremental load-more appends continue the same 3-6-post rhythm the
+// feed already had, instead of restarting the gap countdown from zero
+// at every page boundary — which would visibly cluster suggested reels
+// right after each "load more" instead of flowing naturally through the
+// whole scroll. Reset only on a genuine fresh feed load (see
+// resetSuggestedReelsInterleaveState, called from subscribeFeed).
+let _reelInterleavePoolIndex = 0;
+let _reelInterleaveSinceLastInsert = 0;
+let _reelInterleaveNextGap = 3 + Math.floor(Math.random() * 4);
+
+function resetSuggestedReelsInterleaveState() {
+  _reelInterleavePoolIndex = 0;
+  _reelInterleaveSinceLastInsert = 0;
+  _reelInterleaveNextGap = 3 + Math.floor(Math.random() * 4);
+}
+
 async function fetchSuggestedReelsPool() {
   // Refetching on every single render would be wasteful for content
   // that's explicitly supplementary — five minutes is a reasonable
@@ -575,6 +593,38 @@ function interleaveSuggestedReels(regularCardsHtml, pool, alreadyShownIds) {
       merged.push(renderFeedMasonryCard(id, d, { suggested: true }));
       sinceLastInsert = 0;
       nextGap = 3 + Math.floor(Math.random() * 4);
+    }
+  }
+  return merged;
+}
+
+// Incremental sibling of interleaveSuggestedReels: same 3-6-post gap
+// logic, but reads/advances the persistent module-level cursor
+// (_reelInterleave*) instead of starting fresh each call, so calling
+// this once per load-more page continues the same rhythm the full
+// render would have produced across the whole scroll.
+function interleaveSuggestedReelsIncremental(
+  regularCardsHtml,
+  pool,
+  alreadyShownIds,
+) {
+  if (!pool || pool.length === 0) return regularCardsHtml;
+
+  const available = pool.filter(({ id }) => !alreadyShownIds.has(idKey(id)));
+  if (available.length === 0) return regularCardsHtml;
+
+  const merged = [];
+  for (const cardHtml of regularCardsHtml) {
+    merged.push(cardHtml);
+    _reelInterleaveSinceLastInsert++;
+    if (
+      _reelInterleaveSinceLastInsert >= _reelInterleaveNextGap &&
+      _reelInterleavePoolIndex < available.length
+    ) {
+      const { id, data: d } = available[_reelInterleavePoolIndex++];
+      merged.push(renderFeedMasonryCard(id, d, { suggested: true }));
+      _reelInterleaveSinceLastInsert = 0;
+      _reelInterleaveNextGap = 3 + Math.floor(Math.random() * 4);
     }
   }
   return merged;
@@ -1161,6 +1211,7 @@ async function subscribeFeed(baseFilter = null) {
   feedLoadedCount = 0;
   feedHasMore = true;
   feedCursor = null;
+  resetSuggestedReelsInterleaveState();
   const myGeneration = _feedLoadGeneration;
 
   try {
@@ -1392,7 +1443,7 @@ async function loadNextFeedPage() {
     updateFeedCursorFromPosts(data, "feed");
     applyFeedRankingToCache();
 
-    renderFeedFromCache();
+    appendFeedCards(newItems);
   } catch (err) {
     console.error("Load more posts error:", err);
     showToast("Couldn't load more posts. Try scrolling again.");
@@ -2169,7 +2220,7 @@ if (document.readyState === "loading") {
 // telling them up front what's allowed.
 const MAX_MEDIA_FILES = 10;
 const MAX_IMAGE_SIZE_MB = 15;
-const MAX_VIDEO_SIZE_MB = 50;
+const MAX_VIDEO_SIZE_MB = 30;
 
 window.openEditMediaModal = function (fileList) {
   const incoming = Array.from(fileList);
@@ -3431,7 +3482,7 @@ function renderCommentItem(c, postId) {
   return `
         <div class="flex gap-2 items-start text-left mt-2.5 ${indentClass}" id="comment-item-${escAttr(c.id)}">
             <div class="feed-profile-trigger flex gap-2 items-start flex-1 min-w-0 cursor-pointer" data-user-id="${escAttr(c.user_id)}">
-                <img src="${esc(c.user_avatar) || avatarFallback}" onerror="this.onerror=null; this.src='${avatarFallback}'" class="w-7 h-7 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5">
+                <img src="${esc(c.user_avatar) || avatarFallback}" onerror="this.onerror=null; this.src='${avatarFallback}'" class="w-7 h-7 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5" alt="${escAttr(c.user_name) || "Commenter"}">
                 <div class="${bubbleClass} rounded-2xl px-3 py-2 flex-1 border min-w-0">
                     <div class="flex items-start justify-between gap-2">
                         <div class="flex items-baseline gap-1.5 min-w-0">
@@ -4386,11 +4437,26 @@ window.openRatingPrompt = function (sellerId) {
 // instead of silently vanishing, and the person is told plainly that
 // their report was saved locally pending a moderation table — rather
 // than pretending it was received by a backend that isn't there.
+// Same UX-safeguard-only cooldown as postComment's COMMENT_COOLDOWN_MS
+// above — prevents someone from rapid-fire reporting many different
+// posts in quick succession (e.g. to harass a seller), not a real
+// security boundary. Real abuse prevention belongs at the database/RLS
+// or Supabase project level.
+let lastReportSubmittedAt = 0;
+const REPORT_COOLDOWN_MS = 2500;
+
 async function submitReport(targetType, targetId, reason = "unspecified") {
   if (!currentUserData) {
     showToast("Please sign in to report content.");
     return;
   }
+
+  const now = Date.now();
+  if (now - lastReportSubmittedAt < REPORT_COOLDOWN_MS) {
+    showToast("You're reporting a bit fast — give it a second.");
+    return;
+  }
+  lastReportSubmittedAt = now;
 
   const payload = {
     target_type: targetType, // 'post' | 'comment'
@@ -4409,6 +4475,19 @@ async function submitReport(targetType, targetId, reason = "unspecified") {
     // auto-hide threshold.
     checkAutoModerationThreshold(targetType, targetId);
   } catch (err) {
+    // Fix: once reports_one_per_reporter (a unique index on
+    // target_type/target_id/reporter_id — see create_reports_table.sql)
+    // exists, reporting the same thing twice throws a unique-violation
+    // (Postgres code 23505) instead of silently inserting a second row.
+    // That's a genuinely different situation from "the table doesn't
+    // exist" or "RLS blocked it" below — the report already succeeded
+    // the first time, so queuing another copy locally and telling the
+    // person it's merely "saved on this device" would be misleading.
+    if (err?.code === "23505") {
+      showToast("You've already reported this — thanks, it's been recorded.");
+      return;
+    }
+
     // Table likely doesn't exist yet (or an RLS policy blocks it) —
     // queue locally so the report isn't just lost, and be upfront
     // that it hasn't reached a real moderation backend yet.
@@ -4446,11 +4525,17 @@ const AUTO_HIDE_REPORT_THRESHOLD = 3;
 
 async function checkAutoModerationThreshold(targetType, targetId) {
   try {
-    const { count, error } = await supabase
-      .from("reports")
-      .select("id", { count: "exact", head: true })
-      .eq("target_type", targetType)
-      .eq("target_id", targetId);
+    // The reports table's existing SELECT policy (reports_select_own)
+    // only lets a user see/count THEIR OWN submitted reports — a
+    // direct client-side count here would only ever return 0 or 1,
+    // never the true total across every reporter. get_report_count
+    // is a SECURITY DEFINER function that bypasses that restriction
+    // to return the real aggregate, without opening up the table to
+    // broader client reads.
+    const { data: count, error } = await supabase.rpc("get_report_count", {
+      p_target_type: targetType,
+      p_target_id: targetId,
+    });
     if (error) throw error;
     if ((count || 0) < AUTO_HIDE_REPORT_THRESHOLD) return;
 
@@ -5842,6 +5927,8 @@ async function checkFollowing(targetUserId) {
   }
 }
 
+const followInFlight = new Set();
+
 window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
   // Fix: native alert() replaced with showToast for consistency.
   if (!currentUserData) {
@@ -5849,6 +5936,14 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
     return;
   }
   if (targetUserId === currentUserData.id) return;
+
+  // Fix: rapid double-tapping Follow/Unfollow could fire two overlapping
+  // requests before the first one's "am I already following?" check
+  // resolved, causing a duplicate follow row (or a delete racing an
+  // insert) — same in-flight guard pattern as likePost's likeInFlight.
+  const key = idKey(targetUserId);
+  if (followInFlight.has(key)) return;
+  followInFlight.add(key);
 
   try {
     const { data: existing } = await supabase
@@ -5859,11 +5954,19 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
       .maybeSingle();
 
     if (existing) {
-      await supabase.from("follows").delete().eq("id", existing.id);
+      const { error: delError } = await supabase
+        .from("follows")
+        .delete()
+        .eq("id", existing.id);
+      if (delError) {
+        console.error("Unfollow failed:", delError);
+        showToast("Couldn't unfollow. Try again.");
+        return;
+      }
       updateFollowButtons(targetUserId, false);
     } else {
       const metadata = currentUserData.user_metadata || {};
-      await supabase.from("follows").insert({
+      const { error: insertError } = await supabase.from("follows").insert({
         follower_id: currentUserData.id,
         follower_name: metadata.full_name || "Student",
         follower_avatar: metadata.avatar_url || "",
@@ -5872,6 +5975,11 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
         following_avatar: targetAvatar,
         created_at: new Date().toISOString(),
       });
+      if (insertError) {
+        console.error("Follow failed:", insertError);
+        showToast("Couldn't follow. Try again.");
+        return;
+      }
       updateFollowButtons(targetUserId, true);
     }
 
@@ -5884,6 +5992,8 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
     }
   } catch (err) {
     console.error("Follow toggle error:", err);
+  } finally {
+    followInFlight.delete(key);
   }
 };
 
@@ -6475,6 +6585,179 @@ function renderFeedFromCache() {
   refreshFollowButtonStates();
 }
 
+// Incremental counterpart to renderFeedFromCache, used by loadNextFeedPage
+// once a new page of posts has been fetched and appended to
+// allCachedPosts. Building and re-parsing the ENTIRE feed's HTML on every
+// "load more" gets slower the longer a scroll session runs (500 existing
+// cards re-rendered just to add 15 more) — this instead builds HTML for
+// only the newly-fetched items and appends them to the existing DOM.
+//
+// Only handles the All / Products / Services tabs (the three that share
+// loadNextFeedPage — Following has its own loadNextFollowingPage). Falls
+// back to the full renderFeedFromCache() rebuild — same result as before
+// this function existed, just slower for that one page — whenever
+// something makes a safe incremental append not guaranteed correct:
+// a blocked user's post in the new batch, a missing container, or (most
+// importantly) applyFeedRankingToCache() having actually reordered
+// previously-shown posts rather than just adding new ones at the end.
+function appendFeedCards(newItems) {
+  if (!newItems || newItems.length === 0) return;
+
+  if (
+    blockedUserIds.size > 0 &&
+    newItems.some(({ data: d }) => blockedUserIds.has(idKey(d.user_id)))
+  ) {
+    renderFeedFromCache();
+    return;
+  }
+
+  if (
+    currentFeedType !== "all" &&
+    currentFeedType !== "product" &&
+    currentFeedType !== "skill"
+  ) {
+    renderFeedFromCache();
+    return;
+  }
+
+  // Safety net: applyFeedRankingToCache() preserves prior order via
+  // ordinal-tiebreaking whenever scores are equal, so new items land at
+  // the end in the overwhelmingly common case — but a genuine score
+  // change (e.g. an old post getting liked while a new page loads) can
+  // still reorder existing entries. Detect that by checking whether the
+  // already-displayed ids are still in the same relative order at the
+  // front of allCachedPosts; if not, the DOM would silently drift out
+  // of sync with the data, so fall back to a full rebuild instead.
+  const displayedIds = Array.from(
+    document.querySelectorAll(
+      '#posts-feed [id^="feed-card-"], #posts-feed [id^="grid-card-"]',
+    ),
+  ).map((el) => el.id.replace(/^(feed|grid)-card-/, ""));
+
+  if (displayedIds.length > 0) {
+    const newIdSet = new Set(newItems.map(({ id }) => idKey(id)));
+    const previousOrderIds = allCachedPosts
+      .map(({ id }) => idKey(id))
+      .filter((id) => !newIdSet.has(id));
+    const stillInOrder =
+      displayedIds.length <= previousOrderIds.length &&
+      displayedIds.every((id, i) => id === previousOrderIds[i]);
+    if (!stillInOrder) {
+      renderFeedFromCache();
+      return;
+    }
+  }
+
+  const feed = document.getElementById("posts-feed");
+  if (!feed) return;
+
+  const isAllTab = currentFeedType === "all";
+  let container,
+    newCardsHtml = "";
+
+  if (isAllTab) {
+    container = feed.querySelector(".masonry-columns-feed");
+    if (!container) {
+      renderFeedFromCache();
+      return;
+    }
+    const plainCardsHtml = newItems.map(({ id, data: d }) =>
+      renderFeedMasonryCard(id, d),
+    );
+    // Cheap/cached after the initial load (see fetchSuggestedReelsPool's
+    // 5-minute cache) — safe to call synchronously here without
+    // triggering a second network round-trip or a follow-up reflow of
+    // the whole feed the way the full-render path's async pool fetch does.
+    const pool = suggestedReelsPool;
+    const alreadyShownIds = new Set(allCachedPosts.map(({ id }) => idKey(id)));
+    newCardsHtml = interleaveSuggestedReelsIncremental(
+      plainCardsHtml,
+      pool,
+      alreadyShownIds,
+    ).join("");
+  } else if (currentFeedType === "product") {
+    container = feed.querySelector(".masonry-columns");
+    if (!container) {
+      renderFeedFromCache();
+      return;
+    }
+    const products = newItems.filter(
+      ({ data: d }) => (d.type || "product") === "product",
+    );
+    if (products.length > 0)
+      newCardsHtml = products
+        .map(({ id, data: d }) => renderProductGridCard(id, d))
+        .join("");
+  } else {
+    container = feed.querySelector(".masonry-columns-services");
+    if (!container) {
+      renderFeedFromCache();
+      return;
+    }
+    const services = newItems.filter(({ data: d }) => d.type === "skill");
+    if (services.length > 0)
+      newCardsHtml = services
+        .map(({ id, data: d }) => renderServiceGridCard(id, d))
+        .join("");
+  }
+
+  // Fix: this used to early-return here when a batch had zero matching
+  // items for the current tab (e.g. a page of mostly-Services posts
+  // while on the Products tab), which skipped the sentinel refresh
+  // below entirely and left it stuck on its "Loading more..." spinner
+  // forever. Only skip the actual card insertion, not the state sync
+  // that has to happen regardless of whether this batch had anything
+  // to show.
+  if (newCardsHtml) {
+    container.insertAdjacentHTML("beforeend", newCardsHtml);
+  }
+
+  // The sentinel must stay the last element in #posts-feed for the
+  // IntersectionObserver driving the next page load to keep triggering
+  // correctly — re-append it after the newly-inserted cards rather than
+  // leaving it wherever it ended up relative to the new container content.
+  const sentinel = document.getElementById("feed-load-more-sentinel");
+  if (sentinel) {
+    feed.appendChild(sentinel);
+    // Fix: the sentinel was left showing its "Loading more..." spinner
+    // (set at the top of loadNextFeedPage) — refresh its content to
+    // match the current feedHasMore state, same logic renderFeedFromCache
+    // uses, so reaching the actual end of the feed on THIS load-more
+    // shows "you're all caught up" instead of a stuck spinner.
+    const canWiden =
+      currentCampusScope !== "everywhere" &&
+      currentUserData?.institution &&
+      currentFeedType !== "following";
+    sentinel.innerHTML = feedHasMore
+      ? ""
+      : canWiden
+        ? buildScopeWidenPrompt({
+            contextLabel:
+              currentFeedType === "product"
+                ? "products"
+                : currentFeedType === "skill"
+                  ? "services"
+                  : "posts",
+          })
+        : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`;
+    // Re-attach the observer to the (repositioned) sentinel rather than
+    // assuming an already-observed element keeps being watched after
+    // appendChild moves it within the document — same call the
+    // full-render path already makes after every render, so this stays
+    // consistent instead of relying on an unverified DOM/Observer
+    // interaction.
+    setupFeedLoadMoreObserver();
+  }
+
+  if (newCardsHtml) {
+    newItems.forEach(({ id }) => {
+      wireCarouselCounters(id);
+      fetchAndCacheCommentCount(id);
+    });
+    refreshFollowButtonStates();
+  }
+}
+
 // ─── 15. FILTERING ────────────────────────────────────────────────────────────
 window.filterFeed = function (type, clickedBtn = null) {
   if (!isAuthInitialized) return;
@@ -6741,22 +7024,72 @@ async function _runSearchImmediate(term) {
   resultsEl.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Searching Campus...</div>`;
   const lower = trimmedTerm.toLowerCase();
 
-  if (!allCachedPosts || allCachedPosts.length === 0) {
+  // Fix: this used to only search allCachedPosts — whatever happened to
+  // already be loaded client-side (capped at SEARCH_LIMIT, populated
+  // from the most recent posts). Once the app has more posts than that
+  // cap, searching for anything older/outside that window silently
+  // returned "no results" even though the post genuinely existed. Now
+  // queries the database directly for this specific term instead, so
+  // search coverage no longer depends on what's already been scrolled
+  // past or cached.
+  //
+  // PostgREST's .or() filter string is itself a small parsed grammar —
+  // comma separates conditions and parentheses group them — so a term
+  // containing either would corrupt the filter (or, worse, let someone
+  // craft an unintended additional condition) if passed through as-is.
+  // Strip them before building the query; every other character is
+  // safe inside an ilike %...% wildcard.
+  const safeTerm = trimmedTerm.replace(/[,()]/g, "").trim();
+  let searchResults = [];
+
+  if (safeTerm) {
     try {
-      const { data } = await supabase
+      const orFilter = [
+        "title",
+        "description",
+        "user_name",
+        "institution",
+        "region",
+        "type",
+      ]
+        .map((col) => `${col}.ilike.%${safeTerm}%`)
+        .join(",");
+
+      const { data, error } = await supabase
         .from("posts")
         .select(FEED_SELECT_COLUMNS)
         .eq("is_archived", false)
+        .or(orFilter)
         .order("created_at", { ascending: false })
-        .order("id", { ascending: false })
         .limit(SEARCH_LIMIT);
 
-      if (data) {
-        allCachedPosts = data.map((item) => ({ id: item.id, data: item }));
-      }
+      if (error) throw error;
+      searchResults = (data || []).map((item) => ({ id: item.id, data: item }));
     } catch (e) {
-      console.warn("Search initialization fallback mismatch:", e);
+      console.error("Search query error:", e);
+      // Fix: previously any DB error here was silently swallowed and
+      // allCachedPosts (whatever was already loaded) was searched
+      // instead, with no indication anything had gone wrong — a
+      // failed search looked identical to a search with no matches.
+      // Fall back to searching the local cache so a transient error
+      // doesn't leave the person with a dead search box, but tell
+      // them results may be incomplete rather than staying silent.
+      searchResults = allCachedPosts || [];
+      showToast(
+        "Couldn't reach the server — showing recently loaded posts only.",
+      );
     }
+  }
+
+  // Same blocked-user filter the main feed applies (see
+  // renderFeedFromCache) — a blocked user's posts shouldn't surface via
+  // search either. This was a pre-existing gap (search never filtered
+  // for this even before this function's DB-query rewrite above), fixed
+  // here alongside it.
+  if (blockedUserIds.size > 0) {
+    searchResults = searchResults.filter(
+      ({ data: d }) => !blockedUserIds.has(idKey(d.user_id)),
+    );
   }
 
   // Smarter-search pass: instead of just filtering (arbitrary order —
@@ -6770,7 +7103,7 @@ async function _runSearchImmediate(term) {
   // and recency acts as a tiebreaker so identical-relevance results
   // don't feel randomly ordered.
   const scored = [];
-  for (const item of allCachedPosts) {
+  for (const item of searchResults) {
     const d = item.data ? item.data : item;
     if (!d) continue;
 
@@ -6898,6 +7231,25 @@ window.handlePostSubmission = async function () {
     showToast("Please enter a title.");
     return;
   }
+  if (title.length > 100) {
+    showToast("Title must be 100 characters or fewer.");
+    return;
+  }
+  if (description && description.length > 2000) {
+    showToast("Description must be 2000 characters or fewer.");
+    return;
+  }
+
+  const parsedPrice = parseFloat(price);
+  if (price && (isNaN(parsedPrice) || parsedPrice < 0)) {
+    showToast("Price can't be negative.");
+    return;
+  }
+  if (parsedPrice > 1000000) {
+    showToast("Price seems too high — please double-check it.");
+    return;
+  }
+
   if (!mediaFiles || mediaFiles.length === 0) {
     showToast("Please attach at least one image or video.");
     return;
@@ -6994,7 +7346,7 @@ window.handlePostSubmission = async function () {
       title,
       description,
       type,
-      price: parseFloat(price) || 0,
+      price: parsedPrice || 0,
       media_url: JSON.stringify(publicUrls),
       media_type: primaryMediaType,
       institution,
@@ -7193,7 +7545,10 @@ document
     }
 
     try {
-      await supabase.auth.updateUser({ data: { full_name: newName } });
+      const { error: authError } = await supabase.auth.updateUser({
+        data: { full_name: newName },
+      });
+      if (authError) throw authError;
 
       const { error } = await supabase
         .from("profiles")

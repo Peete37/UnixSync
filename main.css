@@ -380,6 +380,40 @@ body {
     display: none;
   }
 
+  /* Profile post viewer (Reels-style scroller through one user's
+         posts, opened from the Profile tab grid): on mobile this is a
+         full-viewport overlay by design, same as Reels. On desktop that
+         reads as broken — a full-bleed post filling the entire screen
+         alongside the sidebar looks like an error state, not a video
+         player. Cap it the same way #detail-modal and
+         #posts-feed.reels-mode are already capped on desktop: a fixed
+         width, vertically centered, with the rest of the viewport
+         visibly dimmed behind it. Scrolling/snapping through posts
+         still works exactly as before — only the overlay's own
+         width/height/position changes here. */
+  #profile-post-viewer:not(.is-service-viewer) {
+    width: 520px;
+    max-width: 520px;
+    height: 92vh;
+    max-height: 92vh;
+    top: 50%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    transform: translate(-50%, -50%);
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 24px 64px -12px rgba(0, 0, 0, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  #profile-post-viewer.sheet-open:not(.is-service-viewer)::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background: rgba(2, 6, 23, 0.7);
+  }
+
   /* Post detail view: side-by-side (media left, details right) on
          desktop instead of the mobile stacked layout — this was also
          the real fix for the info panel overlapping/hiding the media,
@@ -1099,7 +1133,7 @@ body {
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-top: 1px solid rgba(255, 255, 255, 0.07);
-  padding: 8px 12px 20px;
+  padding: 8px 12px max(20px, env(safe-area-inset-bottom, 20px));
   z-index: 50;
   transition: transform 0.3s ease;
 }
