@@ -572,7 +572,7 @@ function interleaveSuggestedReels(regularCardsHtml, pool, alreadyShownIds) {
     sinceLastInsert++;
     if (sinceLastInsert >= nextGap && poolIndex < available.length) {
       const { id, data: d } = available[poolIndex++];
-      merged.push(renderFeedCard(id, d, { suggested: true }));
+      merged.push(renderFeedMasonryCard(id, d, { suggested: true }));
       sinceLastInsert = 0;
       nextGap = 3 + Math.floor(Math.random() * 4);
     }
@@ -1716,12 +1716,35 @@ window.openDetail = async function (postId) {
     const ctaLabel = d.type === "skill" ? "Contact" : "Contact Seller";
     const safeSwapBlock = renderSafeSwapZoneCard(d);
 
+    const isLikedDetail = likedPostIds.has(idKey(d.id));
+    const heartClassDetail = isLikedDetail
+      ? "fas fa-heart text-rose-500"
+      : "far fa-heart text-slate-300";
+    const displayLikesDetail = parseInt(d.likes_count || 0);
+    const displayCommentsDetail =
+      commentCountCache[d.id] ?? parseInt(d.comments_count || 0);
+
     registerPostContext(d.id, d, mediaUrls[0] || "");
 
     content.innerHTML = `
             <div class="w-full bg-slate-950 relative">${mediaBlock}</div>
             <div class="p-6 space-y-4 bg-[#0f172a] rounded-t-3xl relative shadow-[0_-12px_24px_-8px_rgba(0,0,0,0.5)]">
                 <div class="w-10 h-1 rounded-full bg-slate-700/60 mx-auto -mt-1 mb-1"></div>
+                <div class="flex items-center justify-between -mt-1">
+                    <div class="flex items-center gap-4">
+                        <button onclick="likePost('${escAttr(d.id)}', this)" data-liked="${isLikedDetail ? "true" : "false"}" class="flex items-center gap-1.5 active:scale-90 transition ${isLikedDetail ? "text-rose-500" : "text-slate-300"}">
+                            <i class="${heartClassDetail} text-2xl"></i>
+                            <span class="like-count text-sm font-semibold text-slate-300">${displayLikesDetail}</span>
+                        </button>
+                        <button onclick="toggleComments('${escAttr(d.id)}')" class="flex items-center gap-1.5 text-slate-300 hover:text-amber-400 transition active:scale-90">
+                            <i class="far fa-comment text-2xl"></i>
+                            <span class="comment-count-${escAttr(d.id)} text-sm font-semibold text-slate-300">${displayCommentsDetail}</span>
+                        </button>
+                        <button onclick="sharePost('${escAttr(d.id)}', '${escAttr(d.title)}')" class="text-slate-300 hover:text-green-400 transition active:scale-90">
+                            <i class="far fa-paper-plane text-2xl"></i>
+                        </button>
+                    </div>
+                </div>
                 <div class="flex justify-between items-center gap-4">
                     <h1 class="text-2xl font-bold text-white uppercase tracking-tighter">${esc(d.title) || "Campus Item"}</h1>
                     <span class="text-amber-400 font-black text-xl shrink-0">GH₵${esc(String(d.price || 0))}</span>
@@ -4788,6 +4811,125 @@ function renderFeedCard(id, d, options = {}) {
     </div>`;
 }
 
+// All-tab Pinterest-style masonry card. Distinct from renderFeedCard (the
+// single-column feed, still used by Following) and from
+// renderProductGridCard/renderServiceGridCard (plain image+price, no
+// social context) — this keeps the poster's identity and engagement
+// counts visible on the card itself, matching the decision that the All
+// tab should read as a social feed rather than a second product grid.
+// Image uses its natural aspect ratio (no forced height) so masonry
+// columns genuinely vary, the way real Pinterest cards do.
+function renderFeedMasonryCard(id, d, options = {}) {
+  const isSuggested = !!options.suggested;
+  const viewer = currentUserData;
+  const isOwnPost = viewer && d.user_id === viewer.id;
+
+  let mediaUrls = [];
+  if (d.media_url) {
+    if (d.media_url.startsWith("[")) {
+      try {
+        mediaUrls = JSON.parse(d.media_url);
+      } catch (_) {
+        mediaUrls = [d.media_url];
+      }
+    } else {
+      mediaUrls = [d.media_url];
+    }
+  }
+  const primaryUrl = mediaUrls[0] || "";
+  const isVideo = d.media_type === "video";
+
+  const isLiked = likedPostIds.has(idKey(id));
+  const heartClass = isLiked
+    ? "fas fa-heart text-rose-500"
+    : "far fa-heart text-white/90";
+  const displayLikes = parseInt(d.likes_count || 0);
+  const displayComments =
+    commentCountCache[id] ?? parseInt(d.comments_count || 0);
+  const isAddedToCart = userCartList.some(
+    (item) => idKey(item.id) === idKey(id),
+  );
+  const bookmarkClass = isAddedToCart
+    ? "fas fa-bookmark text-amber-400"
+    : "far fa-bookmark text-white/80";
+
+  registerPostContext(id, d, isVideo ? "" : primaryUrl);
+
+  const mediaBlock = isVideo
+    ? `<video class="w-full h-auto block" muted loop playsinline preload="metadata" src="${esc(primaryUrl)}#t=0.1"></video>
+           <div class="absolute top-2.5 left-2.5 w-7 h-7 rounded-full bg-black/50 flex items-center justify-center text-white text-xs"><i class="fas fa-play"></i></div>`
+    : `<img class="w-full h-auto block" src="${esc(primaryUrl)}" alt="${esc(d.title)}" loading="lazy">`;
+
+  return `
+    <div class="masonry-card-feed bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden mb-2.5" id="feed-card-${escAttr(id)}">
+        <div class="relative w-full bg-slate-950 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
+            ${mediaBlock}
+            ${isSuggested ? `<div class="absolute top-2.5 left-2.5 bg-amber-400/90 text-black text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full">Suggested</div>` : ""}
+            <button
+                onclick="event.stopPropagation(); window.toggleCartItem('${escAttr(id)}')"
+                class="absolute top-2.5 right-2.5 w-7 h-7 flex items-center justify-center bg-black/50 rounded-full active:scale-90 transition">
+                <i class="${bookmarkClass} text-xs"></i>
+            </button>
+            <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2.5 pt-6 pb-2">
+                <span class="text-amber-400 font-black text-xs">GH₵${esc(String(d.price || 0))}</span>
+            </div>
+        </div>
+        <div class="p-2.5 space-y-2">
+            <p class="text-white text-[12px] font-semibold leading-snug line-clamp-2 cursor-pointer" onclick="openDetail('${escAttr(id)}')">${esc(d.title)}</p>
+            <div class="flex items-center gap-1.5 min-w-0 feed-profile-trigger cursor-pointer" data-user-id="${escAttr(d.user_id)}">
+                <img src="${esc(d.user_avatar) || "https://ui-avatars.com/api/?name=User"}" class="w-5 h-5 rounded-full object-cover shrink-0 border border-slate-700" alt="">
+                <span class="text-[10px] text-slate-400 truncate">${esc(d.user_name) || "Student"}</span>
+            </div>
+            <div class="flex items-center justify-between pt-1 border-t border-slate-800/60">
+                <div class="flex items-center gap-3">
+                    <button onclick="event.stopPropagation(); likePost('${escAttr(id)}', this)" data-liked="${isLiked ? "true" : "false"}" class="flex items-center gap-1 active:scale-90 transition ${isLiked ? "text-rose-500" : "text-slate-400"}">
+                        <i class="${heartClass} text-sm"></i>
+                        <span class="like-count text-[10px] font-semibold">${displayLikes}</span>
+                    </button>
+                    <button onclick="event.stopPropagation(); toggleComments('${escAttr(id)}')" class="flex items-center gap-1 text-slate-400 hover:text-amber-400 transition active:scale-90">
+                        <i class="far fa-comment text-sm"></i>
+                        <span class="comment-count-${escAttr(id)} text-[10px] font-semibold">${displayComments}</span>
+                    </button>
+                </div>
+                <button onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}', ${isSuggested ? "true" : "false"})" class="text-slate-500 hover:text-white transition px-1">
+                    <i class="fas fa-ellipsis-vertical text-xs"></i>
+                </button>
+            </div>
+        </div>
+        <div id="comments-${escAttr(id)}" class="hidden reel-comments">
+            <div class="comments-header">
+                <div class="comments-drag-handle"></div>
+                <p class="text-white text-xs font-black uppercase tracking-wider">
+                    <span class="comment-count-${escAttr(id)}">${displayComments}</span> Comments
+                </p>
+                <button class="comments-close-btn" onclick="window._closeCommentSheet('${escAttr(id)}')"><i class="fas fa-times text-xs"></i></button>
+            </div>
+            <div id="comment-list-${escAttr(id)}" class="comments-scroll-area"></div>
+            <div class="comments-input-row flex items-center gap-1.5">
+                <input
+                    type="text"
+                    inputmode="text"
+                    maxlength="500"
+                    placeholder="Add a comment…"
+                    class="comment-input-field flex-1 bg-white/10 border border-white/20 text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none focus:border-amber-400 transition"
+                    oninput="window._syncCommentSendState('${escAttr(id)}', this)"
+                    onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
+                >
+                <button id="cancel-reply-${escAttr(id)}" onclick="window.cancelCommentReply('${escAttr(id)}')" class="hidden text-[10px] text-white/60 hover:text-white px-1">✕</button>
+                <button
+                    id="comment-send-${escAttr(id)}"
+                    disabled
+                    onclick="window._submitFromSendBtn('${escAttr(id)}')"
+                    class="comment-send-btn shrink-0 w-8 h-8 rounded-xl bg-amber-400 text-black flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed active:scale-90"
+                    aria-label="Send comment"
+                >
+                    <i class="fas fa-paper-plane text-[11px]"></i>
+                </button>
+            </div>
+        </div>
+    </div>`;
+}
+
 // ─── 12c. PRODUCT GRID RENDERER (4-square style, Products tab only) ──────────
 function renderProductGridCard(id, d) {
   let mediaUrl = "";
@@ -6233,9 +6375,15 @@ function renderFeedFromCache() {
   // count fetches) happens afterward, over the now-rendered nodes —
   // splitting render from wiring means the browser only ever parses
   // and lays out the feed HTML one time per load, not once per card.
-  feed.innerHTML =
-    allCachedPosts.map(({ id, data: d }) => renderFeedCard(id, d)).join("") +
-    sentinelHtml;
+  const isAllTab = currentFeedType === "all";
+  feed.classList.toggle("grid-mode", isAllTab);
+  const cardRenderer = isAllTab ? renderFeedMasonryCard : renderFeedCard;
+  const regularCardsHtml = allCachedPosts.map(({ id, data: d }) =>
+    cardRenderer(id, d),
+  );
+  feed.innerHTML = isAllTab
+    ? `<div class="masonry-columns-feed py-2">${regularCardsHtml.join("")}</div>${sentinelHtml}`
+    : regularCardsHtml.join("") + sentinelHtml;
 
   // Instagram-style Suggested Reels: woven into the All tab specifically,
   // at semi-random spacing rather than a fixed slot (see
@@ -6252,14 +6400,14 @@ function renderFeedFromCache() {
         allCachedPosts.map(({ id }) => idKey(id)),
       );
       const regularCards = allCachedPosts.map(({ id, data: d }) =>
-        renderFeedCard(id, d),
+        renderFeedMasonryCard(id, d),
       );
       const merged = interleaveSuggestedReels(
         regularCards,
         pool,
         alreadyShownIds,
       );
-      currentFeed.innerHTML = merged.join("") + sentinelHtml;
+      currentFeed.innerHTML = `<div class="masonry-columns-feed py-2">${merged.join("")}</div>${sentinelHtml}`;
 
       allCachedPosts.forEach(({ id }) => {
         wireCarouselCounters(id);
@@ -6334,6 +6482,8 @@ window.filterFeed = function (type, clickedBtn = null) {
   const previousType = currentFeedType;
   currentFeedType = type;
   _feedLoadGeneration++;
+
+  document.body.classList.toggle("feed-tab-all", type === "all");
 
   if (
     typeof window.closeHeaderSearch === "function" &&
