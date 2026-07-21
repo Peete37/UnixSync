@@ -1781,24 +1781,25 @@ window.openDetail = async function (postId) {
             <div class="w-full bg-slate-950 relative">${mediaBlock}</div>
             <div class="p-6 space-y-4 bg-[#0f172a] rounded-t-3xl relative shadow-[0_-12px_24px_-8px_rgba(0,0,0,0.5)]">
                 <div class="w-10 h-1 rounded-full bg-slate-700/60 mx-auto -mt-1 mb-1"></div>
-                <div class="flex items-center justify-between -mt-1">
-                    <div class="flex items-center gap-4">
-                        <button onclick="likePost('${escAttr(d.id)}', this)" data-liked="${isLikedDetail ? "true" : "false"}" class="flex items-center gap-1.5 active:scale-90 transition ${isLikedDetail ? "text-rose-500" : "text-slate-300"}">
-                            <i class="${heartClassDetail} text-2xl"></i>
-                            <span class="like-count text-sm font-semibold text-slate-300">${displayLikesDetail}</span>
-                        </button>
-                        <button onclick="toggleComments('${escAttr(d.id)}')" class="flex items-center gap-1.5 text-slate-300 hover:text-amber-400 transition active:scale-90">
-                            <i class="far fa-comment text-2xl"></i>
-                            <span class="comment-count-${escAttr(d.id)} text-sm font-semibold text-slate-300">${displayCommentsDetail}</span>
-                        </button>
-                        <button onclick="sharePost('${escAttr(d.id)}', '${escAttr(d.title)}')" class="text-slate-300 hover:text-green-400 transition active:scale-90">
-                            <i class="far fa-paper-plane text-2xl"></i>
-                        </button>
-                    </div>
+                <div class="flex items-start justify-between gap-4 -mt-1">
+                    <span class="text-amber-400 font-black text-3xl leading-none">GH₵${esc(String(d.price || 0))}</span>
+                    <button onclick="window.openPostOptionsMenu('${escAttr(d.id)}', ${isOwn ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-slate-400 hover:text-white transition px-1 shrink-0">
+                        <i class="fas fa-ellipsis-vertical text-xl"></i>
+                    </button>
                 </div>
-                <div class="flex justify-between items-center gap-4">
-                    <h1 class="text-2xl font-bold text-white uppercase tracking-tighter">${esc(d.title) || "Campus Item"}</h1>
-                    <span class="text-amber-400 font-black text-xl shrink-0">GH₵${esc(String(d.price || 0))}</span>
+                <h1 class="text-lg font-bold text-white leading-snug">${esc(d.title) || "Campus Item"}</h1>
+                <div class="flex items-center gap-4 pt-1 pb-1 border-y border-slate-800/60">
+                    <button onclick="likePost('${escAttr(d.id)}', this)" data-liked="${isLikedDetail ? "true" : "false"}" class="flex items-center gap-1.5 active:scale-90 transition ${isLikedDetail ? "text-rose-500" : "text-slate-300"}">
+                        <i class="${heartClassDetail} text-2xl"></i>
+                        <span class="like-count text-sm font-semibold text-slate-300">${displayLikesDetail}</span>
+                    </button>
+                    <button onclick="toggleComments('${escAttr(d.id)}')" class="flex items-center gap-1.5 text-slate-300 hover:text-amber-400 transition active:scale-90">
+                        <i class="far fa-comment text-2xl"></i>
+                        <span class="comment-count-${escAttr(d.id)} text-sm font-semibold text-slate-300">${displayCommentsDetail}</span>
+                    </button>
+                    <button onclick="sharePost('${escAttr(d.id)}', '${escAttr(d.title)}')" class="text-slate-300 hover:text-green-400 transition active:scale-90">
+                        <i class="far fa-paper-plane text-2xl"></i>
+                    </button>
                 </div>
                 <div class="flex flex-wrap gap-2 text-[10px] uppercase font-bold tracking-wider">
                     <span class="bg-slate-800 text-amber-400 px-2 py-1 rounded border border-slate-700">${esc(d.institution) || "All Campuses"}</span>
@@ -4906,8 +4907,6 @@ function renderFeedCard(id, d, options = {}) {
 // columns genuinely vary, the way real Pinterest cards do.
 function renderFeedMasonryCard(id, d, options = {}) {
   const isSuggested = !!options.suggested;
-  const viewer = currentUserData;
-  const isOwnPost = viewer && d.user_id === viewer.id;
 
   let mediaUrls = [];
   if (d.media_url) {
@@ -4924,13 +4923,6 @@ function renderFeedMasonryCard(id, d, options = {}) {
   const primaryUrl = mediaUrls[0] || "";
   const isVideo = d.media_type === "video";
 
-  const isLiked = likedPostIds.has(idKey(id));
-  const heartClass = isLiked
-    ? "fas fa-heart text-rose-500"
-    : "far fa-heart text-white/90";
-  const displayLikes = parseInt(d.likes_count || 0);
-  const displayComments =
-    commentCountCache[id] ?? parseInt(d.comments_count || 0);
   const isAddedToCart = userCartList.some(
     (item) => idKey(item.id) === idKey(id),
   );
@@ -4959,58 +4951,8 @@ function renderFeedMasonryCard(id, d, options = {}) {
                 <span class="text-amber-400 font-black text-xs">GH₵${esc(String(d.price || 0))}</span>
             </div>
         </div>
-        <div class="p-2.5 space-y-2">
+        <div class="px-2.5 py-2">
             <p class="text-white text-[12px] font-semibold leading-snug line-clamp-2 cursor-pointer" onclick="openDetail('${escAttr(id)}')">${esc(d.title)}</p>
-            <div class="flex items-center gap-1.5 min-w-0 feed-profile-trigger cursor-pointer" data-user-id="${escAttr(d.user_id)}">
-                <img src="${esc(d.user_avatar) || "https://ui-avatars.com/api/?name=User"}" class="w-5 h-5 rounded-full object-cover shrink-0 border border-slate-700" alt="">
-                <span class="text-[10px] text-slate-400 truncate">${esc(d.user_name) || "Student"}</span>
-            </div>
-            <div class="flex items-center justify-between pt-1 border-t border-slate-800/60">
-                <div class="flex items-center gap-3">
-                    <button onclick="event.stopPropagation(); likePost('${escAttr(id)}', this)" data-liked="${isLiked ? "true" : "false"}" class="flex items-center gap-1 active:scale-90 transition ${isLiked ? "text-rose-500" : "text-slate-400"}">
-                        <i class="${heartClass} text-sm"></i>
-                        <span class="like-count text-[10px] font-semibold">${displayLikes}</span>
-                    </button>
-                    <button onclick="event.stopPropagation(); toggleComments('${escAttr(id)}')" class="flex items-center gap-1 text-slate-400 hover:text-amber-400 transition active:scale-90">
-                        <i class="far fa-comment text-sm"></i>
-                        <span class="comment-count-${escAttr(id)} text-[10px] font-semibold">${displayComments}</span>
-                    </button>
-                </div>
-                <button onclick="event.stopPropagation(); window.openPostOptionsMenu('${escAttr(id)}', ${isOwnPost ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}', ${isSuggested ? "true" : "false"})" class="text-slate-500 hover:text-white transition px-1">
-                    <i class="fas fa-ellipsis-vertical text-xs"></i>
-                </button>
-            </div>
-        </div>
-        <div id="comments-${escAttr(id)}" class="hidden reel-comments">
-            <div class="comments-header">
-                <div class="comments-drag-handle"></div>
-                <p class="text-white text-xs font-black uppercase tracking-wider">
-                    <span class="comment-count-${escAttr(id)}">${displayComments}</span> Comments
-                </p>
-                <button class="comments-close-btn" onclick="window._closeCommentSheet('${escAttr(id)}')"><i class="fas fa-times text-xs"></i></button>
-            </div>
-            <div id="comment-list-${escAttr(id)}" class="comments-scroll-area"></div>
-            <div class="comments-input-row flex items-center gap-1.5">
-                <input
-                    type="text"
-                    inputmode="text"
-                    maxlength="500"
-                    placeholder="Add a comment…"
-                    class="comment-input-field flex-1 bg-white/10 border border-white/20 text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none focus:border-amber-400 transition"
-                    oninput="window._syncCommentSendState('${escAttr(id)}', this)"
-                    onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
-                >
-                <button id="cancel-reply-${escAttr(id)}" onclick="window.cancelCommentReply('${escAttr(id)}')" class="hidden text-[10px] text-white/60 hover:text-white px-1">✕</button>
-                <button
-                    id="comment-send-${escAttr(id)}"
-                    disabled
-                    onclick="window._submitFromSendBtn('${escAttr(id)}')"
-                    class="comment-send-btn shrink-0 w-8 h-8 rounded-xl bg-amber-400 text-black flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed active:scale-90"
-                    aria-label="Send comment"
-                >
-                    <i class="fas fa-paper-plane text-[11px]"></i>
-                </button>
-            </div>
         </div>
     </div>`;
 }
