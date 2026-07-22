@@ -7046,7 +7046,16 @@ window.filterFeed = function (type, clickedBtn = null) {
   currentFeedType = type;
   _feedLoadGeneration++;
 
+  // Fix: this used to only ever apply for the All tab ('feed-tab-all'),
+  // even though Products and Services also render the same multi-column
+  // masonry grid (see .masonry-columns / .masonry-columns-services) and
+  // need identical desktop widening — without this, switching to
+  // Products or Services left the grid stuck at the narrow ~520px
+  // reading-column width with a large unused gap on wider screens,
+  // since the CSS widening rules were only ever keyed to this one class.
+  const isGridTab = type === "all" || type === "product" || type === "skill";
   document.body.classList.toggle("feed-tab-all", type === "all");
+  document.body.classList.toggle("feed-tab-grid", isGridTab);
 
   if (
     typeof window.closeHeaderSearch === "function" &&

@@ -165,6 +165,9 @@ body {
     padding: 0 24px;
     position: relative;
   }
+  body.feed-tab-grid #app-shell {
+    max-width: 1400px;
+  }
   body.feed-tab-all #app-shell {
     max-width: 1620px;
   }
@@ -266,11 +269,40 @@ body {
     max-width: 520px;
   }
 
-  /* All tab specifically widens to fill the screen (Facebook-style)
-         since it's the only view using the multi-column masonry layout —
-         every other tab keeps the comfortable 520px reading width above.
-         The column itself has to widen (not just #feed-container), since
-         a wider child can't exceed a narrower ancestor's max-width. */
+  /* All/Products/Services tabs all widen to fill the screen
+         (Facebook-style) since they're the views using the multi-column
+         masonry layout — Following/Reels/DMs/Profile/etc. keep the
+         comfortable 520px reading width above. The column itself has to
+         widen (not just #feed-container), since a wider child can't
+         exceed a narrower ancestor's max-width.
+         All gets its own wider cap (1040/1320px, below) since it also
+         reserves room for .desktop-right-rail's suggested-content panel
+         — Products/Services don't use that rail, so feed-tab-grid's own
+         cap is used for those two instead, slightly narrower but still
+         far wider than the old 520px every grid tab was stuck at. */
+  body.feed-tab-grid .desktop-center-column {
+    max-width: 900px;
+  }
+  body.feed-tab-grid .desktop-center-column main,
+  body.feed-tab-grid #feed-container {
+    max-width: 900px;
+  }
+  body.feed-tab-grid .site-header:not(.header-reels-mode) {
+    max-width: 900px;
+  }
+  @media (min-width: 1440px) {
+    body.feed-tab-grid .desktop-center-column {
+      max-width: 1160px;
+    }
+    body.feed-tab-grid .desktop-center-column main,
+    body.feed-tab-grid #feed-container {
+      max-width: 1160px;
+    }
+    body.feed-tab-grid .site-header:not(.header-reels-mode) {
+      max-width: 1160px;
+    }
+  }
+
   body.feed-tab-all .desktop-center-column {
     max-width: 1040px;
   }
@@ -722,6 +754,22 @@ body {
        content). Used by both Products and Services grids — Services
        gets its own modifier for slightly bigger cards, per "a little
        bigger" than Products. */
+/* <main class="px-4 ..."> applies 16px of left/right padding to
+       every screen in the app — appropriate for text-heavy views, but it
+       visibly gaps the grid views away from the screen edges, unlike the
+       Pinterest/Temu-style full-bleed reference. Rather than remove that
+       padding globally (which several other screens genuinely rely on),
+       these three grids pull themselves back out to full viewport width
+       with a negative margin equal to the parent's padding, scoped only
+       to grid containers so nothing else in <main> is affected. */
+.masonry-columns,
+.masonry-columns-services,
+.masonry-columns-feed {
+  margin-left: -1rem;
+  margin-right: -1rem;
+  width: calc(100% + 2rem);
+}
+
 .masonry-columns {
   column-count: 2;
   column-gap: 4px;
