@@ -724,7 +724,7 @@ body {
        bigger" than Products. */
 .masonry-columns {
   column-count: 2;
-  column-gap: 10px;
+  column-gap: 4px;
 }
 .masonry-card {
   break-inside: avoid;
@@ -734,7 +734,7 @@ body {
 }
 .masonry-columns-services {
   column-count: 2;
-  column-gap: 12px;
+  column-gap: 4px;
 }
 .masonry-card-service {
   break-inside: avoid;
@@ -744,18 +744,20 @@ body {
 }
 
 /* All-tab feed: Pinterest-style masonry, deliberately distinct from
-       Products/Services' plain image+price cards — these keep the
-       poster's avatar/name and like/comment counts visible on the card
-       itself, so the All tab reads as a social feed rather than a second
-       product grid. True masonry (varying card heights) via CSS columns,
-       same technique as Products/Services. Mobile stays 2 columns for
-       consistency with the rest of the app's grid interactions; desktop
-       widens to 3-4 columns (see the two nested breakpoints below) so it
-       genuinely fills the screen instead of sitting in a narrow centered
-       column. */
+       Products/Services in card content — these show only image + price
+       + title (see renderFeedMasonryCard), matching the Temu-style
+       browsing pattern rather than a social-feed card. True masonry
+       (varying card heights) via CSS columns, same technique as
+       Products/Services. Mobile stays 2 columns for consistency with the
+       rest of the app's grid interactions; desktop widens to 3-4 columns
+       (see the two nested breakpoints below) so it genuinely fills the
+       screen instead of sitting in a narrow centered column.
+       column-gap/card margin both kept minimal (near-zero) to match the
+       tight, edge-to-edge Pinterest-style reference rather than the
+       wider spacing a typical card grid would use. */
 .masonry-columns-feed {
   column-count: 2;
-  column-gap: 10px;
+  column-gap: 4px;
 }
 .masonry-card-feed {
   break-inside: avoid;
@@ -766,7 +768,7 @@ body {
 @media (min-width: 1024px) {
   .masonry-columns-feed {
     column-count: 3;
-    column-gap: 18px;
+    column-gap: 6px;
   }
 }
 @media (min-width: 1440px) {

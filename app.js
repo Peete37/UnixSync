@@ -17,6 +17,9 @@ const FEED_SELECT_COLUMNS = [
   "title",
   "description",
   "price",
+  "original_price",
+  "sold_at",
+  "sale_ends_at",
   "media_url",
   "media_type",
   "institution",
@@ -757,36 +760,18 @@ function renderSimilarListingsBlock(post) {
     (a, b) => b.score - a.score || (b.createdAt > a.createdAt ? 1 : -1),
   );
 
-  const picks = scored.slice(0, 6).map((s) => s.d);
+  // A large-but-fixed batch (not infinite scroll) — matches the Temu
+  // reference's visual density without the added complexity of a
+  // second infinite-scroll/pagination system living inside a modal
+  // that already has its own scroll container.
+  const picks = scored.slice(0, 24).map((s) => s.d);
   if (!picks.length) return "";
 
   return `
         <div class="pt-2">
             <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400 mb-3">You might also like</p>
-            <div class="flex gap-3 overflow-x-auto no-scrollbar pb-1" style="scroll-snap-type:x mandatory;">
-                ${picks
-                  .map((d) => {
-                    let thumb = "";
-                    if (d.media_url) {
-                      try {
-                        const urls = d.media_url.startsWith("[")
-                          ? JSON.parse(d.media_url)
-                          : [d.media_url];
-                        thumb = urls[0] || "";
-                      } catch (_) {
-                        thumb = d.media_url;
-                      }
-                    }
-                    return `
-                        <button onclick="openDetail('${escAttr(d.id)}')" class="shrink-0 w-28 text-left snap-start active:scale-95 transition">
-                            <div class="w-28 h-28 rounded-xl bg-slate-900 border border-slate-800 overflow-hidden">
-                                ${thumb ? `<img src="${esc(thumb)}" class="w-full h-full object-cover" alt="${esc(d.title)}" loading="lazy">` : `<div class="w-full h-full flex items-center justify-center text-slate-700"><i class="fas fa-image"></i></div>`}
-                            </div>
-                            <p class="text-[11px] text-white font-semibold mt-1.5 truncate">${esc(d.title)}</p>
-                            <p class="text-[10px] text-amber-400 font-bold">GH₵${esc(String(d.price || 0))}</p>
-                        </button>`;
-                  })
-                  .join("")}
+            <div class="masonry-columns-feed">
+                ${picks.map((d) => renderFeedMasonryCard(idKey(d.id), d)).join("")}
             </div>
         </div>`;
 }
@@ -983,6 +968,163 @@ function formatClockTime(dateStr) {
     minute: "2-digit",
   });
 }
+
+// Renders a flash-sale end time as a short countdown string ("2h 15m
+// left", "45m left"), or '' once it's passed (rendering call sites are
+// responsible for checking sale_ends_at is still in the future before
+// showing anything at all — this only formats a positive remaining span).
+function countdownText(endsAtStr) {
+  if (!endsAtStr) return "";
+  const remainingMs = new Date(endsAtStr).getTime() - Date.now();
+  if (remainingMs <= 0) return "";
+  const totalMinutes = Math.floor(remainingMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    return `${days}d left`;
+  }
+  if (hours > 0) return `${hours}h ${minutes}m left`;
+  return `${minutes}m left`;
+}
+
+// Fetches every rating for a seller and computes the average/count
+// client-side — the seller_ratings_select_all RLS policy already allows
+// any authenticated user to read all rows, so no aggregate DB function
+// is needed here; for a marketplace this size the row count per seller
+// is small enough that this is simpler than maintaining a separate
+// summary function would be.
+async function loadAndRenderSellerRating(sellerId, containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const { data, error } = await supabase
+    .from("seller_ratings")
+    .select("stars")
+    .eq("seller_id", sellerId);
+
+  if (error || !data) return;
+
+  if (data.length === 0) {
+    container.innerHTML = `<span class="text-[11px] text-slate-500">No ratings yet</span>`;
+    return;
+  }
+
+  const average = data.reduce((sum, r) => sum + r.stars, 0) / data.length;
+  const rounded = Math.round(average * 10) / 10;
+  const fullStars = Math.round(average);
+
+  const starsHtml = Array.from(
+    { length: 5 },
+    (_, i) =>
+      `<i class="${i < fullStars ? "fas" : "far"} fa-star text-amber-400 text-[11px]"></i>`,
+  ).join("");
+
+  container.innerHTML = `
+        <div class="flex items-center gap-1">
+            ${starsHtml}
+            <span class="text-[11px] text-slate-400 ml-0.5">${rounded} (${data.length})</span>
+        </div>`;
+}
+
+window.openRateSellerSheet = async function (sellerId, sellerName) {
+  if (!currentUserData) {
+    showToast("Please sign in to leave a rating.");
+    return;
+  }
+  if (sellerId === currentUserData.id) {
+    showToast("You can't rate yourself.");
+    return;
+  }
+
+  const modal = document.getElementById("manage-listing-modal");
+  const content = document.getElementById("manage-listing-content");
+  if (!modal || !content) return;
+
+  content.innerHTML = `<div class="p-8 text-center text-slate-500 text-sm"><i class="fas fa-circle-notch fa-spin"></i></div>`;
+  modal.classList.remove("hidden");
+  pushUiState("manage-listing-modal", () =>
+    window.closeManageListingSheet(true),
+  );
+
+  // Pre-fill with the rater's existing rating for this seller, if any,
+  // so re-rating feels like editing rather than starting from scratch.
+  const { data: existing } = await supabase
+    .from("seller_ratings")
+    .select("stars, comment")
+    .eq("seller_id", sellerId)
+    .eq("rater_id", currentUserData.id)
+    .maybeSingle();
+
+  const currentStars = existing?.stars || 0;
+
+  content.innerHTML = `
+        <div class="p-6 space-y-5">
+            <h2 class="text-lg font-bold text-white">Rate ${esc(sellerName)}</h2>
+            <div class="flex items-center justify-center gap-2" id="rateSellerStars">
+                ${Array.from(
+                  { length: 5 },
+                  (_, i) => `
+                    <button type="button" onclick="window._setRateSellerStars(${i + 1})" data-star="${i + 1}" class="text-3xl transition active:scale-90 ${i < currentStars ? "text-amber-400" : "text-slate-700"}">
+                        <i class="fas fa-star"></i>
+                    </button>`,
+                ).join("")}
+            </div>
+            <textarea id="rateSellerComment" rows="3" maxlength="500" placeholder="Optional comment about this seller..." class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm resize-none">${esc(existing?.comment || "")}</textarea>
+            <button onclick="window._submitSellerRating('${escAttr(sellerId)}')" class="w-full bg-amber-400 text-black font-black py-3 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
+                Submit Rating
+            </button>
+        </div>`;
+
+  window._rateSellerCurrentStars = currentStars;
+};
+
+window._setRateSellerStars = function (stars) {
+  window._rateSellerCurrentStars = stars;
+  document.querySelectorAll("#rateSellerStars button").forEach((btn) => {
+    const btnStars = parseInt(btn.dataset.star, 10);
+    btn.classList.toggle("text-amber-400", btnStars <= stars);
+    btn.classList.toggle("text-slate-700", btnStars > stars);
+  });
+};
+
+window._submitSellerRating = async function (sellerId) {
+  const stars = window._rateSellerCurrentStars || 0;
+  if (stars < 1 || stars > 5) {
+    showToast("Please select a star rating.");
+    return;
+  }
+
+  const commentEl = document.getElementById("rateSellerComment");
+  const comment = commentEl ? commentEl.value.trim().slice(0, 500) : "";
+
+  // Upsert on (seller_id, rater_id) so re-rating updates the existing
+  // row instead of erroring on a duplicate — matches the "one rating
+  // per rater per seller" intent the table's own design already
+  // reflects (seller_ratings_update_own policy exists specifically to
+  // support this).
+  const { error } = await supabase
+    .from("seller_ratings")
+    .upsert(
+      {
+        seller_id: sellerId,
+        rater_id: currentUserData.id,
+        stars,
+        comment: comment || null,
+      },
+      { onConflict: "seller_id,rater_id" },
+    );
+
+  if (error) {
+    console.error("Rating submit error:", error);
+    showToast("Couldn't save your rating. Try again.");
+    return;
+  }
+
+  showToast("Thanks for your rating!");
+  window.closeManageListingSheet();
+  loadAndRenderSellerRating(sellerId, `seller-rating-${idKey(sellerId)}`);
+};
 
 const activeAuthChange =
   typeof onAuthChange === "function"
@@ -1775,6 +1917,12 @@ window.openDetail = async function (postId) {
     const displayCommentsDetail =
       commentCountCache[d.id] ?? parseInt(d.comments_count || 0);
 
+    const isSoldDetail = !!d.sold_at;
+    const hasDiscountDetail =
+      d.original_price && Number(d.original_price) > Number(d.price || 0);
+    const saleActiveDetail =
+      d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
+
     registerPostContext(d.id, d, mediaUrls[0] || "");
 
     content.innerHTML = `
@@ -1782,7 +1930,12 @@ window.openDetail = async function (postId) {
             <div class="p-6 space-y-4 bg-[#0f172a] rounded-t-3xl relative shadow-[0_-12px_24px_-8px_rgba(0,0,0,0.5)]">
                 <div class="w-10 h-1 rounded-full bg-slate-700/60 mx-auto -mt-1 mb-1"></div>
                 <div class="flex items-start justify-between gap-4 -mt-1">
-                    <span class="text-amber-400 font-black text-3xl leading-none">GH₵${esc(String(d.price || 0))}</span>
+                    <div class="flex items-baseline gap-2 flex-wrap">
+                        ${isSoldDetail ? `<span class="bg-slate-800 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] px-2.5 py-1 rounded-full border border-slate-700">Sold</span>` : ""}
+                        <span class="text-amber-400 font-black text-3xl leading-none">GH₵${esc(String(d.price || 0))}</span>
+                        ${hasDiscountDetail ? `<span class="text-slate-500 text-base line-through">GH₵${esc(String(d.original_price))}</span>` : ""}
+                        ${!isSoldDetail && saleActiveDetail ? `<span class="bg-rose-500/90 text-white text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full">${esc(countdownText(d.sale_ends_at))}</span>` : ""}
+                    </div>
                     <button onclick="window.openPostOptionsMenu('${escAttr(d.id)}', ${isOwn ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-slate-400 hover:text-white transition px-1 shrink-0">
                         <i class="fas fa-ellipsis-vertical text-xl"></i>
                     </button>
@@ -1812,17 +1965,23 @@ window.openDetail = async function (postId) {
                         <div class="min-w-0">
                             <p class="text-xs text-slate-500 uppercase">Provider</p>
                             <p class="text-sm font-bold truncate">${esc(d.user_name) || "Anonymous Student"}</p>
+                            <div id="seller-rating-${escAttr(d.user_id)}" class="mt-0.5"><span class="text-[11px] text-slate-600">Loading rating...</span></div>
                         </div>
                     </div>
-                    ${followBlock}
+                    <div class="flex flex-col items-end gap-1.5 shrink-0">
+                        ${followBlock}
+                        ${!isOwn && viewer ? `<button onclick="window.openRateSellerSheet('${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-[10px] text-amber-400 hover:text-amber-300 transition uppercase tracking-widest font-bold">Rate seller</button>` : ""}
+                    </div>
                 </div>
                 <p class="text-slate-400 leading-relaxed font-light">${esc(d.description) || "No description provided."}</p>
                 ${safeSwapBlock}
                 ${renderSimilarListingsBlock(d)}
-                <div class="grid grid-cols-1 ${isOwn ? "" : "sm:grid-cols-2"} gap-3 mt-6">
+                <div class="grid grid-cols-1 ${isOwn || isSoldDetail ? "" : "sm:grid-cols-2"} gap-3 mt-6">
                     ${
-                      isOwn
-                        ? ""
+                      isOwn || isSoldDetail
+                        ? isSoldDetail
+                          ? `<p class="text-center text-slate-500 text-xs uppercase tracking-widest py-2">This listing is no longer available</p>`
+                          : ""
                         : `
                     <button
                         id="detail-cart-btn-${escAttr(d.id)}"
@@ -1835,7 +1994,40 @@ window.openDetail = async function (postId) {
                     </button>`
                     }
                 </div>
+            </div>
+            <div id="comments-${escAttr(d.id)}" class="hidden reel-comments">
+                <div class="comments-header">
+                    <div class="comments-drag-handle"></div>
+                    <p class="text-white text-xs font-black uppercase tracking-wider">
+                        <span class="comment-count-${escAttr(d.id)}">${displayCommentsDetail}</span> Comments
+                    </p>
+                    <button class="comments-close-btn" onclick="window._closeCommentSheet('${escAttr(d.id)}')"><i class="fas fa-times text-xs"></i></button>
+                </div>
+                <div id="comment-list-${escAttr(d.id)}" class="comments-scroll-area"></div>
+                <div class="comments-input-row flex items-center gap-1.5">
+                    <input
+                        type="text"
+                        inputmode="text"
+                        maxlength="500"
+                        placeholder="Add a comment…"
+                        class="comment-input-field flex-1 bg-white/10 border border-white/20 text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none focus:border-amber-400 transition"
+                        oninput="window._syncCommentSendState('${escAttr(d.id)}', this)"
+                        onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(d.id)}', this)"
+                    >
+                    <button id="cancel-reply-${escAttr(d.id)}" onclick="window.cancelCommentReply('${escAttr(d.id)}')" class="hidden text-[10px] text-white/60 hover:text-white px-1">✕</button>
+                    <button
+                        id="comment-send-${escAttr(d.id)}"
+                        disabled
+                        onclick="window._submitFromSendBtn('${escAttr(d.id)}')"
+                        class="comment-send-btn shrink-0 w-8 h-8 rounded-xl bg-amber-400 text-black flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed active:scale-90"
+                        aria-label="Send comment"
+                    >
+                        <i class="fas fa-paper-plane text-[11px]"></i>
+                    </button>
+                </div>
             </div>`;
+
+    loadAndRenderSellerRating(d.user_id, `seller-rating-${idKey(d.user_id)}`);
 
     if (mediaUrls.length > 1) {
       const carousel = document.getElementById("detail-carousel");
@@ -1873,6 +2065,133 @@ window.closeDetailModal = function (fromPop = false) {
   });
   modal?.classList.add("hidden");
   if (!fromPop) popUiState("detail-modal");
+};
+
+// ─── 9b. MANAGE LISTING (mark sold / discount price / flash sale) ───────────
+// Deliberately narrow in scope rather than a full post editor (no title,
+// description, or image editing here) — see conversation: the ask was
+// specifically for sold-status and sale-pricing controls on an existing
+// listing, not general editing.
+window.openManageListingSheet = async function (postId) {
+  if (!currentUserData) return;
+
+  const modal = document.getElementById("manage-listing-modal");
+  const content = document.getElementById("manage-listing-content");
+  if (!modal || !content) return;
+
+  content.innerHTML = `<div class="p-8 text-center text-slate-500 text-sm"><i class="fas fa-circle-notch fa-spin"></i></div>`;
+  modal.classList.remove("hidden");
+  pushUiState("manage-listing-modal", () =>
+    window.closeManageListingSheet(true),
+  );
+
+  const { data: post, error } = await supabase
+    .from("posts")
+    .select("id, title, price, original_price, sold_at, sale_ends_at, user_id")
+    .eq("id", postId)
+    .single();
+
+  if (error || !post || post.user_id !== currentUserData.id) {
+    content.innerHTML = `<div class="p-8 text-center text-slate-500 text-sm">Couldn't load this listing.</div>`;
+    return;
+  }
+
+  const isSold = !!post.sold_at;
+  // datetime-local inputs need "YYYY-MM-DDTHH:mm" with no timezone
+  // suffix — slicing an ISO string to 16 chars gives exactly that.
+  const saleEndsValue = post.sale_ends_at
+    ? new Date(post.sale_ends_at).toISOString().slice(0, 16)
+    : "";
+
+  content.innerHTML = `
+        <div class="p-6 space-y-5">
+            <h2 class="text-lg font-bold text-white">Manage Listing</h2>
+            <p class="text-xs text-slate-500 -mt-3">${esc(post.title)}</p>
+
+            <label class="flex items-center justify-between p-3 bg-slate-900 rounded-xl border border-slate-800 cursor-pointer">
+                <span class="text-sm font-semibold text-white">Mark as Sold</span>
+                <input type="checkbox" id="manageSoldToggle" ${isSold ? "checked" : ""} class="w-5 h-5 accent-amber-400">
+            </label>
+            <p class="text-[10px] text-slate-500 -mt-3">Sold listings are hidden from browsing and automatically removed after 48 hours.</p>
+
+            <div>
+                <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Discount price (optional)</label>
+                <p class="text-[10px] text-slate-500 mb-1.5">Shows your current price GH₵${esc(String(post.price || 0))} as a deal — set the ORIGINAL (higher) price here.</p>
+                <input type="number" id="manageOriginalPrice" min="0" max="1000000" step="0.01" value="${post.original_price ?? ""}" placeholder="e.g. ${(Number(post.price || 0) * 1.2).toFixed(2)}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+            </div>
+
+            <div>
+                <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Flash sale ends (optional)</label>
+                <input type="datetime-local" id="manageSaleEndsAt" value="${saleEndsValue}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+            </div>
+
+            <button onclick="window._saveManageListing('${escAttr(postId)}')" class="w-full bg-amber-400 text-black font-black py-3 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
+                Save Changes
+            </button>
+        </div>`;
+};
+
+window.closeManageListingSheet = function (fromPop = false) {
+  document.getElementById("manage-listing-modal")?.classList.add("hidden");
+  if (!fromPop) popUiState("manage-listing-modal");
+};
+
+window._saveManageListing = async function (postId) {
+  const soldToggle = document.getElementById("manageSoldToggle");
+  const originalPriceInput = document.getElementById("manageOriginalPrice");
+  const saleEndsInput = document.getElementById("manageSaleEndsAt");
+  if (!soldToggle || !originalPriceInput || !saleEndsInput || !currentUserData)
+    return;
+
+  const originalPriceRaw = originalPriceInput.value.trim();
+  const parsedOriginalPrice = originalPriceRaw
+    ? parseFloat(originalPriceRaw)
+    : null;
+  if (
+    originalPriceRaw &&
+    (isNaN(parsedOriginalPrice) || parsedOriginalPrice < 0)
+  ) {
+    showToast("Discount price can't be negative.");
+    return;
+  }
+  if (parsedOriginalPrice !== null && parsedOriginalPrice > 1000000) {
+    showToast("That price seems too high — please double-check it.");
+    return;
+  }
+
+  const saleEndsRaw = saleEndsInput.value;
+  const saleEndsIso = saleEndsRaw ? new Date(saleEndsRaw).toISOString() : null;
+  if (saleEndsIso && new Date(saleEndsIso).getTime() <= Date.now()) {
+    showToast("Flash sale end time must be in the future.");
+    return;
+  }
+
+  const updates = {
+    sold_at: soldToggle.checked ? new Date().toISOString() : null,
+    original_price: parsedOriginalPrice,
+    sale_ends_at: saleEndsIso,
+  };
+
+  const { error } = await supabase
+    .from("posts")
+    .update(updates)
+    .eq("id", postId)
+    .eq("user_id", currentUserData.id);
+
+  if (error) {
+    console.error("Manage listing save error:", error);
+    showToast("Couldn't save changes. Try again.");
+    return;
+  }
+
+  // Keep the in-memory cache consistent so the feed/detail view reflect
+  // the change immediately without needing a full reload.
+  const cached = allCachedPosts.find(({ id }) => idKey(id) === idKey(postId));
+  if (cached?.data) Object.assign(cached.data, updates);
+
+  showToast("Listing updated.");
+  window.closeManageListingSheet();
+  renderFeedFromCache();
 };
 
 // ─── 10. LOGIN MODAL ──────────────────────────────────────────────────────────
@@ -4647,6 +4966,11 @@ window.openPostOptionsMenu = function (
         ...sharedItems,
         { divider: true },
         {
+          label: "Manage listing",
+          icon: "fas fa-sliders",
+          action: () => window.openManageListingSheet(postId),
+        },
+        {
           label: "Archive or delete listing",
           icon: "fas fa-box-archive",
           danger: true,
@@ -4930,25 +5254,39 @@ function renderFeedMasonryCard(id, d, options = {}) {
     ? "fas fa-bookmark text-amber-400"
     : "far fa-bookmark text-white/80";
 
+  const isSold = !!d.sold_at;
+  const hasDiscount =
+    d.original_price && Number(d.original_price) > Number(d.price || 0);
+  const saleActive =
+    d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
+
   registerPostContext(id, d, isVideo ? "" : primaryUrl);
 
   const mediaBlock = isVideo
     ? `<video class="w-full h-auto block" muted loop playsinline preload="metadata" src="${esc(primaryUrl)}#t=0.1"></video>
            <div class="absolute top-2.5 left-2.5 w-7 h-7 rounded-full bg-black/50 flex items-center justify-center text-white text-xs"><i class="fas fa-play"></i></div>`
-    : `<img class="w-full h-auto block" src="${esc(primaryUrl)}" alt="${esc(d.title)}" loading="lazy">`;
+    : `<img class="w-full h-auto block ${isSold ? "opacity-40 grayscale" : ""}" src="${esc(primaryUrl)}" alt="${esc(d.title)}" loading="lazy">`;
 
   return `
-    <div class="masonry-card-feed bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden mb-2.5" id="feed-card-${escAttr(id)}">
+    <div class="masonry-card-feed bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden mb-1" id="feed-card-${escAttr(id)}">
         <div class="relative w-full bg-slate-950 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
             ${mediaBlock}
-            ${isSuggested ? `<div class="absolute top-2.5 left-2.5 bg-amber-400/90 text-black text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full">Suggested</div>` : ""}
+            ${isSold ? `<div class="absolute inset-0 flex items-center justify-center"><span class="bg-black/80 text-white text-[11px] font-black uppercase tracking-[0.2em] px-4 py-1.5 rounded-full border border-white/20">Sold</span></div>` : ""}
+            ${!isSold && isSuggested ? `<div class="absolute top-2.5 left-2.5 bg-amber-400/90 text-black text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full">Suggested</div>` : ""}
+            ${!isSold && saleActive ? `<div class="absolute top-2.5 left-2.5 bg-rose-500/90 text-white text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full">${esc(countdownText(d.sale_ends_at))}</div>` : ""}
+            ${
+              !isSold
+                ? `
             <button
                 onclick="event.stopPropagation(); window.toggleCartItem('${escAttr(id)}')"
                 class="absolute top-2.5 right-2.5 w-7 h-7 flex items-center justify-center bg-black/50 rounded-full active:scale-90 transition">
                 <i class="${bookmarkClass} text-xs"></i>
-            </button>
-            <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2.5 pt-6 pb-2">
+            </button>`
+                : ""
+            }
+            <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2.5 pt-6 pb-2 flex items-baseline gap-1.5">
                 <span class="text-amber-400 font-black text-xs">GH₵${esc(String(d.price || 0))}</span>
+                ${hasDiscount ? `<span class="text-slate-400 text-[10px] line-through">GH₵${esc(String(d.original_price))}</span>` : ""}
             </div>
         </div>
         <div class="px-2.5 py-2">
@@ -4995,7 +5333,7 @@ function renderProductGridCard(id, d) {
     : "";
 
   return `
-    <div class="masonry-card bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden mb-2.5" id="grid-card-${escAttr(id)}">
+    <div class="masonry-card bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden mb-1" id="grid-card-${escAttr(id)}">
         <div class="relative w-full bg-slate-950 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
             ${
               isVideo
@@ -5099,7 +5437,7 @@ function renderServiceGridCard(id, d) {
     : "";
 
   return `
-    <div class="masonry-card-service bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden mb-3" id="grid-card-${escAttr(id)}">
+    <div class="masonry-card-service bg-slate-900 border border-slate-800/60 rounded-2xl overflow-hidden mb-1" id="grid-card-${escAttr(id)}">
         <div class="relative w-full bg-slate-950 cursor-pointer" onclick="window.openServiceReelViewer('${escAttr(id)}')">
             ${
               isVideo
