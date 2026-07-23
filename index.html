@@ -462,6 +462,32 @@
                 </div>
               </div>
 
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  id="profile-open-settings-btn"
+                  onclick="window.openCampusSettings()"
+                  class="w-full py-3 px-4 rounded-2xl bg-slate-900 border border-slate-700 text-slate-300 font-black uppercase tracking-wider text-xs active:scale-[0.98] transition"
+                >
+                  <i class="fas fa-sliders mr-2 text-[10px]"></i>Campus Settings
+                </button>
+                <button
+                  onclick="
+                    window.switchProfileTab(
+                      'saved',
+                      document.getElementById('profile-tab-saved'),
+                    )
+                  "
+                  class="w-full py-3 px-4 rounded-2xl bg-slate-900 border border-slate-700 text-slate-300 font-black uppercase tracking-wider text-xs active:scale-[0.98] transition"
+                >
+                  <i class="fas fa-bookmark mr-2 text-[10px]"></i>Saved Items
+                  <span
+                    id="profile-saved-count-pill"
+                    class="ml-2 inline-flex min-w-[1.4rem] items-center justify-center rounded-full bg-amber-400 text-black px-1.5 py-0.5 text-[10px]"
+                    >0</span
+                  >
+                </button>
+              </div>
+
               <div class="flex border-b border-slate-900 text-sm">
                 <button
                   onclick="window.switchProfileTab('posts', this)"
@@ -470,10 +496,14 @@
                   My Gigs & Posts
                 </button>
                 <button
-                  onclick="window.switchProfileTab('settings', this)"
+                  id="profile-tab-saved"
+                  onclick="window.switchProfileTab('saved', this)"
                   class="profile-subtab-btn flex-1 py-3 text-center text-slate-500 font-bold border-b-2 border-transparent uppercase tracking-wider text-xs focus:outline-none hover:text-slate-300"
                 >
-                  Campus Settings
+                  Saved Items
+                  <span id="profile-saved-count" class="ml-1 text-[10px]"
+                    >0</span
+                  >
                 </button>
               </div>
 
@@ -510,6 +540,23 @@
                     </div>
                   </div>
                   <div id="profile-grid" class="grid grid-cols-3 gap-2"></div>
+                </div>
+
+                <div id="profile-subview-saved" class="profile-subview hidden">
+                  <div
+                    class="p-4 bg-slate-900 border border-slate-800/60 rounded-3xl mb-4"
+                  >
+                    <h2
+                      class="text-white font-black text-sm uppercase tracking-wider mb-1"
+                    >
+                      Saved Items
+                    </h2>
+                    <p class="text-slate-400 text-xs">
+                      Everything you've added to Chart is available here, with
+                      quick access back to the same seller.
+                    </p>
+                  </div>
+                  <div id="profile-saved-items-wrapper" class="space-y-3"></div>
                 </div>
 
                 <div
@@ -1723,5 +1770,12 @@
         });
       }
     </script>
+    <script
+      type="module"
+      src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
+      integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ=="
+      data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}'
+      crossorigin="anonymous"
+    ></script>
   </body>
 </html>

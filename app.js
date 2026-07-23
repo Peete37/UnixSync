@@ -1776,7 +1776,7 @@ window.navigateTo = function (viewId, btn = null) {
   }
 };
 
-window.switchProfileTab = function (tabType, selectedBtn) {
+window.switchProfileTab = function (tabType, selectedBtn = null) {
   document
     .querySelectorAll(".profile-subview")
     .forEach((view) => view.classList.add("hidden"));
@@ -1786,11 +1786,52 @@ window.switchProfileTab = function (tabType, selectedBtn) {
     btn.classList.replace("border-amber-400", "border-transparent");
   });
 
+  const settingsBtn = document.getElementById("profile-open-settings-btn");
+  if (settingsBtn) {
+    settingsBtn.classList.remove(
+      "bg-amber-400",
+      "text-black",
+      "border-amber-400",
+    );
+    settingsBtn.classList.add(
+      "bg-slate-900",
+      "text-slate-300",
+      "border-slate-700",
+    );
+  }
+
   document
     .getElementById(`profile-subview-${tabType}`)
     ?.classList.remove("hidden");
-  selectedBtn.classList.replace("text-slate-400", "text-amber-400");
-  selectedBtn.classList.replace("border-transparent", "border-amber-400");
+
+  if (selectedBtn) {
+    selectedBtn.classList.replace("text-slate-400", "text-amber-400");
+    selectedBtn.classList.replace("border-transparent", "border-amber-400");
+  } else if (tabType === "settings" && settingsBtn) {
+    settingsBtn.classList.remove(
+      "bg-slate-900",
+      "text-slate-300",
+      "border-slate-700",
+    );
+    settingsBtn.classList.add("bg-amber-400", "text-black", "border-amber-400");
+  }
+
+  if (tabType === "saved") {
+    renderCartListView();
+  }
+};
+
+window.openCampusSettings = function () {
+  window.switchProfileTab("settings");
+};
+
+window.openUserDashboard = function (userId) {
+  if (!userId) return;
+  if (currentUserData && idKey(userId) === idKey(currentUserData.id)) {
+    window.navigateTo("profile");
+    return;
+  }
+  window.openPublicProfile(userId);
 };
 
 window.togglePostModal = function () {
@@ -1908,6 +1949,28 @@ window.openDetail = async function (postId) {
 
     const ctaLabel = d.type === "skill" ? "Contact" : "Contact Seller";
     const safeSwapBlock = renderSafeSwapZoneCard(d);
+    const isSoldDetail = !!d.sold_at;
+    const hasDiscountDetail =
+      d.original_price && Number(d.original_price) > Number(d.price || 0);
+    const saleActiveDetail =
+      d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
+    const detailActionsBlock =
+      isOwn || isSoldDetail
+        ? isSoldDetail
+          ? `<p class="text-center text-slate-500 text-xs uppercase tracking-widest py-2">This listing is no longer available</p>`
+          : ""
+        : `
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
+                    <button
+                        id="detail-cart-btn-${escAttr(d.id)}"
+                        onclick="window.toggleCartItem('${escAttr(d.id)}')"
+                        class="w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs ${cartColorClass}">
+                        <i class="fas fa-shopping-basket mr-1.5 text-[11px]"></i><span class="cart-btn-label">${cartText}</span>
+                    </button>
+                    <button onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}', '${escAttr(d.id)}')" class="w-full bg-amber-400 text-black font-black py-4 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
+                        ${esc(ctaLabel)}
+                    </button>
+                </div>`;
 
     const isLikedDetail = likedPostIds.has(idKey(d.id));
     const heartClassDetail = isLikedDetail
@@ -1916,12 +1979,6 @@ window.openDetail = async function (postId) {
     const displayLikesDetail = parseInt(d.likes_count || 0);
     const displayCommentsDetail =
       commentCountCache[d.id] ?? parseInt(d.comments_count || 0);
-
-    const isSoldDetail = !!d.sold_at;
-    const hasDiscountDetail =
-      d.original_price && Number(d.original_price) > Number(d.price || 0);
-    const saleActiveDetail =
-      d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
 
     registerPostContext(d.id, d, mediaUrls[0] || "");
 
@@ -1960,43 +2017,27 @@ window.openDetail = async function (postId) {
                     <span class="bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700 capitalize">${esc(d.type) || "product"}</span>
                 </div>
                 <div class="flex items-center justify-between gap-3 p-3 bg-slate-900 rounded-xl border border-slate-800">
-                    <div class="feed-profile-trigger flex items-center gap-3 min-w-0 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
+                    <button type="button" onclick="event.stopPropagation(); window.openUserDashboard('${escAttr(d.user_id)}')" class="feed-profile-trigger flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer active:scale-[0.99] transition" data-user-id="${escAttr(d.user_id)}">
                         <img src="${esc(d.user_avatar) || "https://ui-avatars.com/api/?name=User"}" data-avatar-for="${escAttr(d.user_id)}" class="w-10 h-10 rounded-full border border-amber-400 object-cover" alt="Avatar">
-                        <div class="min-w-0">
+                        <div class="min-w-0 flex-1">
                             <p class="text-xs text-slate-500 uppercase">Provider</p>
                             <p class="text-sm font-bold truncate">${esc(d.user_name) || "Anonymous Student"}</p>
                             <div id="seller-rating-${escAttr(d.user_id)}" class="mt-0.5"><span class="text-[11px] text-slate-600">Loading rating...</span></div>
                         </div>
-                    </div>
+                        <span class="text-[10px] uppercase tracking-[0.18em] text-amber-400 font-black shrink-0">Dashboard</span>
+                    </button>
                     <div class="flex flex-col items-end gap-1.5 shrink-0">
                         ${followBlock}
                         ${!isOwn && viewer ? `<button onclick="window.openRateSellerSheet('${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-[10px] text-amber-400 hover:text-amber-300 transition uppercase tracking-widest font-bold">Rate seller</button>` : ""}
                     </div>
                 </div>
                 <p class="text-slate-400 leading-relaxed font-light">${esc(d.description) || "No description provided."}</p>
+                ${detailActionsBlock}
                 <div id="comment-preview-${escAttr(d.id)}" class="space-y-2">
                     <p class="text-[10px] text-slate-600 animate-pulse">Loading comments...</p>
                 </div>
                 ${safeSwapBlock}
                 ${renderSimilarListingsBlock(d)}
-                <div class="grid grid-cols-1 ${isOwn || isSoldDetail ? "" : "sm:grid-cols-2"} gap-3 mt-6">
-                    ${
-                      isOwn || isSoldDetail
-                        ? isSoldDetail
-                          ? `<p class="text-center text-slate-500 text-xs uppercase tracking-widest py-2">This listing is no longer available</p>`
-                          : ""
-                        : `
-                    <button
-                        id="detail-cart-btn-${escAttr(d.id)}"
-                        onclick="window.toggleCartItem('${escAttr(d.id)}')"
-                        class="w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs ${cartColorClass}">
-                        <i class="fas fa-shopping-basket mr-1.5 text-[11px]"></i><span class="cart-btn-label">${cartText}</span>
-                    </button>
-                    <button onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}', '${escAttr(d.id)}')" class="w-full bg-amber-400 text-black font-black py-4 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
-                        ${esc(ctaLabel)}
-                    </button>`
-                    }
-                </div>
             </div>
             <div id="comments-${escAttr(d.id)}" class="hidden reel-comments">
                 <div class="comments-header">
@@ -6073,7 +6114,9 @@ window.toggleCartItem = async function (postId) {
       media_type: postRecord.media_type || "image",
       institution: postRecord.institution || "",
       type: postRecord.type || "product",
+      user_id: postRecord.user_id || "",
       user_name: postRecord.user_name || "Anonymous",
+      user_avatar: postRecord.user_avatar || "",
     });
     showToast("Added to Chart List! ✓");
   }
@@ -6170,7 +6213,9 @@ window.toggleCartItem = async function (postId) {
         media_type: postRecord.media_type || "image",
         institution: postRecord.institution || "",
         type: postRecord.type || "product",
+        user_id: postRecord.user_id || "",
         user_name: postRecord.user_name || "Anonymous",
+        user_avatar: postRecord.user_avatar || "",
       });
     } else {
       const revertIndex = userCartList.findIndex(
@@ -6210,14 +6255,88 @@ window.toggleCartItem = async function (postId) {
   }
 };
 
-function renderCartListView() {
-  const container = document.getElementById("cart-items-wrapper");
-  if (!container) return;
-  if (userCartList.length === 0) {
-    container.innerHTML = `<p class="p-10 text-center text-slate-500 text-xs uppercase">Your list is empty</p>`;
-    return;
+async function hydrateCartItemsFromSource() {
+  if (!userCartList.length) return;
+
+  const localSources = new Map();
+  allCachedPosts.forEach((entry) => {
+    const d = entry?.data || entry;
+    const key = idKey(entry?.id || d?.id);
+    if (key) localSources.set(key, d);
+  });
+
+  const missingIds = [];
+  let changed = false;
+
+  userCartList = userCartList.map((item) => {
+    const key = idKey(item.id);
+    const source = localSources.get(key);
+    if (source) {
+      const next = {
+        ...item,
+        title: item.title || source.title || "Campus Item",
+        price: item.price || source.price || 0,
+        media_url: item.media_url || source.media_url || "",
+        media_type: item.media_type || source.media_type || "image",
+        institution: item.institution || source.institution || "",
+        type: item.type || source.type || "product",
+        user_id: item.user_id || source.user_id || "",
+        user_name: item.user_name || source.user_name || "Anonymous",
+        user_avatar: item.user_avatar || source.user_avatar || "",
+      };
+      if (JSON.stringify(next) != JSON.stringify(item)) changed = true;
+      return next;
+    }
+
+    if (!item.user_id || !item.user_name || !item.media_url) {
+      missingIds.push(item.id);
+    }
+    return item;
+  });
+
+  if (missingIds.length) {
+    try {
+      const { data, error } = await supabase
+        .from("posts")
+        .select(
+          "id, title, price, media_url, media_type, institution, type, user_id, user_name, user_avatar",
+        )
+        .in("id", missingIds);
+      if (error) throw error;
+      const dbById = new Map((data || []).map((row) => [idKey(row.id), row]));
+      userCartList = userCartList.map((item) => {
+        const source = dbById.get(idKey(item.id));
+        if (!source) return item;
+        changed = true;
+        return {
+          ...item,
+          title: source.title || item.title || "Campus Item",
+          price: source.price ?? item.price ?? 0,
+          media_url: source.media_url || item.media_url || "",
+          media_type: source.media_type || item.media_type || "image",
+          institution: source.institution || item.institution || "",
+          type: source.type || item.type || "product",
+          user_id: source.user_id || item.user_id || "",
+          user_name: source.user_name || item.user_name || "Anonymous",
+          user_avatar: source.user_avatar || item.user_avatar || "",
+        };
+      });
+    } catch (err) {
+      console.warn("Cart hydration skipped:", err);
+    }
   }
-  container.innerHTML = userCartList
+
+  if (changed) {
+    localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
+  }
+}
+
+function buildCartListMarkup() {
+  if (userCartList.length === 0) {
+    return `<p class="p-10 text-center text-slate-500 text-xs uppercase">Your list is empty</p>`;
+  }
+
+  return userCartList
     .map((item) => {
       let firstUrl = item.media_url || "";
       if (firstUrl.startsWith("[")) {
@@ -6228,25 +6347,58 @@ function renderCartListView() {
         }
       }
       const isVideo = item.media_type === "video";
+      const canContact =
+        !!item.user_id &&
+        (!currentUserData || idKey(item.user_id) !== idKey(currentUserData.id));
       const thumb = firstUrl
         ? `<div class="relative w-14 h-14 rounded-lg overflow-hidden shrink-0 bg-slate-800">
-                   <img src="${esc(firstUrl)}" onerror="this.parentElement.innerHTML='<i class=\\'fas fa-image text-slate-600\\'></i>'; this.parentElement.classList.add('flex','items-center','justify-center');" class="w-full h-full object-cover" alt="">
+                   <img src="${esc(firstUrl)}" onerror="this.parentElement.innerHTML='<i class=\'fas fa-image text-slate-600\'></i>'; this.parentElement.classList.add('flex','items-center','justify-center');" class="w-full h-full object-cover" alt="">
                    ${isVideo ? `<div class="absolute inset-0 flex items-center justify-center bg-black/30"><i class="fas fa-play text-white text-xs"></i></div>` : ""}
                </div>`
         : `<div class="w-14 h-14 rounded-lg shrink-0 bg-slate-800 flex items-center justify-center text-slate-600"><i class="fas fa-image"></i></div>`;
 
       return `
-        <div class="flex items-center gap-3 justify-between p-3 bg-slate-900 rounded-xl border border-slate-800">
-            ${thumb}
-            <div class="min-w-0 flex-1 cursor-pointer" onclick="openDetail('${escAttr(item.id)}')">
-                <p class="text-white font-bold text-sm truncate">${esc(item.title)}</p>
-                <p class="text-amber-400 font-extrabold text-xs">GH₵${esc(String(item.price))}</p>
+        <div class="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-3">
+            <div class="flex items-center gap-3 justify-between">
+                ${thumb}
+                <div class="min-w-0 flex-1 cursor-pointer" onclick="openDetail('${escAttr(item.id)}')">
+                    <p class="text-white font-bold text-sm truncate">${esc(item.title)}</p>
+                    <p class="text-amber-400 font-extrabold text-xs">GH₵${esc(String(item.price))}</p>
+                    ${item.user_name ? `<p class="text-slate-500 text-[11px] truncate mt-1">${esc(item.user_name)}</p>` : ""}
+                </div>
+                <button onclick="window.toggleCartItem('${escAttr(item.id)}')" class="text-red-400 p-2 shrink-0"><i class="fas fa-trash-can"></i></button>
             </div>
-            <button onclick="window.toggleCartItem('${escAttr(item.id)}')" class="text-red-400 p-2"><i class="fas fa-trash-can"></i></button>
-        </div>
-    `;
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button onclick="openDetail('${escAttr(item.id)}')" class="w-full bg-slate-800 border border-slate-700 text-white font-black py-2.5 rounded-xl text-[11px] uppercase tracking-wider active:scale-[0.98] transition">
+                    View Details
+                </button>
+                ${
+                  canContact
+                    ? `<button onclick="contactSeller('${escAttr(item.user_id)}', '${escAttr(item.user_name || "Seller")}', '${escAttr(item.user_avatar || "")}', '${escAttr(item.title || "Listing")}', '${escAttr(item.id)}')" class="w-full bg-amber-400 text-black font-black py-2.5 rounded-xl text-[11px] uppercase tracking-wider active:scale-[0.98] transition">
+                        Contact
+                    </button>`
+                    : `<button disabled class="w-full bg-slate-900 border border-slate-800 text-slate-500 font-black py-2.5 rounded-xl text-[11px] uppercase tracking-wider cursor-not-allowed">
+                        ${currentUserData && item.user_id && idKey(item.user_id) === idKey(currentUserData.id) ? "Your Listing" : "Contact Unavailable"}
+                    </button>`
+                }
+            </div>
+        </div>`;
     })
     .join("");
+}
+
+async function renderCartListView() {
+  await hydrateCartItemsFromSource();
+  const markup = buildCartListMarkup();
+  ["cart-items-wrapper", "profile-saved-items-wrapper"].forEach((id) => {
+    const container = document.getElementById(id);
+    if (container) container.innerHTML = markup;
+  });
+
+  ["profile-saved-count", "profile-saved-count-pill"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(userCartList.length);
+  });
 }
 
 // ─── 13. FOLLOW SYSTEM ────────────────────────────────────────────────────────
@@ -8565,26 +8717,30 @@ window.openProfilePostViewer = async function (userId, startPostId) {
       .map((d) => renderReelCard(idKey(d.id), d, true))
       .join("");
 
-    // Jump straight to the tapped post — instant, not an animated
-    // scroll — so opening post #7 of 13 doesn't visibly fly past
-    // posts 1-6 first. Deferred one frame: scrolling in the same
-    // tick as the innerHTML assignment above risks the browser not
-    // having finished laying out the freshly-inserted cards yet,
-    // which combined with this container's mandatory scroll-snap
-    // could land on (and snap to) the wrong card entirely.
-    requestAnimationFrame(() => {
-      const targetCard = document.getElementById(
-        `reel-card-${CSS.escape(idKey(startPostId))}`,
+    // Jump straight to the tapped post — and retry once more after
+    // layout settles. On some mobile browsers a single immediate
+    // scrollIntoView can be ignored or snapped back to the first card
+    // while the newly inserted full-screen cards are still resolving
+    // their final heights.
+    const jumpToRequestedCard = () => {
+      const targetCard = feed.querySelector(
+        `#reel-card-${CSS.escape(idKey(startPostId))}`,
       );
-      if (targetCard) {
-        targetCard.scrollIntoView({ block: "start" });
-        // Load the tapped post's media right away instead of waiting
-        // for the observer's first (async) callback — everything
-        // else in the list stays lazy.
-        const targetMedia = targetCard.querySelector(".reel-video");
-        if (targetMedia && targetMedia.dataset.src)
-          targetMedia.src = targetMedia.dataset.src;
+      if (!targetCard) return;
+      feed.scrollTo({ top: targetCard.offsetTop, behavior: "auto" });
+      const targetMedia = targetCard.querySelector(".reel-video");
+      if (
+        targetMedia &&
+        targetMedia.dataset.src &&
+        !targetMedia.getAttribute("src")
+      ) {
+        targetMedia.src = targetMedia.dataset.src;
       }
+    };
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(jumpToRequestedCard);
+      setTimeout(jumpToRequestedCard, 120);
     });
 
     setupReelsIntersectionObserver(feed);
@@ -8847,17 +9003,32 @@ function renderInboxList() {
     (conv) => !blockedUserIds.has(idKey(dmPeerInfo(conv).id)),
   );
 
+  const inboxHeader = `
+        <div class="flex items-center justify-between gap-3 bg-slate-900 border border-slate-800/60 rounded-3xl px-4 py-3">
+            <div>
+                <p class="text-white font-black text-sm uppercase tracking-wider">Messages</p>
+                <p class="text-slate-500 text-[11px]">Search users and start a chat anytime.</p>
+            </div>
+            <button onclick="window.openDMUserSearch()" class="w-11 h-11 rounded-2xl bg-amber-400 text-black flex items-center justify-center text-lg active:scale-95 transition shadow-[0_10px_30px_rgba(251,191,36,0.18)]" aria-label="New chat">
+                <i class="fas fa-plus"></i>
+            </button>
+        </div>`;
+
   if (visibleConversations.length === 0) {
     content.innerHTML = `
+            ${inboxHeader}
             <div class="text-center py-16 space-y-3 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
                 <p class="text-3xl">💬</p>
                 <p class="font-black text-white uppercase tracking-tight text-sm">No chats yet</p>
-                <p class="text-slate-500 text-xs max-w-xs mx-auto">Tap "Contact Seller" on any listing to start a conversation.</p>
+                <p class="text-slate-500 text-xs max-w-xs mx-auto">Tap Contact on a listing, or use the + button to search for a student and message them directly.</p>
+                <button onclick="window.openDMUserSearch()" class="inline-flex items-center gap-2 bg-amber-400 text-black font-black px-4 py-2.5 rounded-xl text-[11px] uppercase tracking-wider active:scale-95 transition">
+                    <i class="fas fa-user-plus text-[10px]"></i> Start Chat
+                </button>
             </div>`;
     return;
   }
 
-  content.innerHTML = `<div class="divide-y divide-slate-800/60 bg-slate-900 border border-slate-800/60 rounded-3xl overflow-hidden">${visibleConversations
+  content.innerHTML = `${inboxHeader}<div class="divide-y divide-slate-800/60 bg-slate-900 border border-slate-800/60 rounded-3xl overflow-hidden">${visibleConversations
     .map((conv) => {
       const peer = dmPeerInfo(conv);
       const isUnread = isConversationUnread(conv);
@@ -8912,6 +9083,118 @@ function subscribeConversationsList() {
 }
 
 // Opens (or creates) a conversation and renders the WhatsApp-style thread view.
+
+window.openDMUserSearch = function () {
+  if (!currentUserData) {
+    window.openLoginModal();
+    return;
+  }
+
+  let overlay = document.getElementById("dm-user-search-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "dm-user-search-overlay";
+    overlay.className =
+      "hidden fixed inset-0 z-[92] bg-black/80 backdrop-blur-sm p-4";
+    overlay.innerHTML = `
+            <div class="max-w-md mx-auto mt-10 bg-[#0f172a] border border-slate-800/80 rounded-3xl shadow-2xl overflow-hidden">
+                <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+                    <div>
+                        <p class="text-white font-black text-sm uppercase tracking-wider">Start a chat</p>
+                        <p class="text-slate-500 text-[11px]">Search by student name or institution.</p>
+                    </div>
+                    <button onclick="window.closeDMUserSearch()" class="w-9 h-9 rounded-full bg-slate-800 text-slate-300 hover:text-white transition"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="p-4 space-y-3">
+                    <div class="relative">
+                        <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
+                        <input id="dm-user-search-input" type="text" inputmode="search" placeholder="Search users" class="w-full bg-slate-900 border border-slate-700 text-white rounded-2xl pl-9 pr-3 py-3 text-sm focus:outline-none focus:border-amber-400" oninput="window.searchDMUsers(this.value)">
+                    </div>
+                    <div id="dm-user-search-results" class="max-h-[55vh] overflow-y-auto space-y-2 pr-1">
+                        <div class="text-center text-slate-500 text-xs py-10">Type at least 2 letters to search.</div>
+                    </div>
+                </div>
+            </div>`;
+    document.body.appendChild(overlay);
+  }
+
+  overlay.classList.remove("hidden");
+  pushUiState("dm-user-search", () => window.closeDMUserSearch(true));
+  setTimeout(
+    () => document.getElementById("dm-user-search-input")?.focus(),
+    20,
+  );
+};
+
+window.closeDMUserSearch = function (fromPop = false) {
+  document.getElementById("dm-user-search-overlay")?.classList.add("hidden");
+  if (!fromPop) popUiState("dm-user-search");
+};
+
+let dmUserSearchTimer = null;
+window.searchDMUsers = function (term) {
+  clearTimeout(dmUserSearchTimer);
+  dmUserSearchTimer = setTimeout(() => window._runDMUserSearch(term), 180);
+};
+
+window._runDMUserSearch = async function (term) {
+  const resultsEl = document.getElementById("dm-user-search-results");
+  if (!resultsEl || !currentUserData) return;
+
+  const cleanTerm = (term || "").trim().replace(/[,%()]/g, " ");
+  if (cleanTerm.length < 2) {
+    resultsEl.innerHTML = `<div class="text-center text-slate-500 text-xs py-10">Type at least 2 letters to search.</div>`;
+    return;
+  }
+
+  resultsEl.innerHTML = `<div class="text-center text-slate-500 text-xs py-10 uppercase tracking-widest">Searching...</div>`;
+
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, name, avatar, institution, region")
+      .neq("id", currentUserData.id)
+      .or(
+        `name.ilike.%${cleanTerm}%,institution.ilike.%${cleanTerm}%,region.ilike.%${cleanTerm}%`,
+      )
+      .limit(20);
+    if (error) throw error;
+
+    const rows = (data || []).filter((row) => row?.id);
+    if (!rows.length) {
+      resultsEl.innerHTML = `<div class="text-center text-slate-500 text-xs py-10">No users found.</div>`;
+      return;
+    }
+
+    resultsEl.innerHTML = rows
+      .map((row) => {
+        const displayName = row.name || "Student";
+        const avatar =
+          row.avatar ||
+          `https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(displayName)}`;
+        const location = [row.institution, row.region]
+          .filter(Boolean)
+          .join(" · ");
+        return `
+                <div class="flex items-center gap-3 bg-slate-900 border border-slate-800 rounded-2xl p-3">
+                    <img src="${esc(avatar)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(displayName)}'" class="w-11 h-11 rounded-full object-cover border border-slate-700 shrink-0" alt="">
+                    <div class="min-w-0 flex-1">
+                        <p class="text-white font-bold text-sm truncate">${esc(displayName)}</p>
+                        <p class="text-slate-500 text-[11px] truncate">${esc(location || "Campus student")}</p>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                        <button onclick="window.openUserDashboard('${escAttr(row.id)}')" class="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-200 text-[10px] font-black uppercase tracking-wider">View</button>
+                        <button onclick="window.closeDMUserSearch(); window.openDM('${escAttr(row.id)}', '${escAttr(displayName)}', '${escAttr(avatar)}')" class="px-3 py-2 rounded-xl bg-amber-400 text-black text-[10px] font-black uppercase tracking-wider">Chat</button>
+                    </div>
+                </div>`;
+      })
+      .join("");
+  } catch (err) {
+    console.error("DM user search failed:", err);
+    resultsEl.innerHTML = `<div class="text-center text-red-400 text-xs py-10">Couldn't search users right now.</div>`;
+  }
+};
+
 window.openDM = async function (
   otherUserId,
   otherUserName,
