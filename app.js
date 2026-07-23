@@ -1974,6 +1974,9 @@ window.openDetail = async function (postId) {
                     </div>
                 </div>
                 <p class="text-slate-400 leading-relaxed font-light">${esc(d.description) || "No description provided."}</p>
+                <div id="comment-preview-${escAttr(d.id)}" class="space-y-2">
+                    <p class="text-[10px] text-slate-600 animate-pulse">Loading comments...</p>
+                </div>
                 ${safeSwapBlock}
                 ${renderSimilarListingsBlock(d)}
                 <div class="grid grid-cols-1 ${isOwn || isSoldDetail ? "" : "sm:grid-cols-2"} gap-3 mt-6">
@@ -2028,6 +2031,7 @@ window.openDetail = async function (postId) {
             </div>`;
 
     loadAndRenderSellerRating(d.user_id, `seller-rating-${idKey(d.user_id)}`);
+    loadCommentPreview(idKey(d.id));
 
     if (mediaUrls.length > 1) {
       const carousel = document.getElementById("detail-carousel");
@@ -3787,7 +3791,8 @@ window._expandReplies = function (groupId) {
   document.getElementById(`toggle-${groupId}`)?.classList.add("hidden");
 };
 
-function renderCommentItem(c, postId) {
+function renderCommentItem(c, postId, options = {}) {
+  const isPreview = !!options.preview;
   const isLiked = likedCommentIds.has(idKey(c.id));
   const heartClass = isLiked
     ? "fas fa-heart text-rose-500"
@@ -3820,13 +3825,66 @@ function renderCommentItem(c, postId) {
                             <i class="${heartClass} text-[11px]"></i>
                             <span class="comment-like-count text-[10px] text-slate-400 font-semibold">${parseInt(c.likes_count || 0)}</span>
                         </button>
+                        ${
+                          isPreview
+                            ? ""
+                            : `
                         <button onclick="event.stopPropagation(); window.startCommentReply('${escAttr(postId)}', '${escAttr(c.id)}', '${escAttr(c.user_name)}')" class="text-[10px] text-slate-400 font-semibold hover:text-amber-400 transition">
                             Reply
-                        </button>
+                        </button>`
+                        }
                     </div>
                 </div>
             </div>
         </div>`;
+}
+
+// Inline comment preview for the detail view (Temu-style: a few reviews
+// visible directly on the page, with a link through to the full list) —
+// distinct from the full comment sheet (#comments-{id}/toggleComments
+// below), which still opens for the complete, scrollable, repliable
+// experience. Shows only top-level comments (no reply threads) since this
+// is meant to be a quick preview, not a duplicate of the full sheet.
+const COMMENT_PREVIEW_COUNT = 3;
+async function loadCommentPreview(postId) {
+  const container = document.getElementById(`comment-preview-${postId}`);
+  if (!container) return;
+
+  const {
+    data: comments,
+    error,
+    count,
+  } = await supabase
+    .from("comments")
+    .select("*", { count: "exact" })
+    .eq("post_id", postId)
+    .is("parent_comment_id", null)
+    .order("created_at", { ascending: false })
+    .limit(COMMENT_PREVIEW_COUNT);
+
+  if (error) {
+    container.innerHTML = "";
+    return;
+  }
+
+  if (!comments || comments.length === 0) {
+    container.innerHTML = `<p class="text-xs text-slate-600">No comments yet — be the first to say something.</p>`;
+    return;
+  }
+
+  const previewHtml = comments
+    .map((c) => renderCommentItem(c, postId, { preview: true }))
+    .join("");
+  const viewAllLabel =
+    count && count > comments.length
+      ? `View all ${count} comments`
+      : "View comments";
+
+  container.innerHTML = `
+        ${previewHtml}
+        <button onclick="toggleComments('${escAttr(postId)}')" class="text-[11px] text-amber-400 hover:text-amber-300 transition font-bold uppercase tracking-widest">
+            ${esc(viewAllLabel)}
+        </button>`;
 }
 
 // TikTok-style comment sheet: works for both the inline feed card comment
