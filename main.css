@@ -1,17 +1,24 @@
 /* ─── BASE CORE RESET ────────────────────────────────────────────────────────────────── */
+/* Tells every browser this page is intentionally dark-only. Without it,
+   Android's WebView/Chrome "Force Dark" heuristics (and Safari's native
+   light/dark theming of scrollbars, checkboxes, selects, etc.) kick in
+   whenever the device's system theme changes and start recoloring
+   elements the browser guesses are "light" — the "weird colour" flashes
+   reported when toggling device dark/light mode. This — plus the
+   matching <meta name="color-scheme"> tag in index.html — opts out of
+   that guessing entirely. */
+:root {
+  color-scheme: dark;
+}
+
 html,
 body {
   margin: 0;
   padding: 0;
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
   background-color: #020617; /* Slate-950 fallback match */
+  color-scheme: dark;
 }
 
 /* Eliminate the blue tap overlay flash on mobile browsers */
@@ -19,15 +26,15 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Zoom is scoped to post media only, not the whole page. The viewport
-   meta tag's maximum-scale is set high enough to let the browser permit
-   zooming at all (a strict maximum-scale/user-scalable=no blocks it at
-   the OS level, which no CSS can override) — but that alone would make
-   EVERYTHING zoomable, including buttons, nav, and layout. This default
-   pan-only touch-action closes that gap; scopeZoomToMedia() in
-   app_fixed_patched.js then explicitly re-enables pinch-zoom only on
-   <img>/<video> elements, so pinching an actual post zooms it while
-   pinching anywhere else on the page does nothing. */
+/* Zoom is disabled app-wide (see index.html's viewport meta:
+   maximum-scale=1.0, user-scalable=no). This used to allow zoom on post
+   media specifically via touch-action: pinch-zoom, but that CSS property
+   only controls whether the browser's own page-level zoom gesture is
+   allowed to start on an element — it doesn't confine how much of the
+   page ends up zoomed. Since images/videos cover most of the feed,
+   pinching almost anywhere zoomed the entire app rather than just the
+   photo. Pan-only, below, is now simply the base rule for everything,
+   media included (see scopeZoomToMedia() in app.js). */
 html {
   touch-action: pan-x pan-y;
 }
@@ -66,12 +73,7 @@ html {
   }
 
   &::-webkit-scrollbar-thumb:hover {
-    background: rgba(
-      255,
-      255,
-      255,
-      0.3
-    ); /* Brightens slightly on interaction */
+    background: rgba(255, 255, 255, 0.3); /* Brightens slightly on interaction */
   }
 }
 
@@ -96,22 +98,22 @@ html {
    now the single source of truth; index.html no longer has its own <style>
    block, so there is nothing left to conflict with these rules) ─────────── */
 
-.hidden {
-  display: none !important;
-}
+      .hidden {
+        display: none !important;
+      }
 
-body {
-  font-family: "Inter", sans-serif;
-  /* On any screen wider than the app's own column, this fills the
+      body {
+        font-family: "Inter", sans-serif;
+        /* On any screen wider than the app's own column, this fills the
          margins with the same dark background instead of leaving the
          browser's default white showing through — without this, desktop
          visitors would see a jarring white gutter on either side of a
          dark app. */
-  background: #020617;
-  min-height: 100vh;
-}
+        background: #020617;
+        min-height: 100vh;
+      }
 
-/* Centers the whole app as a fixed-width column on tablets and
+      /* Centers the whole app as a fixed-width column on tablets and
        narrow windows (481-1023px) — the same way Instagram/TikTok's
        mobile-web experience holds up on a tablet: this width range isn't
        generous enough for a real 3-zone desktop layout (sidebar + feed +
@@ -121,24 +123,24 @@ body {
        window." True desktop (1024px+, see further below) gets its own,
        substantially different layout instead of trying to stretch this
        same column wider. */
-@media (min-width: 481px) and (max-width: 1023px) {
-  body {
-    display: flex;
-    justify-content: center;
-  }
-  #app-shell {
-    width: 448px;
-    min-height: 100vh;
-    background: #020617;
-    border-left: 1px solid rgba(255, 255, 255, 0.06);
-    border-right: 1px solid rgba(255, 255, 255, 0.06);
-    box-shadow: 0 0 60px rgba(0, 0, 0, 0.5);
-    position: relative;
-    transform: translateZ(0);
-  }
-}
+      @media (min-width: 481px) and (max-width: 1023px) {
+        body {
+          display: flex;
+          justify-content: center;
+        }
+        #app-shell {
+          width: 448px;
+          min-height: 100vh;
+          background: #020617;
+          border-left: 1px solid rgba(255, 255, 255, 0.06);
+          border-right: 1px solid rgba(255, 255, 255, 0.06);
+          box-shadow: 0 0 60px rgba(0, 0, 0, 0.5);
+          position: relative;
+          transform: translateZ(0);
+        }
+      }
 
-/* ── DESKTOP LAYOUT (1024px+) ──────────────────────────────────────
+      /* ── DESKTOP LAYOUT (1024px+) ──────────────────────────────────────
        A genuine three-zone layout instead of a centered phone column:
        a fixed left sidebar nav (replacing the bottom nav, which hides
        entirely at this width), a comfortably-wide but still readable
@@ -149,127 +151,125 @@ body {
        .desktop-right-rail). #app-shell itself stops being a narrow
        fixed-width box and instead becomes the full-width flex
        container that lays out sidebar + feed + rail side by side. */
-@media (min-width: 1024px) {
-  body {
-    background: #020617;
-  }
-  #app-shell {
-    width: 100%;
-    max-width: 1400px;
-    margin: 0 auto;
-    min-height: 100vh;
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    gap: 32px;
-    padding: 0 24px;
-    position: relative;
-  }
-  body.feed-tab-grid #app-shell {
-    max-width: 1400px;
-  }
-  body.feed-tab-all #app-shell {
-    max-width: 1620px;
-  }
+      @media (min-width: 1024px) {
+        body {
+          background: #020617;
+        }
+        #app-shell {
+          width: 100%;
+          max-width: 1400px;
+          margin: 0 auto;
+          min-height: 100vh;
+          display: flex;
+          align-items: flex-start;
+          justify-content: center;
+          gap: 32px;
+          padding: 0 24px;
+          position: relative;
+        }
+        body.feed-tab-grid #app-shell {
+          max-width: 1400px;
+        }
+        body.feed-tab-all #app-shell {
+          max-width: 1620px;
+        }
 
-  .bottom-nav-container {
-    display: none;
-  }
+        .bottom-nav-container {
+          display: none;
+        }
 
-  .sidebar-nav {
-    position: sticky;
-    top: 0;
-    height: 100vh;
-    width: 240px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 28px 12px;
-    border-right: 1px solid rgba(255, 255, 255, 0.06);
-  }
+        .sidebar-nav {
+          position: sticky;
+          top: 0;
+          height: 100vh;
+          width: 240px;
+          flex-shrink: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          padding: 28px 12px;
+          border-right: 1px solid rgba(255, 255, 255, 0.06);
+        }
 
-  .sidebar-nav-brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px 24px;
-  }
-  .sidebar-nav-logo {
-    width: 36px;
-    height: 36px;
-    border-radius: 12px;
-    background: linear-gradient(135deg, #fbbf24, #f59e0b);
-    color: #020617;
-    font-weight: 900;
-    font-size: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    letter-spacing: -0.02em;
-  }
-  .sidebar-nav-wordmark {
-    font-weight: 800;
-    font-size: 17px;
-    color: #fff;
-    letter-spacing: -0.01em;
-  }
+        .sidebar-nav-brand {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 12px 24px;
+        }
+        .sidebar-nav-logo {
+          width: 36px;
+          height: 36px;
+          border-radius: 12px;
+          background: linear-gradient(135deg, #fbbf24, #f59e0b);
+          color: #020617;
+          font-weight: 900;
+          font-size: 14px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          letter-spacing: -0.02em;
+        }
+        .sidebar-nav-wordmark {
+          font-weight: 800;
+          font-size: 17px;
+          color: #fff;
+          letter-spacing: -0.01em;
+        }
 
-  .sidebar-nav-btn {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 13px 14px;
-    border-radius: 14px;
-    color: #94a3b8;
-    font-size: 15px;
-    font-weight: 600;
-    text-align: left;
-    transition:
-      background 0.15s ease,
-      color 0.15s ease;
-  }
-  .sidebar-nav-btn i {
-    width: 22px;
-    text-align: center;
-    font-size: 18px;
-  }
-  .sidebar-nav-btn:hover {
-    background: rgba(255, 255, 255, 0.04);
-    color: #fff;
-  }
-  .sidebar-nav-btn.nav-active {
-    background: rgba(251, 191, 36, 0.1);
-    color: #fbbf24;
-  }
-  .sidebar-nav-create {
-    margin-top: 10px;
-    background: #fbbf24;
-    color: #020617;
-    font-weight: 800;
-    justify-content: center;
-  }
-  .sidebar-nav-create:hover {
-    background: #fcd34d;
-    color: #020617;
-  }
-  .sidebar-nav-create i {
-    width: auto;
-  }
+        .sidebar-nav-btn {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          padding: 13px 14px;
+          border-radius: 14px;
+          color: #94a3b8;
+          font-size: 15px;
+          font-weight: 600;
+          text-align: left;
+          transition: background 0.15s ease, color 0.15s ease;
+        }
+        .sidebar-nav-btn i {
+          width: 22px;
+          text-align: center;
+          font-size: 18px;
+        }
+        .sidebar-nav-btn:hover {
+          background: rgba(255, 255, 255, 0.04);
+          color: #fff;
+        }
+        .sidebar-nav-btn.nav-active {
+          background: rgba(251, 191, 36, 0.1);
+          color: #fbbf24;
+        }
+        .sidebar-nav-create {
+          margin-top: 10px;
+          background: #fbbf24;
+          color: #020617;
+          font-weight: 800;
+          justify-content: center;
+        }
+        .sidebar-nav-create:hover {
+          background: #fcd34d;
+          color: #020617;
+        }
+        .sidebar-nav-create i {
+          width: auto;
+        }
 
-  /* The feed column: same #app-shell-shaped content, just given
+        /* The feed column: same #app-shell-shaped content, just given
          breathing room instead of being pinned to a hard 448px edge —
          still capped, not stretched full-bleed, so a single post/reel
          doesn't look absurd at 3x its intended width. */
-  #feed-container,
-  #explore-container,
-  #dms-container,
-  #profile-container,
-  #cart-container {
-    max-width: 520px;
-  }
+        #feed-container,
+        #explore-container,
+        #dms-container,
+        #profile-container,
+        #cart-container {
+          max-width: 520px;
+        }
 
-  /* All/Products/Services tabs all widen to fill the screen
+        /* All/Products/Services tabs all widen to fill the screen
          (Facebook-style) since they're the views using the multi-column
          masonry layout — Following/Reels/DMs/Profile/etc. keep the
          comfortable 520px reading width above. The column itself has to
@@ -280,53 +280,53 @@ body {
          — Products/Services don't use that rail, so feed-tab-grid's own
          cap is used for those two instead, slightly narrower but still
          far wider than the old 520px every grid tab was stuck at. */
-  body.feed-tab-grid .desktop-center-column {
-    max-width: 900px;
-  }
-  body.feed-tab-grid .desktop-center-column main,
-  body.feed-tab-grid #feed-container {
-    max-width: 900px;
-  }
-  body.feed-tab-grid .site-header:not(.header-reels-mode) {
-    max-width: 900px;
-  }
-  @media (min-width: 1440px) {
-    body.feed-tab-grid .desktop-center-column {
-      max-width: 1160px;
-    }
-    body.feed-tab-grid .desktop-center-column main,
-    body.feed-tab-grid #feed-container {
-      max-width: 1160px;
-    }
-    body.feed-tab-grid .site-header:not(.header-reels-mode) {
-      max-width: 1160px;
-    }
-  }
+        body.feed-tab-grid .desktop-center-column {
+          max-width: 900px;
+        }
+        body.feed-tab-grid .desktop-center-column main,
+        body.feed-tab-grid #feed-container {
+          max-width: 900px;
+        }
+        body.feed-tab-grid .site-header:not(.header-reels-mode) {
+          max-width: 900px;
+        }
+        @media (min-width: 1440px) {
+          body.feed-tab-grid .desktop-center-column {
+            max-width: 1160px;
+          }
+          body.feed-tab-grid .desktop-center-column main,
+          body.feed-tab-grid #feed-container {
+            max-width: 1160px;
+          }
+          body.feed-tab-grid .site-header:not(.header-reels-mode) {
+            max-width: 1160px;
+          }
+        }
 
-  body.feed-tab-all .desktop-center-column {
-    max-width: 1040px;
-  }
-  body.feed-tab-all .desktop-center-column main,
-  body.feed-tab-all #feed-container {
-    max-width: 1040px;
-  }
-  body.feed-tab-all .site-header:not(.header-reels-mode) {
-    max-width: 1040px;
-  }
-  @media (min-width: 1440px) {
-    body.feed-tab-all .desktop-center-column {
-      max-width: 1320px;
-    }
-    body.feed-tab-all .desktop-center-column main,
-    body.feed-tab-all #feed-container {
-      max-width: 1320px;
-    }
-    body.feed-tab-all .site-header:not(.header-reels-mode) {
-      max-width: 1320px;
-    }
-  }
+        body.feed-tab-all .desktop-center-column {
+          max-width: 1040px;
+        }
+        body.feed-tab-all .desktop-center-column main,
+        body.feed-tab-all #feed-container {
+          max-width: 1040px;
+        }
+        body.feed-tab-all .site-header:not(.header-reels-mode) {
+          max-width: 1040px;
+        }
+        @media (min-width: 1440px) {
+          body.feed-tab-all .desktop-center-column {
+            max-width: 1320px;
+          }
+          body.feed-tab-all .desktop-center-column main,
+          body.feed-tab-all #feed-container {
+            max-width: 1320px;
+          }
+          body.feed-tab-all .site-header:not(.header-reels-mode) {
+            max-width: 1320px;
+          }
+        }
 
-  /* This wrapper holds literally all of the app's main content
+        /* This wrapper holds literally all of the app's main content
          (header/tabs, feed, explore, dms, profile, cart, every
          modal/overlay) as a single flex item sitting between the
          sidebar and the right rail. flex: 1 lets it actually claim the
@@ -340,22 +340,22 @@ body {
          size and position against instead of falling back to the
          viewport in ways that could leave them with no resolvable
          height at all. */
-  .desktop-center-column {
-    flex: 1;
-    min-width: 0;
-    max-width: 520px;
-    position: relative;
-  }
-  .desktop-center-column .site-header.header-reels-mode {
-    position: sticky;
-    left: auto;
-    right: auto;
-    width: 100%;
-    max-width: 520px;
-    margin: 0 auto;
-  }
+        .desktop-center-column {
+          flex: 1;
+          min-width: 0;
+          max-width: 520px;
+          position: relative;
+        }
+        .desktop-center-column .site-header.header-reels-mode {
+          position: sticky;
+          left: auto;
+          right: auto;
+          width: 100%;
+          max-width: 520px;
+          margin: 0 auto;
+        }
 
-  /* Same full-viewport-width bug as the reels header above, for
+        /* Same full-viewport-width bug as the reels header above, for
          two more mobile-first fixed bottom sheets that lost their
          confinement to a narrow column when #app-shell's transform
          (which used to make it the containing block for every
@@ -365,54 +365,54 @@ body {
          toggleComments/openPostOptionsMenu) — never actually nested
          inside .desktop-center-column — so this can't be scoped via
          ancestry and instead centers them directly at this breakpoint. */
-  .reel-comments,
-  .options-menu-sheet {
-    left: 50% !important;
-    right: auto !important;
-    width: 100% !important;
-    max-width: 520px !important;
-    transform: translateX(-50%) translateY(100%) !important;
-  }
-  .reel-comments.comments-open {
-    transform: translateX(-50%) translateY(0) !important;
-  }
-  .options-menu-sheet.menu-open {
-    transform: translateX(-50%) translateY(0) !important;
-  }
+        .reel-comments,
+        .options-menu-sheet {
+          left: 50% !important;
+          right: auto !important;
+          width: 100% !important;
+          max-width: 520px !important;
+          transform: translateX(-50%) translateY(100%) !important;
+        }
+        .reel-comments.comments-open {
+          transform: translateX(-50%) translateY(0) !important;
+        }
+        .options-menu-sheet.menu-open {
+          transform: translateX(-50%) translateY(0) !important;
+        }
 
-  main {
-    width: 100%;
-    max-width: 520px;
-    padding-bottom: 40px !important;
-  }
+        main {
+          width: 100%;
+          max-width: 520px;
+          padding-bottom: 40px !important;
+        }
 
-  /* Reels need their own full-height treatment even on desktop —
+        /* Reels need their own full-height treatment even on desktop —
          #posts-feed.reels-mode already goes position: fixed, full
          viewport by design (see its own rule), which is correct on
          mobile but would otherwise ignore the sidebar entirely and
          cover it on desktop. Constraining reels-mode to sit inside the
          feed column's own width/position here keeps the sidebar visible
          and clickable even while Reels is active. */
-  #posts-feed.reels-mode {
-    position: sticky !important;
-    left: auto !important;
-    right: auto !important;
-    width: 520px !important;
-    max-width: 520px !important;
-    top: 0 !important;
-    bottom: auto !important;
-    height: 100vh !important;
-    margin: 0 auto !important;
-  }
+        #posts-feed.reels-mode {
+          position: sticky !important;
+          left: auto !important;
+          right: auto !important;
+          width: 520px !important;
+          max-width: 520px !important;
+          top: 0 !important;
+          bottom: auto !important;
+          height: 100vh !important;
+          margin: 0 auto !important;
+        }
 
-  .desktop-right-rail {
-    display: flex;
-  }
-  body.feed-tab-all .desktop-right-rail {
-    display: none;
-  }
+        .desktop-right-rail {
+          display: flex;
+        }
+        body.feed-tab-all .desktop-right-rail {
+          display: none;
+        }
 
-  /* Profile post viewer (Reels-style scroller through one user's
+        /* Profile post viewer (Reels-style scroller through one user's
          posts, opened from the Profile tab grid): on mobile this is a
          full-viewport overlay by design, same as Reels. On desktop that
          reads as broken — a full-bleed post filling the entire screen
@@ -423,30 +423,30 @@ body {
          visibly dimmed behind it. Scrolling/snapping through posts
          still works exactly as before — only the overlay's own
          width/height/position changes here. */
-  #profile-post-viewer:not(.is-service-viewer) {
-    width: 520px;
-    max-width: 520px;
-    height: 92vh;
-    max-height: 92vh;
-    top: 50%;
-    left: 50%;
-    right: auto;
-    bottom: auto;
-    transform: translate(-50%, -50%);
-    border-radius: 20px;
-    overflow: hidden;
-    box-shadow: 0 24px 64px -12px rgba(0, 0, 0, 0.6);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-  }
-  #profile-post-viewer.sheet-open:not(.is-service-viewer)::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: -1;
-    background: rgba(2, 6, 23, 0.7);
-  }
+        #profile-post-viewer:not(.is-service-viewer) {
+          width: 520px;
+          max-width: 520px;
+          height: 92vh;
+          max-height: 92vh;
+          top: 50%;
+          left: 50%;
+          right: auto;
+          bottom: auto;
+          transform: translate(-50%, -50%);
+          border-radius: 20px;
+          overflow: hidden;
+          box-shadow: 0 24px 64px -12px rgba(0, 0, 0, 0.6);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        #profile-post-viewer.sheet-open:not(.is-service-viewer)::before {
+          content: "";
+          position: fixed;
+          inset: 0;
+          z-index: -1;
+          background: rgba(2, 6, 23, 0.7);
+        }
 
-  /* Post detail view: side-by-side (media left, details right) on
+        /* Post detail view: side-by-side (media left, details right) on
          desktop instead of the mobile stacked layout — this was also
          the real fix for the info panel overlapping/hiding the media,
          since the two are now beside each other, never one on top of
@@ -456,297 +456,295 @@ body {
          gets its own scrollbar since long descriptions/Safe Swap
          Zones/You Might Also Like sections shouldn't force the whole
          modal taller than the screen. */
-  #detail-modal .modal-inner {
-    max-width: 920px;
-    width: 90vw;
-  }
-  #detail-content {
-    display: flex;
-    flex-direction: row;
-    align-items: stretch;
-    max-height: 88vh;
-  }
-  #detail-content > div:first-child {
-    width: 50%;
-    flex-shrink: 0;
-    max-height: 88vh;
-    display: flex;
-    align-items: center;
-    background: #000;
-  }
-  #detail-content > div:first-child img,
-  #detail-content > div:first-child video {
-    max-height: 88vh !important;
-    width: 100%;
-  }
-  #detail-content > div:first-child > div.relative {
-    width: 100%;
-    height: 88vh;
-  }
-  #detail-content > div:first-child #detail-carousel {
-    height: 100%;
-  }
-  #detail-content > div:last-child {
-    width: 50%;
-    overflow-y: auto;
-    max-height: 88vh;
-    border-radius: 0 !important;
-    margin-top: 0 !important;
-    box-shadow: none !important;
-  }
+        #detail-modal .modal-inner {
+          max-width: 920px;
+          width: 90vw;
+        }
+        #detail-content {
+          display: flex;
+          flex-direction: row;
+          align-items: stretch;
+          max-height: 88vh;
+        }
+        #detail-content > div:first-child {
+          width: 50%;
+          flex-shrink: 0;
+          max-height: 88vh;
+          display: flex;
+          align-items: center;
+          background: #000;
+        }
+        #detail-content > div:first-child img,
+        #detail-content > div:first-child video {
+          max-height: 88vh !important;
+          width: 100%;
+        }
+        #detail-content > div:first-child > div.relative {
+          width: 100%;
+          height: 88vh;
+        }
+        #detail-content > div:first-child #detail-carousel {
+          height: 100%;
+        }
+        #detail-content > div:last-child {
+          width: 50%;
+          overflow-y: auto;
+          max-height: 88vh;
+          border-radius: 0 !important;
+          margin-top: 0 !important;
+          box-shadow: none !important;
+        }
 
-  /* Products keep the same modal width as the default side-by-side
+        /* Products keep the same modal width as the default side-by-side
          layout above, but stacked instead — media on top, details
          below — per direct request rather than beside each other. */
-  #detail-modal.is-product-detail #detail-content {
-    flex-direction: column;
-    max-height: 88vh;
-    overflow-y: auto;
-  }
-  #detail-modal.is-product-detail #detail-content > div:first-child {
-    width: 100%;
-    max-height: 55vh;
-  }
-  #detail-modal.is-product-detail #detail-content > div:first-child img,
-  #detail-modal.is-product-detail #detail-content > div:first-child video {
-    max-height: 55vh !important;
-  }
-  #detail-modal.is-product-detail
-    #detail-content
-    > div:first-child
-    > div.relative {
-    height: 55vh;
-  }
-  #detail-modal.is-product-detail #detail-content > div:last-child {
-    width: 100%;
-    max-height: none;
-    overflow-y: visible;
-  }
+        #detail-modal.is-product-detail #detail-content {
+          flex-direction: column;
+          max-height: 88vh;
+          overflow-y: auto;
+        }
+        #detail-modal.is-product-detail #detail-content > div:first-child {
+          width: 100%;
+          max-height: 55vh;
+        }
+        #detail-modal.is-product-detail #detail-content > div:first-child img,
+        #detail-modal.is-product-detail #detail-content > div:first-child video {
+          max-height: 55vh !important;
+        }
+        #detail-modal.is-product-detail #detail-content > div:first-child > div.relative {
+          height: 55vh;
+        }
+        #detail-modal.is-product-detail #detail-content > div:last-child {
+          width: 100%;
+          max-height: none;
+          overflow-y: visible;
+        }
 
-  /* Services viewer stays the Reels-style continuous scroller on
+        /* Services viewer stays the Reels-style continuous scroller on
          desktop (per explicit decision), just windowed down to match
          the main detail modal's proportions instead of covering the
          whole screen. */
-  #profile-post-viewer.is-service-viewer {
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.85);
-  }
-  #profile-post-viewer.is-service-viewer #profile-post-viewer-feed {
-    flex: none;
-    width: 420px;
-    max-width: 90vw;
-    height: 88vh;
-    border-radius: 24px;
-    overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-  }
-}
+        #profile-post-viewer.is-service-viewer {
+          align-items: center;
+          justify-content: center;
+          background: rgba(0, 0, 0, 0.85);
+        }
+        #profile-post-viewer.is-service-viewer #profile-post-viewer-feed {
+          flex: none;
+          width: 420px;
+          max-width: 90vw;
+          height: 88vh;
+          border-radius: 24px;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+      }
 
-/* Hidden by default (mobile/tablet) — only ever shown inside the
+      /* Hidden by default (mobile/tablet) — only ever shown inside the
        1024px+ desktop layout above, which flips this to display: flex. */
-.desktop-right-rail {
-  display: none;
-  position: sticky;
-  top: 28px;
-  width: 320px;
-  flex-shrink: 0;
-  flex-direction: column;
-  gap: 16px;
-  padding-top: 28px;
-}
-.desktop-rail-card {
-  background: #0b1220;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 20px;
-  padding: 18px;
-}
-.desktop-rail-card h3 {
-  font-size: 11px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #64748b;
-  margin-bottom: 12px;
-}
+      .desktop-right-rail {
+        display: none;
+        position: sticky;
+        top: 28px;
+        width: 320px;
+        flex-shrink: 0;
+        flex-direction: column;
+        gap: 16px;
+        padding-top: 28px;
+      }
+      .desktop-rail-card {
+        background: #0b1220;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 20px;
+        padding: 18px;
+      }
+      .desktop-rail-card h3 {
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #64748b;
+        margin-bottom: 12px;
+      }
 
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
 
-/* ── HEADER ── */
-.site-header {
-  position: sticky;
-  top: 0;
-  z-index: 40;
-  background: rgba(2, 6, 23, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  padding: 10px 16px;
-  max-width: 448px;
-  margin: 0 auto;
-  transition:
-    background 0.25s ease,
-    border-color 0.25s ease,
-    opacity 0.25s ease,
-    transform 0.25s ease;
-}
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
 
-/* TikTok-style: on the Reels tab the header becomes a transparent
+      /* ── HEADER ── */
+      .site-header {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        background: rgba(2, 6, 23, 0.85);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        padding: 10px 16px;
+        max-width: 448px;
+        margin: 0 auto;
+        transition:
+          background 0.25s ease,
+          border-color 0.25s ease,
+          opacity 0.25s ease,
+          transform 0.25s ease;
+      }
+
+      /* TikTok-style: on the Reels tab the header becomes a transparent
        overlay floating over the video instead of a solid bar. Tabs and
        icons stay tappable but there's no background/border beneath them. */
-.site-header.header-reels-mode {
-  background: transparent;
-  border-bottom-color: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  /* Fixed (not absolute/sticky) so it sits flush against the actual
+      .site-header.header-reels-mode {
+        background: transparent;
+        border-bottom-color: transparent;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        /* Fixed (not absolute/sticky) so it sits flush against the actual
          top of the viewport regardless of <main>'s padding or scroll
          position — this is what was leaving a visible gap above the
          tabs on the Reels tab. */
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  width: 100%;
-  max-width: 100%;
-  margin: 0;
-  padding-top: max(10px, env(safe-area-inset-top, 0px));
-  z-index: 45;
-}
-.site-header.header-reels-mode .header-icon-btn {
-  background: rgba(0, 0, 0, 0.35);
-  border-color: rgba(255, 255, 255, 0.15);
-}
-.site-header.header-reels-mode .feed-tab-btn {
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
-}
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        width: 100%;
+        max-width: 100%;
+        margin: 0;
+        padding-top: max(10px, env(safe-area-inset-top, 0px));
+        z-index: 45;
+      }
+      .site-header.header-reels-mode .header-icon-btn {
+        background: rgba(0, 0, 0, 0.35);
+        border-color: rgba(255, 255, 255, 0.15);
+      }
+      .site-header.header-reels-mode .feed-tab-btn {
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+      }
 
-.header-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+      .header-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
 
-.header-icon-btn {
-  position: relative;
-  width: 34px;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 10px;
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #cbd5e1;
-  transition:
-    border-color 0.2s,
-    color 0.2s,
-    background 0.2s;
-}
-.header-icon-btn:hover {
-  color: #fbbf24;
-  border-color: rgba(251, 191, 36, 0.3);
-}
-.header-icon-btn .badge-dot {
-  position: absolute;
-  top: -3px;
-  right: -3px;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: #fbbf24;
-  color: #000;
-  font-size: 9px;
-  font-weight: 800;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid #020617;
-}
+      .header-icon-btn {
+        position: relative;
+        width: 34px;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: #cbd5e1;
+        transition:
+          border-color 0.2s,
+          color 0.2s,
+          background 0.2s;
+      }
+      .header-icon-btn:hover {
+        color: #fbbf24;
+        border-color: rgba(251, 191, 36, 0.3);
+      }
+      .header-icon-btn .badge-dot {
+        position: absolute;
+        top: -3px;
+        right: -3px;
+        width: 15px;
+        height: 15px;
+        border-radius: 50%;
+        background: #fbbf24;
+        color: #000;
+        font-size: 9px;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px solid #020617;
+      }
 
-.feed-tabs-scroll {
-  scroll-behavior: smooth;
-}
+      .feed-tabs-scroll {
+        scroll-behavior: smooth;
+      }
 
-/* ── SEARCH ── */
-.search-wrap {
-  position: relative;
-  margin-top: 10px;
-}
+      /* ── SEARCH ── */
+      .search-wrap {
+        position: relative;
+        margin-top: 10px;
+      }
 
-.search-wrap i {
-  position: absolute;
-  left: 11px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 11px;
-  color: #64748b;
-  pointer-events: none;
-}
+      .search-wrap i {
+        position: absolute;
+        left: 11px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 11px;
+        color: #64748b;
+        pointer-events: none;
+      }
 
-.search-wrap input {
-  width: 100%;
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #f1f5f9;
-  border-radius: 12px;
-  padding: 9px 14px 9px 32px;
-  font-size: 12px;
-  font-family: "Inter", sans-serif;
-  outline: none;
-  transition:
-    border-color 0.2s,
-    box-shadow 0.2s;
-}
+      .search-wrap input {
+        width: 100%;
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: #f1f5f9;
+        border-radius: 12px;
+        padding: 9px 14px 9px 32px;
+        font-size: 12px;
+        font-family: "Inter", sans-serif;
+        outline: none;
+        transition:
+          border-color 0.2s,
+          box-shadow 0.2s;
+      }
 
-.search-wrap input::placeholder {
-  color: #475569;
-}
+      .search-wrap input::placeholder {
+        color: #475569;
+      }
 
-.search-wrap input:focus {
-  border-color: #fbbf24;
-  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.1);
-}
+      .search-wrap input:focus {
+        border-color: #fbbf24;
+        box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.1);
+      }
 
-/* ── TABS ── */
-.feed-tab-btn {
-  transition:
-    color 0.15s,
-    border-color 0.15s;
-}
+      /* ── TABS ── */
+      .feed-tab-btn {
+        transition:
+          color 0.15s,
+          border-color 0.15s;
+      }
 
-/* ── TIKTOK SCROLL FEED ── */
-#posts-feed {
-  height: calc(100vh - 140px);
-  overflow-y: scroll;
-  scroll-snap-type: y mandatory;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-}
-#posts-feed::-webkit-scrollbar {
-  display: none;
-}
+      /* ── TIKTOK SCROLL FEED ── */
+      #posts-feed {
+        height: calc(100vh - 140px);
+        overflow-y: scroll;
+        scroll-snap-type: y mandatory;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+      }
+      #posts-feed::-webkit-scrollbar {
+        display: none;
+      }
 
-/* When Products tab renders a grid, disable snap-scroll behavior so
+      /* When Products tab renders a grid, disable snap-scroll behavior so
        the grid can scroll normally instead of snapping per-row. */
-#posts-feed.grid-mode {
-  scroll-snap-type: none;
-  height: auto;
-  min-height: calc(100vh - 140px);
-  overflow-y: visible;
-}
+      #posts-feed.grid-mode {
+        scroll-snap-type: none;
+        height: auto;
+        min-height: calc(100vh - 140px);
+        overflow-y: visible;
+      }
 
-/* Pinterest-style true masonry: CSS multi-column instead of a grid,
+      /* Pinterest-style true masonry: CSS multi-column instead of a grid,
        so each card's height follows its own image's natural aspect ratio
        rather than being forced into uniform square tiles. break-inside:
        avoid stops a card from being split across the column break (the
@@ -754,7 +752,7 @@ body {
        content). Used by both Products and Services grids — Services
        gets its own modifier for slightly bigger cards, per "a little
        bigger" than Products. */
-/* <main class="px-4 ..."> applies 16px of left/right padding to
+      /* <main class="px-4 ..."> applies 16px of left/right padding to
        every screen in the app — appropriate for text-heavy views, but it
        visibly gaps the grid views away from the screen edges, unlike the
        Pinterest/Temu-style full-bleed reference. Rather than remove that
@@ -762,36 +760,55 @@ body {
        these three grids pull themselves back out to full viewport width
        with a negative margin equal to the parent's padding, scoped only
        to grid containers so nothing else in <main> is affected. */
-.masonry-columns,
-.masonry-columns-services,
-.masonry-columns-feed {
-  margin-left: -1rem;
-  margin-right: -1rem;
-  width: calc(100% + 2rem);
-}
+      .masonry-columns,
+      .masonry-columns-services,
+      .masonry-columns-feed {
+        margin-left: -1rem;
+        margin-right: -1rem;
+        width: calc(100% + 2rem);
+      }
 
-.masonry-columns {
-  column-count: 2;
-  column-gap: 4px;
-}
-.masonry-card {
-  break-inside: avoid;
-  -webkit-column-break-inside: avoid;
-  display: inline-block;
-  width: 100%;
-}
-.masonry-columns-services {
-  column-count: 2;
-  column-gap: 4px;
-}
-.masonry-card-service {
-  break-inside: avoid;
-  -webkit-column-break-inside: avoid;
-  display: inline-block;
-  width: 100%;
-}
+      .masonry-columns {
+        column-count: 2;
+        column-gap: 4px;
+      }
+      .masonry-card {
+        break-inside: avoid;
+        -webkit-column-break-inside: avoid;
+        display: inline-block;
+        width: 100%;
+      }
+      .masonry-columns-services {
+        column-count: 2;
+        column-gap: 4px;
+      }
+      .masonry-card-service {
+        break-inside: avoid;
+        -webkit-column-break-inside: avoid;
+        display: inline-block;
+        width: 100%;
+      }
+      /* Fix: Products/Services previously stayed at 2 columns at every
+       screen size, even though their container (body.feed-tab-grid
+       .desktop-center-column, above) already widens to 900/1160px on
+       desktop — leaving two giant tiles instead of actually using the
+       extra width. Matches the same breakpoints the All-tab masonry
+       grid below already uses. */
+      @media (min-width: 1024px) {
+        .masonry-columns,
+        .masonry-columns-services {
+          column-count: 3;
+          column-gap: 6px;
+        }
+      }
+      @media (min-width: 1440px) {
+        .masonry-columns,
+        .masonry-columns-services {
+          column-count: 4;
+        }
+      }
 
-/* All-tab feed: Pinterest-style masonry, deliberately distinct from
+      /* All-tab feed: Pinterest-style masonry, deliberately distinct from
        Products/Services in card content — these show only image + price
        + title (see renderFeedMasonryCard), matching the Temu-style
        browsing pattern rather than a social-feed card. True masonry
@@ -803,41 +820,41 @@ body {
        column-gap/card margin both kept minimal (near-zero) to match the
        tight, edge-to-edge Pinterest-style reference rather than the
        wider spacing a typical card grid would use. */
-.masonry-columns-feed {
-  column-count: 2;
-  column-gap: 4px;
-}
-.masonry-card-feed {
-  break-inside: avoid;
-  -webkit-column-break-inside: avoid;
-  display: inline-block;
-  width: 100%;
-}
-@media (min-width: 1024px) {
-  .masonry-columns-feed {
-    column-count: 3;
-    column-gap: 6px;
-  }
-}
-@media (min-width: 1440px) {
-  .masonry-columns-feed {
-    column-count: 4;
-  }
-}
+      .masonry-columns-feed {
+        column-count: 2;
+        column-gap: 4px;
+      }
+      .masonry-card-feed {
+        break-inside: avoid;
+        -webkit-column-break-inside: avoid;
+        display: inline-block;
+        width: 100%;
+      }
+      @media (min-width: 1024px) {
+        .masonry-columns-feed {
+          column-count: 3;
+          column-gap: 6px;
+        }
+      }
+      @media (min-width: 1440px) {
+        .masonry-columns-feed {
+          column-count: 4;
+        }
+      }
 
-/* Reels: true full-bleed, fixed to the viewport so it's completely
+      /* Reels: true full-bleed, fixed to the viewport so it's completely
        independent of <main>'s padding/max-width (that's what was causing
        the top gap) and so it sits ABOVE the bottom nav bar instead of
        flowing underneath it. Each reel card is exactly one screen tall,
        viewport-height minus the bottom nav's real rendered height, so
        the snap-scroll lands perfectly and nothing is ever hidden behind
        the nav bar. */
-#posts-feed.reels-mode {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  /* Fix: this used to run all the way to the bottom of the viewport
+      #posts-feed.reels-mode {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        /* Fix: this used to run all the way to the bottom of the viewport
          (bottom: 0), with the bottom nav (z-index: 50) drawn on top of
          it — so the actual video content underneath the nav bar was
          genuinely covered, not just visually layered.
@@ -851,15 +868,15 @@ body {
          resize/orientation change, so this can never drift out of sync
          with reality again. The pixel fallback only matters for the
          first frame before that JS has run once. */
-  bottom: var(--real-nav-height, 88px);
-  height: auto;
-  margin: 0;
-  width: 100%;
-  max-width: 100%;
-  z-index: 30;
-}
+        bottom: var(--real-nav-height, 88px);
+        height: auto;
+        margin: 0;
+        width: 100%;
+        max-width: 100%;
+        z-index: 30;
+      }
 
-/* Profile post viewer: tapping a grid post on any profile opens this
+      /* Profile post viewer: tapping a grid post on any profile opens this
        — a full-bleed, Reels-style vertical scroller (see req: "make viewing
        from profile appear similar to reels... just like Instagram") scoped
        to that one user's posts, snapped to the tapped post's index. Unlike
@@ -867,62 +884,62 @@ body {
        main feed swapping modes), so it covers the entire viewport including
        the bottom nav, and toggles visibility via the sheet-open convention
        shared with the other info-sheet overlays in this app. */
-#profile-post-viewer {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  background: #000;
-  display: none;
-  flex-direction: column;
-}
-#profile-post-viewer.sheet-open {
-  display: flex;
-}
-#profile-post-viewer-feed {
-  flex: 1;
-  overflow-y: auto;
-  scroll-snap-type: y mandatory;
-  scroll-behavior: auto;
-}
-#profile-post-viewer-feed::-webkit-scrollbar {
-  display: none;
-}
-#profile-post-viewer-back {
-  position: absolute;
-  top: max(env(safe-area-inset-top, 12px), 12px);
-  left: 12px;
-  z-index: 65;
-  width: 38px;
-  height: 38px;
-  border-radius: 9999px;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-}
-#profile-post-viewer-feed .reel-info {
-  bottom: max(env(safe-area-inset-bottom, 0px), 20px) !important;
-}
-#profile-post-viewer-feed .reel-actions {
-  bottom: max(env(safe-area-inset-bottom, 0px), 52px) !important;
-}
+      #profile-post-viewer {
+        position: fixed;
+        inset: 0;
+        z-index: 60;
+        background: #000;
+        display: none;
+        flex-direction: column;
+      }
+      #profile-post-viewer.sheet-open {
+        display: flex;
+      }
+      #profile-post-viewer-feed {
+        flex: 1;
+        overflow-y: auto;
+        scroll-snap-type: y mandatory;
+        scroll-behavior: auto;
+      }
+      #profile-post-viewer-feed::-webkit-scrollbar {
+        display: none;
+      }
+      #profile-post-viewer-back {
+        position: absolute;
+        top: max(env(safe-area-inset-top, 12px), 12px);
+        left: 12px;
+        z-index: 65;
+        width: 38px;
+        height: 38px;
+        border-radius: 9999px;
+        background: rgba(0,0,0,0.45);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+      }
+      #profile-post-viewer-feed .reel-info {
+        bottom: max(env(safe-area-inset-bottom, 0px), 20px) !important;
+      }
+      #profile-post-viewer-feed .reel-actions {
+        bottom: max(env(safe-area-inset-bottom, 0px), 52px) !important;
+      }
 
-.reel-card {
-  position: relative;
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
-  height: 100%;
-  width: 100%;
-  background: #000;
-  overflow: hidden;
-}
+      .reel-card {
+        position: relative;
+        scroll-snap-align: start;
+        scroll-snap-stop: always;
+        height: 100%;
+        width: 100%;
+        background: #000;
+        overflow: hidden;
+      }
 
-.reel-video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  /* Fix: video elements are frequently promoted to their own
+      .reel-video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        /* Fix: video elements are frequently promoted to their own
          hardware-accelerated compositing layer on mobile browsers, which
          can end up painting above absolutely-positioned siblings (like
          .reel-info's profile trigger / .reel-actions' buttons) even
@@ -931,11 +948,11 @@ body {
          low z-index inside its own stacking context (.reel-card is
          position: relative) makes sure .reel-info/.reel-actions always
          win regardless of how the browser happens to composite video. */
-  position: relative;
-  z-index: 1;
-}
+        position: relative;
+        z-index: 1;
+      }
 
-/* Photo posts in the profile post viewer (added when renderReelCard
+      /* Photo posts in the profile post viewer (added when renderReelCard
        was generalized to support photos, not just video — see req: "make
        viewing from profile appear similar to reels"). object-fit: cover
        is correct for actual video reels, which are typically shot
@@ -945,988 +962,988 @@ body {
        This shows the whole photo letterboxed against a neutral
        background instead, matching how photos already look everywhere
        else in the app (feed cards, post detail). */
-.reel-photo-fit {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  background: #000;
-  position: relative;
-  z-index: 1;
-}
+      .reel-photo-fit {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        background: #000;
+        position: relative;
+        z-index: 1;
+      }
 
-.reel-actions {
-  position: absolute;
-  right: 12px;
-  /* posts-feed.reels-mode now already stops above the bottom nav
+      .reel-actions {
+        position: absolute;
+        right: 12px;
+        /* posts-feed.reels-mode now already stops above the bottom nav
          (see its bottom: calc(...) above), so this only needs its own
          small breathing room from the very edge of that shorter
          container — not a second nav-height compensation on top of it. */
-  bottom: 40px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 18px;
-  z-index: 5;
-}
+        bottom: 40px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 18px;
+        z-index: 5;
+      }
 
-.reel-action-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  cursor: pointer;
-}
+      .reel-action-btn {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        cursor: pointer;
+      }
 
-.reel-info {
-  position: absolute;
-  left: 14px;
-  right: 80px;
-  bottom: 8px;
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
-  z-index: 4;
-}
+      .reel-info {
+        position: absolute;
+        left: 14px;
+        right: 80px;
+        bottom: 8px;
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+        z-index: 4;
+      }
 
-/* TikTok-style bottom sheet comment panel: slides up from the bottom,
+      /* TikTok-style bottom sheet comment panel: slides up from the bottom,
        fixed to viewport (not clipped by the reel card), sits above
        everything else in the reel. */
-.reel-comments {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  max-height: 72vh;
-  background: #0b1220;
-  padding: 0;
-  border-top-left-radius: 24px;
-  border-top-right-radius: 24px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  overflow: hidden;
-  z-index: 60;
-  display: flex;
-  flex-direction: column;
-  transform: translateY(100%);
-  transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
-  box-shadow: 0 -16px 48px rgba(0, 0, 0, 0.6);
-}
-.reel-comments.comments-open {
-  transform: translateY(0);
-}
-.reel-comments .comments-header {
-  flex-shrink: 0;
-  text-align: center;
-  padding: 12px 14px 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  position: relative;
-  background: linear-gradient(180deg, rgba(251, 191, 36, 0.04), transparent);
-}
-.reel-comments .comments-drag-handle {
-  width: 40px;
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.18);
-  margin: 0 auto 10px;
-}
-.reel-comments .comments-close-btn {
-  position: absolute;
-  right: 12px;
-  top: 10px;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: rgba(251, 191, 36, 0.1);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fbbf24;
-  transition: background 0.15s ease;
-}
-.reel-comments .comments-close-btn:active {
-  background: rgba(251, 191, 36, 0.2);
-}
-.reel-comments .comments-scroll-area {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px 14px;
-  -webkit-overflow-scrolling: touch;
-}
-.reel-comments .comments-input-row {
-  flex-shrink: 0;
-  padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  background: #0b1220;
-}
+      .reel-comments {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        max-height: 72vh;
+        background: #0b1220;
+        padding: 0;
+        border-top-left-radius: 24px;
+        border-top-right-radius: 24px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+        z-index: 60;
+        display: flex;
+        flex-direction: column;
+        transform: translateY(100%);
+        transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+        box-shadow: 0 -16px 48px rgba(0, 0, 0, 0.6);
+      }
+      .reel-comments.comments-open {
+        transform: translateY(0);
+      }
+      .reel-comments .comments-header {
+        flex-shrink: 0;
+        text-align: center;
+        padding: 12px 14px 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        position: relative;
+        background: linear-gradient(180deg, rgba(251, 191, 36, 0.04), transparent);
+      }
+      .reel-comments .comments-drag-handle {
+        width: 40px;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.18);
+        margin: 0 auto 10px;
+      }
+      .reel-comments .comments-close-btn {
+        position: absolute;
+        right: 12px;
+        top: 10px;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: rgba(251, 191, 36, 0.1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fbbf24;
+        transition: background 0.15s ease;
+      }
+      .reel-comments .comments-close-btn:active {
+        background: rgba(251, 191, 36, 0.2);
+      }
+      .reel-comments .comments-scroll-area {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 14px;
+        -webkit-overflow-scrolling: touch;
+      }
+      .reel-comments .comments-input-row {
+        flex-shrink: 0;
+        padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        background: #0b1220;
+      }
 
-/* Backdrop behind the comment sheet — click to dismiss */
-.comments-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  z-index: 59;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.25s ease;
-}
-.comments-backdrop.backdrop-open {
-  opacity: 1;
-  pointer-events: auto;
-}
+      /* Backdrop behind the comment sheet — click to dismiss */
+      .comments-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+        z-index: 59;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s ease;
+      }
+      .comments-backdrop.backdrop-open {
+        opacity: 1;
+        pointer-events: auto;
+      }
 
-.tiktok-card {
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
-  height: calc(100vh - 140px);
-  display: flex;
-  flex-direction: column;
-  background: #0f172a;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  overflow: hidden;
-  position: relative;
-}
+      .tiktok-card {
+        scroll-snap-align: start;
+        scroll-snap-stop: always;
+        height: calc(100vh - 140px);
+        display: flex;
+        flex-direction: column;
+        background: #0f172a;
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        overflow: hidden;
+        position: relative;
+      }
 
-.tiktok-card .card-media {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  position: relative;
-}
+      .tiktok-card .card-media {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        position: relative;
+      }
 
-.tiktok-card .card-media img,
-.tiktok-card .card-media video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
+      .tiktok-card .card-media img,
+      .tiktok-card .card-media video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
 
-.tiktok-card .card-media::after {
-  content: "";
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 80px;
-  background: linear-gradient(to top, #0f172a, transparent);
-  pointer-events: none;
-}
+      .tiktok-card .card-media::after {
+        content: "";
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 80px;
+        background: linear-gradient(to top, #0f172a, transparent);
+        pointer-events: none;
+      }
 
-.tiktok-card .card-info {
-  padding: 10px 12px 6px;
-  flex-shrink: 0;
-}
+      .tiktok-card .card-info {
+        padding: 10px 12px 6px;
+        flex-shrink: 0;
+      }
 
-.tiktok-card .card-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  justify-content: flex-start;
-  padding: 4px 12px 6px;
-  flex-shrink: 0;
-}
+      .tiktok-card .card-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        justify-content: flex-start;
+        padding: 4px 12px 6px;
+        flex-shrink: 0;
+      }
 
-.action-btn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: #94a3b8;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 6px 8px;
-  border-radius: 10px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  transition:
-    color 0.15s,
-    background 0.15s;
-}
-.action-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
-.action-btn i {
-  font-size: 13px;
-}
+      .action-btn {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        color: #94a3b8;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 6px 8px;
+        border-radius: 10px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .action-btn:hover {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .action-btn i {
+        font-size: 13px;
+      }
 
-.tiktok-card .card-cta {
-  padding: 6px 12px 10px;
-  flex-shrink: 0;
-}
+      .tiktok-card .card-cta {
+        padding: 6px 12px 10px;
+        flex-shrink: 0;
+      }
 
-/* ── SEARCH RESULT CARDS ── */
-#search-results .post-card {
-  background: #0f172a;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 20px;
-  overflow: hidden;
-  transition:
-    transform 0.18s ease,
-    box-shadow 0.18s ease,
-    border-color 0.18s ease;
-  cursor: pointer;
-}
+      /* ── SEARCH RESULT CARDS ── */
+      #search-results .post-card {
+        background: #0f172a;
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 20px;
+        overflow: hidden;
+        transition:
+          transform 0.18s ease,
+          box-shadow 0.18s ease,
+          border-color 0.18s ease;
+        cursor: pointer;
+      }
 
-#search-results .post-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
-  border-color: rgba(251, 191, 36, 0.15);
-}
+      #search-results .post-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+        border-color: rgba(251, 191, 36, 0.15);
+      }
 
-/* ── BOTTOM NAV ── */
-.bottom-nav-container {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: rgba(2, 6, 23, 0.92);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
-  padding: 8px 12px max(20px, env(safe-area-inset-bottom, 20px));
-  z-index: 50;
-  transition: transform 0.3s ease;
-}
+      /* ── BOTTOM NAV ── */
+      .bottom-nav-container {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(2, 6, 23, 0.92);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-top: 1px solid rgba(255, 255, 255, 0.07);
+        padding: 8px 12px max(20px, env(safe-area-inset-bottom, 20px));
+        z-index: 50;
+        transition: transform 0.3s ease;
+      }
 
-.bottom-nav {
-  max-width: 448px;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
+      .bottom-nav {
+        max-width: 448px;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
 
-.bottom-nav button {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  font-size: 8.5px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  transition: color 0.15s;
-  padding: 4px 6px;
-  border-radius: 10px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: #64748b;
-  position: relative;
-}
+      .bottom-nav button {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        font-size: 8.5px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        transition: color 0.15s;
+        padding: 4px 6px;
+        border-radius: 10px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: #64748b;
+        position: relative;
+      }
 
-.bottom-nav button i {
-  font-size: 17px;
-  color: #64748b;
-  transition: color 0.15s;
-}
-.bottom-nav button span {
-  color: #64748b;
-  transition: color 0.15s;
-}
+      .bottom-nav button i {
+        font-size: 17px;
+        color: #64748b;
+        transition: color 0.15s;
+      }
+      .bottom-nav button span {
+        color: #64748b;
+        transition: color 0.15s;
+      }
 
-.bottom-nav button:hover i,
-.bottom-nav button:hover span {
-  color: #94a3b8;
-}
+      .bottom-nav button:hover i,
+      .bottom-nav button:hover span {
+        color: #94a3b8;
+      }
 
-.bottom-nav button.nav-active i {
-  color: #fbbf24;
-}
-.bottom-nav button.nav-active span {
-  color: #ffffff;
-}
+      .bottom-nav button.nav-active i {
+        color: #fbbf24;
+      }
+      .bottom-nav button.nav-active span {
+        color: #ffffff;
+      }
 
-.nav-cart-badge {
-  position: absolute;
-  top: -2px;
-  right: 2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: 999px;
-  background: #fbbf24;
-  color: #000;
-  font-size: 8px;
-  font-weight: 800;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+      .nav-cart-badge {
+        position: absolute;
+        top: -2px;
+        right: 2px;
+        min-width: 14px;
+        height: 14px;
+        padding: 0 3px;
+        border-radius: 999px;
+        background: #fbbf24;
+        color: #000;
+        font-size: 8px;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
 
-.nav-fab-btn {
-  width: 42px !important;
-  height: 42px !important;
-  background: linear-gradient(135deg, #fbbf24, #f59e0b) !important;
-  border-radius: 50% !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  box-shadow: 0 4px 20px rgba(251, 191, 36, 0.4) !important;
-  transform: translateY(-6px) !important;
-  transition:
-    box-shadow 0.15s,
-    transform 0.15s !important;
-  padding: 0 !important;
-  gap: 0 !important;
-}
+      .nav-fab-btn {
+        width: 42px !important;
+        height: 42px !important;
+        background: linear-gradient(135deg, #fbbf24, #f59e0b) !important;
+        border-radius: 50% !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-shadow: 0 4px 20px rgba(251, 191, 36, 0.4) !important;
+        transform: translateY(-6px) !important;
+        transition:
+          box-shadow 0.15s,
+          transform 0.15s !important;
+        padding: 0 !important;
+        gap: 0 !important;
+      }
 
-.nav-fab-btn:hover {
-  box-shadow: 0 6px 28px rgba(251, 191, 36, 0.6) !important;
-  transform: translateY(-8px) scale(1.05) !important;
-}
+      .nav-fab-btn:hover {
+        box-shadow: 0 6px 28px rgba(251, 191, 36, 0.6) !important;
+        transform: translateY(-8px) scale(1.05) !important;
+      }
 
-.nav-fab-btn i {
-  font-size: 15px !important;
-  color: #000 !important;
-}
+      .nav-fab-btn i {
+        font-size: 15px !important;
+        color: #000 !important;
+      }
 
-/* ── MODALS ── */
-#post-modal .modal-inner,
-#detail-modal .modal-inner,
-#avatarModal .modal-inner,
-#editMediaModal .modal-inner {
-  background: #0f172a;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 24px;
-}
+      /* ── MODALS ── */
+      #post-modal .modal-inner,
+      #detail-modal .modal-inner,
+      #avatarModal .modal-inner,
+      #editMediaModal .modal-inner {
+        background: #0f172a;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 24px;
+      }
 
-#profile-container select,
-#post-modal select,
-#post-modal input[type="text"],
-#post-modal input[type="number"],
-#post-modal textarea {
-  transition:
-    border-color 0.2s,
-    box-shadow 0.2s;
-}
+      #profile-container select,
+      #post-modal select,
+      #post-modal input[type="text"],
+      #post-modal input[type="number"],
+      #post-modal textarea {
+        transition:
+          border-color 0.2s,
+          box-shadow 0.2s;
+      }
 
-#profile-container select:focus,
-#post-modal select:focus,
-#post-modal input:focus,
-#post-modal textarea:focus {
-  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.12);
-}
+      #profile-container select:focus,
+      #post-modal select:focus,
+      #post-modal input:focus,
+      #post-modal textarea:focus {
+        box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.12);
+      }
 
-/* ── LOGIN DIVIDER ── */
-.login-divider {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: #475569;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-.login-divider::before,
-.login-divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: rgba(255, 255, 255, 0.08);
-}
+      /* ── LOGIN DIVIDER ── */
+      .login-divider {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #475569;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .login-divider::before,
+      .login-divider::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.08);
+      }
 
-/* ── SCROLLBAR ── */
-::-webkit-scrollbar {
-  width: 4px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #1e293b;
-  border-radius: 4px;
-}
+      /* ── SCROLLBAR ── */
+      ::-webkit-scrollbar {
+        width: 4px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #1e293b;
+        border-radius: 4px;
+      }
 
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.no-scrollbar {
-  scrollbar-width: none;
-}
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar {
+        scrollbar-width: none;
+      }
 
-main {
-  padding-bottom: 100px;
-}
+      main {
+        padding-bottom: 100px;
+      }
 
-.bottom-nav-hidden {
-  transform: translateY(100%);
-}
+      .bottom-nav-hidden {
+        transform: translateY(100%);
+      }
 
-.site-header.header-hidden {
-  transform: translateY(-100%);
-}
+      .site-header.header-hidden {
+        transform: translateY(-100%);
+      }
 
-.no-browser-menu {
-  -webkit-touch-callout: none;
-  user-select: none;
-}
+      .no-browser-menu {
+        -webkit-touch-callout: none;
+        user-select: none;
+      }
 
-.line-clamp-1 {
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.line-clamp-2 {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
+      .line-clamp-1 {
+        display: -webkit-box;
+        -webkit-line-clamp: 1;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .line-clamp-2 {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
 
-/* ── MEDIA EDIT PREVIEW GRID (WhatsApp-style) ── */
-#editMediaModal .edit-thumb-strip {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding: 4px 2px;
-}
-#editMediaModal .edit-thumb {
-  position: relative;
-  width: 56px;
-  height: 56px;
-  border-radius: 10px;
-  overflow: hidden;
-  flex-shrink: 0;
-  border: 2px solid transparent;
-  cursor: pointer;
-}
-#editMediaModal .edit-thumb.active-thumb {
-  border-color: #fbbf24;
-}
-#editMediaModal .edit-thumb img,
-#editMediaModal .edit-thumb video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-#editMediaModal .edit-thumb .remove-thumb-btn {
-  position: absolute;
-  top: 1px;
-  right: 1px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.7);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 8px;
-}
-#editMediaModal .edit-main-preview {
-  width: 100%;
-  aspect-square: 1/1;
-  aspect-ratio: 1/1;
-  background: #000;
-  border-radius: 16px;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-}
-#editMediaModal .edit-main-preview img,
-#editMediaModal .edit-main-preview video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-#editMediaModal .rotate-btn {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-#editMediaModal .crop-btn {
-  position: absolute;
-  top: 10px;
-  right: 54px;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+      /* ── MEDIA EDIT PREVIEW GRID (WhatsApp-style) ── */
+      #editMediaModal .edit-thumb-strip {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding: 4px 2px;
+      }
+      #editMediaModal .edit-thumb {
+        position: relative;
+        width: 56px;
+        height: 56px;
+        border-radius: 10px;
+        overflow: hidden;
+        flex-shrink: 0;
+        border: 2px solid transparent;
+        cursor: pointer;
+      }
+      #editMediaModal .edit-thumb.active-thumb {
+        border-color: #fbbf24;
+      }
+      #editMediaModal .edit-thumb img,
+      #editMediaModal .edit-thumb video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      #editMediaModal .edit-thumb .remove-thumb-btn {
+        position: absolute;
+        top: 1px;
+        right: 1px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.7);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 8px;
+      }
+      #editMediaModal .edit-main-preview {
+        width: 100%;
+        aspect-square: 1/1;
+        aspect-ratio: 1/1;
+        background: #000;
+        border-radius: 16px;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+      }
+      #editMediaModal .edit-main-preview img,
+      #editMediaModal .edit-main-preview video {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      #editMediaModal .rotate-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #editMediaModal .crop-btn {
+        position: absolute;
+        top: 10px;
+        right: 54px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
 
-/* ── CROP OVERLAY ── */
-/* A draggable/resizable box over the image preview. Percent-based
+      /* ── CROP OVERLAY ── */
+      /* A draggable/resizable box over the image preview. Percent-based
        positioning (not pixels) so the crop rect scales correctly if the
        preview element itself ever changes size (e.g. rotation), and so
        the stored crop rect is naturally resolution-independent — it maps
        directly onto the full-resolution source image at export time. */
-#cropOverlay {
-  position: absolute;
-  inset: 0;
-  display: none;
-}
-#cropOverlay.crop-active {
-  display: block;
-}
-#cropOverlay .crop-dim {
-  position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  /* The actual "hole" is punched via a box-shadow spread on
+      #cropOverlay {
+        position: absolute;
+        inset: 0;
+        display: none;
+      }
+      #cropOverlay.crop-active {
+        display: block;
+      }
+      #cropOverlay .crop-dim {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+        /* The actual "hole" is punched via a box-shadow spread on
          .crop-box itself (see below) rather than clip-path, since that's
          far simpler to keep in sync with a dynamically resized box. */
-  pointer-events: none;
-}
-#cropOverlay .crop-box {
-  position: absolute;
-  border: 2px solid #fbbf24;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
-  touch-action: none;
-  cursor: move;
-}
-#cropOverlay .crop-box::before,
-#cropOverlay .crop-box::after {
-  content: "";
-  position: absolute;
-  background: rgba(251, 191, 36, 0.5);
-  pointer-events: none;
-}
-/* Rule-of-thirds guide lines */
-#cropOverlay .crop-box::before {
-  left: 33.333%;
-  right: 33.333%;
-  top: 0;
-  bottom: 0;
-  border-left: 1px solid rgba(255, 255, 255, 0.35);
-  border-right: 1px solid rgba(255, 255, 255, 0.35);
-  background: none;
-}
-#cropOverlay .crop-box::after {
-  top: 33.333%;
-  bottom: 33.333%;
-  left: 0;
-  right: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.35);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.35);
-  background: none;
-}
-#cropOverlay .crop-handle {
-  position: absolute;
-  width: 26px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  touch-action: none;
-}
-#cropOverlay .crop-handle::after {
-  content: "";
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #fbbf24;
-  border: 2px solid #0b0f1a;
-}
-#cropOverlay .crop-handle.nw {
-  top: -13px;
-  left: -13px;
-  cursor: nwse-resize;
-}
-#cropOverlay .crop-handle.ne {
-  top: -13px;
-  right: -13px;
-  cursor: nesw-resize;
-}
-#cropOverlay .crop-handle.sw {
-  bottom: -13px;
-  left: -13px;
-  cursor: nesw-resize;
-}
-#cropOverlay .crop-handle.se {
-  bottom: -13px;
-  right: -13px;
-  cursor: nwse-resize;
-}
+        pointer-events: none;
+      }
+      #cropOverlay .crop-box {
+        position: absolute;
+        border: 2px solid #fbbf24;
+        box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+        touch-action: none;
+        cursor: move;
+      }
+      #cropOverlay .crop-box::before,
+      #cropOverlay .crop-box::after {
+        content: "";
+        position: absolute;
+        background: rgba(251, 191, 36, 0.5);
+        pointer-events: none;
+      }
+      /* Rule-of-thirds guide lines */
+      #cropOverlay .crop-box::before {
+        left: 33.333%;
+        right: 33.333%;
+        top: 0;
+        bottom: 0;
+        border-left: 1px solid rgba(255, 255, 255, 0.35);
+        border-right: 1px solid rgba(255, 255, 255, 0.35);
+        background: none;
+      }
+      #cropOverlay .crop-box::after {
+        top: 33.333%;
+        bottom: 33.333%;
+        left: 0;
+        right: 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.35);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.35);
+        background: none;
+      }
+      #cropOverlay .crop-handle {
+        position: absolute;
+        width: 26px;
+        height: 26px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        touch-action: none;
+      }
+      #cropOverlay .crop-handle::after {
+        content: "";
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #fbbf24;
+        border: 2px solid #0b0f1a;
+      }
+      #cropOverlay .crop-handle.nw {
+        top: -13px;
+        left: -13px;
+        cursor: nwse-resize;
+      }
+      #cropOverlay .crop-handle.ne {
+        top: -13px;
+        right: -13px;
+        cursor: nesw-resize;
+      }
+      #cropOverlay .crop-handle.sw {
+        bottom: -13px;
+        left: -13px;
+        cursor: nesw-resize;
+      }
+      #cropOverlay .crop-handle.se {
+        bottom: -13px;
+        right: -13px;
+        cursor: nwse-resize;
+      }
 
-#cropFooter {
-  display: none;
-  gap: 8px;
-}
-#cropFooter.crop-active {
-  display: flex;
-}
-#editMediaModal .edit-main-footer.crop-active-hide {
-  display: none;
-}
+      #cropFooter {
+        display: none;
+        gap: 8px;
+      }
+      #cropFooter.crop-active {
+        display: flex;
+      }
+      #editMediaModal .edit-main-footer.crop-active-hide {
+        display: none;
+      }
 
-/* ── OPTIONS MENU (3-dot action sheet) ──
+      /* ── OPTIONS MENU (3-dot action sheet) ──
        Reusable bottom-sheet style menu used for both post options
        (delete/report) and comment options (delete/report) — replaces
        the old always-visible trash-bin icon with a less alarming,
        more familiar "..." entry point, matching how Instagram/TikTok/
        WhatsApp surface destructive actions behind a menu instead of a
        bare delete button sitting in the open. */
-.options-menu-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 90;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease;
-}
-.options-menu-backdrop.menu-open {
-  opacity: 1;
-  pointer-events: auto;
-}
-.options-menu-sheet {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 91;
-  background: #161b29;
-  border-top-left-radius: 20px;
-  border-top-right-radius: 20px;
-  padding: 8px 0 calc(10px + env(safe-area-inset-bottom, 0px));
-  transform: translateY(100%);
-  transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
-  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.45);
-}
-.options-menu-sheet.menu-open {
-  transform: translateY(0);
-}
-.options-menu-sheet .options-menu-handle {
-  width: 36px;
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.2);
-  margin: 4px auto 8px;
-}
-.options-menu-sheet button {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 20px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #e2e8f0;
-  background: none;
-  border: none;
-  text-align: left;
-}
-.options-menu-sheet button:active {
-  background: rgba(255, 255, 255, 0.06);
-}
-.options-menu-sheet button.danger {
-  color: #f87171;
-}
-.options-menu-sheet button i {
-  width: 18px;
-  text-align: center;
-  font-size: 15px;
-}
-.options-menu-sheet .options-menu-divider {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.06);
-  margin: 4px 0;
-}
+      .options-menu-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 90;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+      }
+      .options-menu-backdrop.menu-open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .options-menu-sheet {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 91;
+        background: #161b29;
+        border-top-left-radius: 20px;
+        border-top-right-radius: 20px;
+        padding: 8px 0 calc(10px + env(safe-area-inset-bottom, 0px));
+        transform: translateY(100%);
+        transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+        box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.45);
+      }
+      .options-menu-sheet.menu-open {
+        transform: translateY(0);
+      }
+      .options-menu-sheet .options-menu-handle {
+        width: 36px;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.2);
+        margin: 4px auto 8px;
+      }
+      .options-menu-sheet button {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 20px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #e2e8f0;
+        background: none;
+        border: none;
+        text-align: left;
+      }
+      .options-menu-sheet button:active {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .options-menu-sheet button.danger {
+        color: #f87171;
+      }
+      .options-menu-sheet button i {
+        width: 18px;
+        text-align: center;
+        font-size: 15px;
+      }
+      .options-menu-sheet .options-menu-divider {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.06);
+        margin: 4px 0;
+      }
 
-/* ── PREMIUM CAMPUS SETTINGS ── */
-.settings-card {
-  background: linear-gradient(
-    180deg,
-    rgba(30, 41, 59, 0.5) 0%,
-    rgba(15, 23, 42, 0.5) 100%
-  );
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  border-radius: 20px;
-  overflow: hidden;
-}
-.settings-card + .settings-card {
-  margin-top: 14px;
-}
-.settings-card-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 16px 16px 12px;
-}
-.settings-card-icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(251, 191, 36, 0.12);
-  color: #fbbf24;
-  font-size: 13px;
-  flex-shrink: 0;
-}
-.settings-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 13px 16px;
-  border-top: 1px solid rgba(148, 163, 184, 0.08);
-}
-.settings-row:first-of-type {
-  border-top: none;
-}
-.settings-row-link {
-  width: 100%;
-  text-align: left;
-  color: #fff;
-  transition: background 0.15s;
-}
-.settings-row-link:active {
-  background: rgba(255, 255, 255, 0.04);
-}
-.settings-row-link .chev {
-  color: #475569;
-  font-size: 11px;
-  transition: transform 0.15s;
-}
+      /* ── PREMIUM CAMPUS SETTINGS ── */
+      .settings-card {
+        background: linear-gradient(
+          180deg,
+          rgba(30, 41, 59, 0.5) 0%,
+          rgba(15, 23, 42, 0.5) 100%
+        );
+        border: 1px solid rgba(148, 163, 184, 0.12);
+        border-radius: 20px;
+        overflow: hidden;
+      }
+      .settings-card + .settings-card {
+        margin-top: 14px;
+      }
+      .settings-card-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 16px 16px 12px;
+      }
+      .settings-card-icon {
+        width: 30px;
+        height: 30px;
+        border-radius: 9px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(251, 191, 36, 0.12);
+        color: #fbbf24;
+        font-size: 13px;
+        flex-shrink: 0;
+      }
+      .settings-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 13px 16px;
+        border-top: 1px solid rgba(148, 163, 184, 0.08);
+      }
+      .settings-row:first-of-type {
+        border-top: none;
+      }
+      .settings-row-link {
+        width: 100%;
+        text-align: left;
+        color: #fff;
+        transition: background 0.15s;
+      }
+      .settings-row-link:active {
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .settings-row-link .chev {
+        color: #475569;
+        font-size: 11px;
+        transition: transform 0.15s;
+      }
 
-/* Styled switch used in place of raw checkboxes for a more premium feel */
-.settings-switch {
-  position: relative;
-  width: 42px;
-  height: 24px;
-  flex-shrink: 0;
-  appearance: none;
-  -webkit-appearance: none;
-  background: #334155;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: background 0.2s;
-  outline: none;
-}
-.settings-switch:checked {
-  background: #fbbf24;
-}
-.settings-switch::before {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #fff;
-  transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-}
-.settings-switch:checked::before {
-  transform: translateX(18px);
-}
+      /* Styled switch used in place of raw checkboxes for a more premium feel */
+      .settings-switch {
+        position: relative;
+        width: 42px;
+        height: 24px;
+        flex-shrink: 0;
+        appearance: none;
+        -webkit-appearance: none;
+        background: #334155;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: background 0.2s;
+        outline: none;
+      }
+      .settings-switch:checked {
+        background: #fbbf24;
+      }
+      .settings-switch::before {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #fff;
+        transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      }
+      .settings-switch:checked::before {
+        transform: translateX(18px);
+      }
 
-.campus-id-strip {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border-radius: 18px;
-  background: linear-gradient(
-    135deg,
-    rgba(251, 191, 36, 0.14) 0%,
-    rgba(251, 191, 36, 0.02) 100%
-  );
-  border: 1px solid rgba(251, 191, 36, 0.2);
-  margin-bottom: 14px;
-}
-.campus-id-strip .badge-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #34d399;
-  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
-  flex-shrink: 0;
-}
+      .campus-id-strip {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: linear-gradient(
+          135deg,
+          rgba(251, 191, 36, 0.14) 0%,
+          rgba(251, 191, 36, 0.02) 100%
+        );
+        border: 1px solid rgba(251, 191, 36, 0.2);
+        margin-bottom: 14px;
+      }
+      .campus-id-strip .badge-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #34d399;
+        box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
+        flex-shrink: 0;
+      }
 
-/* ── INFO SHEET (Privacy Policy / Help & Support / Blocked Users) ── */
-.info-sheet-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 95;
-  background: #0b0f1a;
-  display: flex;
-  flex-direction: column;
-  transform: translateX(100%);
-  transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
-}
-.info-sheet-overlay.sheet-open {
-  transform: translateX(0);
-}
-.info-sheet-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-  padding-top: calc(16px + env(safe-area-inset-top, 0px));
-  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-  flex-shrink: 0;
-}
-.info-sheet-back {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.06);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  flex-shrink: 0;
-}
-.info-sheet-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px 20px calc(24px + env(safe-area-inset-bottom, 0px));
-}
-.info-sheet-body h4 {
-  color: #fbbf24;
-  font-weight: 800;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin: 20px 0 8px;
-}
-.info-sheet-body h4:first-child {
-  margin-top: 0;
-}
-.info-sheet-body p {
-  color: #cbd5e1;
-  font-size: 13px;
-  line-height: 1.7;
-  margin-bottom: 10px;
-}
-.info-sheet-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 60px 20px;
-  color: #64748b;
-}
-.blocked-user-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 0;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
-}
-.blocked-user-row img {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  object-fit: cover;
-}
+      /* ── INFO SHEET (Privacy Policy / Help & Support / Blocked Users) ── */
+      .info-sheet-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 95;
+        background: #0b0f1a;
+        display: flex;
+        flex-direction: column;
+        transform: translateX(100%);
+        transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+      }
+      .info-sheet-overlay.sheet-open {
+        transform: translateX(0);
+      }
+      .info-sheet-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 16px;
+        padding-top: calc(16px + env(safe-area-inset-top, 0px));
+        border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        flex-shrink: 0;
+      }
+      .info-sheet-back {
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.06);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        flex-shrink: 0;
+      }
+      .info-sheet-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+      }
+      .info-sheet-body h4 {
+        color: #fbbf24;
+        font-weight: 800;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin: 20px 0 8px;
+      }
+      .info-sheet-body h4:first-child {
+        margin-top: 0;
+      }
+      .info-sheet-body p {
+        color: #cbd5e1;
+        font-size: 13px;
+        line-height: 1.7;
+        margin-bottom: 10px;
+      }
+      .info-sheet-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 60px 20px;
+        color: #64748b;
+      }
+      .blocked-user-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 0;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      }
+      .blocked-user-row img {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        object-fit: cover;
+      }
 
-/* ── PUBLIC PROFILE (viewing someone else's page) ── */
-.public-profile-header {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 12px 0 20px;
-}
-.public-profile-header img {
-  width: 84px;
-  height: 84px;
-  border-radius: 50%;
-  object-fit: cover;
-  border: 3px solid rgba(251, 191, 36, 0.4);
-}
-.public-profile-stats {
-  display: flex;
-  justify-content: center;
-  gap: 28px;
-  padding: 16px 0;
-  border-top: 1px solid rgba(148, 163, 184, 0.1);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-  margin: 16px 0;
-}
-.public-profile-stats .stat-value {
-  color: #fff;
-  font-weight: 900;
-  font-size: 18px;
-  display: block;
-  text-align: center;
-}
-.public-profile-stats .stat-label {
-  color: #64748b;
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
+      /* ── PUBLIC PROFILE (viewing someone else's page) ── */
+      .public-profile-header {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        padding: 12px 0 20px;
+      }
+      .public-profile-header img {
+        width: 84px;
+        height: 84px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 3px solid rgba(251, 191, 36, 0.4);
+      }
+      .public-profile-stats {
+        display: flex;
+        justify-content: center;
+        gap: 28px;
+        padding: 16px 0;
+        border-top: 1px solid rgba(148, 163, 184, 0.1);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        margin: 16px 0;
+      }
+      .public-profile-stats .stat-value {
+        color: #fff;
+        font-weight: 900;
+        font-size: 18px;
+        display: block;
+        text-align: center;
+      }
+      .public-profile-stats .stat-label {
+        color: #64748b;
+        font-size: 9px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
 
-/* ── MY GIGS & POSTS — press-and-hold multi-select ── */
-#grid-select-toolbar.select-mode-active {
-  display: flex;
-}
-.grid-tile.select-mode .grid-tile-check {
-  opacity: 1;
-  pointer-events: auto;
-}
-.grid-tile-check {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: rgba(15, 23, 42, 0.75);
-  border: 2px solid rgba(255, 255, 255, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: transparent;
-  font-size: 11px;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity 0.15s,
-    background 0.15s,
-    border-color 0.15s;
-  z-index: 2;
-}
-.grid-tile.tile-selected .grid-tile-check {
-  background: #fbbf24;
-  border-color: #fbbf24;
-  color: #0b0f1a;
-}
-.grid-tile.tile-selected {
-  outline: 2px solid #fbbf24;
-  outline-offset: -2px;
-}
+      /* ── MY GIGS & POSTS — press-and-hold multi-select ── */
+      #grid-select-toolbar.select-mode-active {
+        display: flex;
+      }
+      .grid-tile.select-mode .grid-tile-check {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .grid-tile-check {
+        position: absolute;
+        top: 6px;
+        left: 6px;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: rgba(15, 23, 42, 0.75);
+        border: 2px solid rgba(255, 255, 255, 0.55);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: transparent;
+        font-size: 11px;
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          opacity 0.15s,
+          background 0.15s,
+          border-color 0.15s;
+        z-index: 2;
+      }
+      .grid-tile.tile-selected .grid-tile-check {
+        background: #fbbf24;
+        border-color: #fbbf24;
+        color: #0b0f1a;
+      }
+      .grid-tile.tile-selected {
+        outline: 2px solid #fbbf24;
+        outline-offset: -2px;
+      }
 
-.post-options-trigger {
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  color: #94a3b8;
-  background: none;
-  border: none;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-.post-options-trigger:active {
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-}
+      .post-options-trigger {
+        width: 30px;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        color: #94a3b8;
+        background: none;
+        border: none;
+        transition:
+          background 0.15s,
+          color 0.15s;
+      }
+      .post-options-trigger:active {
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+      }
