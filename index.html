@@ -180,6 +180,13 @@
             >
               Services
             </button>
+            <button
+              onclick="window.filterFeed('deals', this)"
+              data-tab="deals"
+              class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300 flex items-center gap-1.5"
+            >
+              <i class="fas fa-bolt text-amber-400 text-[10px]"></i> <span>Deals</span>
+            </button>
           </div>
           <script>
             // Fix: the "All" tab used to be hardcoded as visually active
@@ -201,6 +208,7 @@
                   "following",
                   "product",
                   "skill",
+                  "deals",
                 ];
                 const saved = localStorage.getItem("campus_market_feed_tab");
                 const activeTab = validTabs.includes(saved) ? saved : "all";
@@ -218,6 +226,36 @@
                 // contexts — falling back to the default "All" highlight
                 // (already the else-branch above) is a fine degrade.
               }
+            })();
+
+            // Theme bootstrap: picks up the saved dark / light / system
+            // preference and applies the matching data-theme attribute
+            // BEFORE the first paint, so the page renders in the right
+            // palette straight away — no flash of the wrong colors on
+            // reload. System mode also subscribes to the OS-level
+            // prefers-color-scheme media query, so toggling the device's
+            // dark/light setting while the app is open updates the page
+            // live without a reload.
+            (function () {
+              try {
+                const valid = ["dark", "light", "system"];
+                const saved = localStorage.getItem("campus_market_theme");
+                const mode = valid.includes(saved) ? saved : "dark";
+                const apply = (m) => {
+                  const resolved = m === "system"
+                    ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+                    : m;
+                  document.documentElement.setAttribute("data-theme", resolved);
+                  document.documentElement.setAttribute("data-theme-mode", m);
+                };
+                apply(mode);
+                if (mode === "system" && window.matchMedia) {
+                  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+                  const onChange = () => apply("system");
+                  if (mq.addEventListener) mq.addEventListener("change", onChange);
+                  else if (mq.addListener) mq.addListener(onChange);
+                }
+              } catch (_) { /* dark default is fine */ }
             })();
           </script>
 
@@ -733,6 +771,24 @@
                         checked
                         class="settings-switch"
                       />
+                    </label>
+                    <label class="settings-row cursor-pointer">
+                      <div class="min-w-0">
+                        <p class="text-white text-xs font-bold">
+                          Theme
+                        </p>
+                        <p class="text-slate-500 text-[10px] mt-0.5">
+                          Dark, light, or follow your device setting
+                        </p>
+                      </div>
+                      <select
+                        id="settingsThemeSelect"
+                        class="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-white text-[11px] font-bold uppercase tracking-wider focus:outline-none focus:border-amber-400 transition"
+                      >
+                        <option value="dark">Dark</option>
+                        <option value="light">Light</option>
+                        <option value="system">System</option>
+                      </select>
                     </label>
                   </div>
                 </div>
@@ -1793,5 +1849,6 @@
       }
     </script>
   <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}' crossorigin="anonymous"></script>
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}' crossorigin="anonymous"></script>
 </body>
 </html>

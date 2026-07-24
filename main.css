@@ -7,8 +7,44 @@
    reported when toggling device dark/light mode. This — plus the
    matching <meta name="color-scheme"> tag in index.html — opts out of
    that guessing entirely. */
+/* Theme tokens — chosen once per active mode (dark / light / system)
+   in :root via the [data-theme="..."] selector below. Default = dark
+   so the app looks the same on every first paint even before the
+   bootstrap script swaps the attribute based on the saved preference. */
 :root {
   color-scheme: dark;
+  --bg-base:        #020617;
+  --bg-elevated:    #0f172a;
+  --bg-card:        #0f172a;
+  --bg-soft:        #1e293b;
+  --border-soft:    rgba(255, 255, 255, 0.08);
+  --text-primary:   #f1f5f9;
+  --text-muted:     #94a3b8;
+  --text-dim:       #64748b;
+  --accent:         #fbbf24;
+  --accent-text:    #020617;
+  --danger:         #f43f5e;
+  --danger-bg:      rgba(244, 63, 94, 0.15);
+  --placeholder:    #475569;
+  --shadow-card:    0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-base:        #f8fafc;
+  --bg-elevated:    #ffffff;
+  --bg-card:        #ffffff;
+  --bg-soft:        #f1f5f9;
+  --border-soft:    rgba(15, 23, 42, 0.10);
+  --text-primary:   #0f172a;
+  --text-muted:     #475569;
+  --text-dim:       #64748b;
+  --accent:         #d97706;
+  --accent-text:    #ffffff;
+  --danger:         #be123c;
+  --danger-bg:      rgba(190, 18, 60, 0.10);
+  --placeholder:    #94a3b8;
+  --shadow-card:    0 1px 2px rgba(15, 23, 42, 0.06);
 }
 
 html,
@@ -17,8 +53,14 @@ body {
   padding: 0;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background-color: #020617; /* Slate-950 fallback match */
+  background-color: var(--bg-base);
+  color: var(--text-primary);
   color-scheme: dark;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+:root[data-theme="light"] body {
+  color-scheme: light;
 }
 
 /* Eliminate the blue tap overlay flash on mobile browsers */
@@ -292,14 +334,72 @@ html {
         }
         @media (min-width: 1440px) {
           body.feed-tab-grid .desktop-center-column {
-            max-width: 1160px;
+            max-width: 1320px;
           }
           body.feed-tab-grid .desktop-center-column main,
           body.feed-tab-grid #feed-container {
-            max-width: 1160px;
+            max-width: 1320px;
           }
           body.feed-tab-grid .site-header:not(.header-reels-mode) {
-            max-width: 1160px;
+            max-width: 1320px;
+          }
+        }
+
+        /* Profile widens beyond the 520px reading cap so the masonry
+         grids here actually fill the screen like the Products/All
+         tabs. The old cap kept Profile stuck at phone-column width on
+         a 27" monitor — the visible "Profile tab is still small
+         compared to Product tab" complaint. Matches the same
+         breakpoint Products/All already use. */
+        body.profile-tab #profile-container,
+        body.profile-tab .desktop-center-column {
+          max-width: 900px;
+        }
+        body.profile-tab .desktop-center-column main,
+        body.profile-tab #profile-container {
+          max-width: 900px;
+        }
+        body.profile-tab .site-header:not(.header-reels-mode) {
+          max-width: 900px;
+        }
+        @media (min-width: 1440px) {
+          body.profile-tab #profile-container,
+          body.profile-tab .desktop-tab .desktop-center-column,
+          body.profile-tab .desktop-center-column {
+            max-width: 1320px;
+          }
+          body.profile-tab .desktop-center-column main,
+          body.profile-tab #profile-container {
+            max-width: 1320px;
+          }
+          body.profile-tab .site-header:not(.header-reels-mode) {
+            max-width: 1320px;
+          }
+        }
+
+        /* Deals tab: same desktop widening as Products so the live-sale
+         masonry fills the screen rather than sitting in the narrow
+         reading column. */
+        body.feed-tab-deals .desktop-center-column {
+          max-width: 900px;
+        }
+        body.feed-tab-deals .desktop-center-column main,
+        body.feed-tab-deals #feed-container {
+          max-width: 900px;
+        }
+        body.feed-tab-deals .site-header:not(.header-reels-mode) {
+          max-width: 900px;
+        }
+        @media (min-width: 1440px) {
+          body.feed-tab-deals .desktop-center-column {
+            max-width: 1320px;
+          }
+          body.feed-tab-deals .desktop-center-column main,
+          body.feed-tab-deals #feed-container {
+            max-width: 1320px;
+          }
+          body.feed-tab-deals .site-header:not(.header-reels-mode) {
+            max-width: 1320px;
           }
         }
 
@@ -809,6 +909,17 @@ html {
         .masonry-columns,
         .masonry-columns-services {
           column-count: 4;
+        }
+      }
+      /* Extra column for the Product tab on really wide desktop monitors
+       (1920+) — matches the request to "have one more grid added to
+       desktop version" so 27"+ displays don't waste horizontal space
+       showing only four giant tiles. */
+      @media (min-width: 1920px) {
+        .masonry-columns,
+        .masonry-columns-services,
+        .masonry-columns-feed {
+          column-count: 5;
         }
       }
 

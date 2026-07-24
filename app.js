@@ -108,9 +108,9 @@ let isOnline            = navigator.onLine;
 // filterFeed(currentFeedType, ...)) naturally lands back on the right
 // tab. Falls back to 'all' for first-ever visits or an unrecognized
 // stored value.
-const _validFeedTabs = ['all', 'reels', 'following', 'product', 'skill'];
+const _validFeedTabs = ['all', 'reels', 'following', 'product', 'skill', 'deals'];
 const _savedFeedTab  = localStorage.getItem('campus_market_feed_tab');
-let currentFeedType   = _validFeedTabs.includes(_savedFeedTab) ? _savedFeedTab : 'all'; // tracks active tab: all | reels | following | product | skill
+let currentFeedType   = _validFeedTabs.includes(_savedFeedTab) ? _savedFeedTab : 'all'; // tracks active tab: all | reels | following | product | skill | deals
 let _feedLoadGeneration = 0;
 let _lastRenderedFeedGeneration = -1;
 
@@ -219,6 +219,46 @@ const likedPostIds      = new Set(
     JSON.parse(localStorage.getItem('campus_market_likes') || '[]').map(idKey)
 );
 const openCommentIds    = new Set(); // tracks which comment sections are open
+
+// Theme mode — persisted 'dark' | 'light' | 'system' (default 'dark' for
+// new users; 'system' means follow prefers-color-scheme; otherwise forced
+// dark or light). The actual data-theme attribute on <html> is set by
+// the inline bootstrap script in index.html (before first paint) and
+// then re-applied if the user changes it via the settings UI.
+const _validThemeModes = ['dark', 'light', 'system'];
+const _savedThemeMode = localStorage.getItem('campus_market_theme');
+let currentThemeMode = _validThemeModes.includes(_savedThemeMode) ? _savedThemeMode : 'dark';
+const systemPrefersLight = () => window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+
+// Applies the theme mode to <html>. Both the resolved value (dark/light)
+// and the mode the user picked are stored on the element so CSS and the
+// settings UI can read either. System mode listens for OS-level changes
+// and re-applies automatically.
+window.applyTheme = function (mode) {
+    const valid = ['dark', 'light', 'system'];
+    if (!valid.includes(mode)) mode = 'dark';
+    const resolved = mode === 'system'
+        ? (systemPrefersLight() ? 'light' : 'dark')
+        : mode;
+    document.documentElement.setAttribute('data-theme', resolved);
+    document.documentElement.setAttribute('data-theme-mode', mode);
+    currentThemeMode = mode;
+    try { localStorage.setItem('campus_market_theme', mode); } catch (_) {}
+    // Sync the UI selector if it exists yet (settings may not have been
+    // initialized when this fires).
+    const sel = document.getElementById('settingsThemeSelect');
+    if (sel) sel.value = mode;
+};
+
+// Wire up the live OS-preference listener exactly once — system mode
+// re-applies whenever the device's dark/light setting flips while the
+// app is open.
+if (_savedThemeMode === 'system' && window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    const onChange = () => { if (currentThemeMode === 'system') window.applyTheme('system'); };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange);
+}
 
 let userCartList = JSON.parse(localStorage.getItem("campus_market_cart") || "[]");
 
@@ -1501,8 +1541,9 @@ window.navigateTo = function (viewId, btn = null) {
     if (viewId === 'feed') {
         syncFeedTabBodyClasses(currentFeedType);
     } else {
-        document.body.classList.remove('feed-tab-all', 'feed-tab-grid');
+        document.body.classList.remove('feed-tab-all', 'feed-tab-grid', 'feed-tab-deals');
     }
+    document.body.classList.toggle('profile-tab', viewId === 'profile');
 
     clearNavHighlights();
     setNavHighlight(btn, viewId);
@@ -1707,7 +1748,7 @@ window.openDetail = async function (postId, fromBack = false) {
             </button>` : '';
 
         const isAddedToCart  = userCartList.some(item => idKey(item.id) === idKey(d.id));
-        const cartText       = isAddedToCart ? "✓ Added to Chart" : "Add to Chart List";
+        const cartText       = isAddedToCart ? "✓ In Cart" : "Add to Cart";
         const cartColorClass = isAddedToCart
             ? "bg-slate-800 border border-slate-700 text-slate-400"
             : "bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
@@ -1715,7 +1756,7 @@ window.openDetail = async function (postId, fromBack = false) {
         const ctaLabel = d.type === 'skill' ? 'Contact' : 'Contact Seller';
         const safeSwapBlock = renderSafeSwapZoneCard(d);
         const isSoldDetail = !!d.sold_at;
-        const hasDiscountDetail = d.original_price && Number(d.original_price) > Number(d.price || 0);
+        const hasDiscountDetail = d.original_price != null && Number(d.original_price) > 0 && Number(d.original_price) !== Number(d.price || 0);
         const saleActiveDetail = d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
         const detailActionsBlock = isSoldDetail
             ? `<p class="text-center text-slate-500 text-xs uppercase tracking-widest py-2">This listing is no longer available</p>`
@@ -1922,6 +1963,12 @@ window.openManageListingSheet = async function (postId) {
             <h2 class="text-lg font-bold text-white">Manage Listing</h2>
             <p class="text-xs text-slate-500 -mt-3">${esc(post.title)}</p>
 
+            <div>
+                <label for="managePrice" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Listing price (GH₵)</label>
+                <p class="text-[10px] text-slate-500 mb-1.5">Change your listing price without re-uploading. Saving marks the post as new in the feed.</p>
+                <input type="number" id="managePrice" min="0" max="1000000" step="0.01" value="${post.price ?? 0}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+            </div>
+
             <label class="flex items-center justify-between p-3 bg-slate-900 rounded-xl border border-slate-800 cursor-pointer">
                 <span class="text-sm font-semibold text-white">Mark as Sold</span>
                 <input type="checkbox" id="manageSoldToggle" ${isSold ? 'checked' : ''} class="w-5 h-5 accent-amber-400">
@@ -1929,8 +1976,8 @@ window.openManageListingSheet = async function (postId) {
             <p class="text-[10px] text-slate-500 -mt-3">Sold listings are hidden from browsing and automatically removed after 48 hours.</p>
 
             <div>
-                <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Discount price (optional)</label>
-                <p class="text-[10px] text-slate-500 mb-1.5">Shows your current price GH₵${esc(String(post.price || 0))} as a deal — set the ORIGINAL (higher) price here.</p>
+                <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Discount price (optional, any amount)</label>
+                <p class="text-[10px] text-slate-500 mb-1.5">Set any ORIGINAL price (typically higher) — your listing shows a strikethrough on the old price next to the deal.</p>
                 <input type="number" id="manageOriginalPrice" min="0" max="1000000" step="0.01" value="${post.original_price ?? ''}" placeholder="e.g. ${(Number(post.price || 0) * 1.2).toFixed(2)}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
@@ -1952,9 +1999,21 @@ window.closeManageListingSheet = function (fromPop = false) {
 
 window._saveManageListing = async function (postId) {
     const soldToggle = document.getElementById('manageSoldToggle');
+    const priceInput = document.getElementById('managePrice');
     const originalPriceInput = document.getElementById('manageOriginalPrice');
     const saleEndsInput = document.getElementById('manageSaleEndsAt');
-    if (!soldToggle || !originalPriceInput || !saleEndsInput || !currentUserData) return;
+    if (!soldToggle || !priceInput || !originalPriceInput || !saleEndsInput || !currentUserData) return;
+
+    const newPriceRaw = priceInput.value.trim();
+    const parsedPrice = newPriceRaw !== '' ? parseFloat(newPriceRaw) : null;
+    if (newPriceRaw !== '' && (isNaN(parsedPrice) || parsedPrice < 0)) {
+        showToast("Price can't be negative.");
+        return;
+    }
+    if (parsedPrice !== null && parsedPrice > 1000000) {
+        showToast('That price seems too high — please double-check it.');
+        return;
+    }
 
     const originalPriceRaw = originalPriceInput.value.trim();
     const parsedOriginalPrice = originalPriceRaw ? parseFloat(originalPriceRaw) : null;
@@ -1975,10 +2034,21 @@ window._saveManageListing = async function (postId) {
     }
 
     const updates = {
-        sold_at: soldToggle.checked ? new Date().toISOString() : null,
-        original_price: parsedOriginalPrice,
-        sale_ends_at: saleEndsIso
+        sold_at: soldToggle.checked ? new Date().toISOString() : null
     };
+    if (parsedPrice !== null) {
+        updates.price = parsedPrice;
+    }
+    if (originalPriceRaw === '') {
+        updates.original_price = null;
+    } else if (parsedOriginalPrice !== null) {
+        updates.original_price = parsedOriginalPrice;
+    }
+    if (!saleEndsRaw) {
+        updates.sale_ends_at = null;
+    } else if (saleEndsIso) {
+        updates.sale_ends_at = saleEndsIso;
+    }
 
     const { error } = await supabase
         .from('posts')
@@ -1992,15 +2062,15 @@ window._saveManageListing = async function (postId) {
         return;
     }
 
-    // Keep the in-memory cache consistent so the feed/detail view reflect
-    // the change immediately without needing a full reload.
     const cached = allCachedPosts.find(({ id }) => idKey(id) === idKey(postId));
-    if (cached?.data) Object.assign(cached.data, updates);
+    if (cached?.data) Object.assign(cached.data, { ...updates, created_at: new Date().toISOString() });
 
     showToast('Listing updated.');
     window.closeManageListingSheet();
     renderFeedFromCache();
 };
+
+// ─── 10. LOGIN MODAL ──────────────────────────────────────────────────────────
 
 // ─── 10. LOGIN MODAL ──────────────────────────────────────────────────────────
 window.openLoginModal = function () {
@@ -4509,9 +4579,14 @@ function renderFeedCard(id, d, options = {}) {
     }
 
 
+    const _saleActiveForCard = d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
+    const _isFlashPost = _saleActiveForCard && d.original_price != null && String(d.original_price) !== String(d.price || 0);
+    const _originalPriceNum = d.original_price != null ? Number(d.original_price) : null;
+    // Strikethrough applies for any original_price != price (lower OR higher).
+    const _strikePrice = _isFlashPost;
+
     return `
     <div class="bg-slate-900 border-b border-slate-800/60 w-full" id="feed-card-${escAttr(id)}">
-
 
         <div class="flex items-center justify-between px-3 py-2.5">
             <div class="feed-profile-trigger flex items-center gap-2.5 min-w-0 cursor-pointer" data-user-id="${escAttr(d.user_id)}">
@@ -4619,7 +4694,7 @@ function renderFeedMasonryCard(id, d, options = {}) {
     const bookmarkClass = isAddedToCart ? 'fas fa-bookmark text-amber-400' : 'far fa-bookmark text-white/80';
 
     const isSold = !!d.sold_at;
-    const hasDiscount = d.original_price && Number(d.original_price) > Number(d.price || 0);
+    const hasDiscount = d.original_price != null && Number(d.original_price) > 0 && Number(d.original_price) !== Number(d.price || 0);
     const saleActive = d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
 
     registerPostContext(id, d, isVideo ? '' : primaryUrl);
@@ -4668,6 +4743,10 @@ function renderProductGridCard(id, d) {
     const isAddedToCart = userCartList.some(item => idKey(item.id) === idKey(id));
     const bookmarkClass = isAddedToCart ? "fas fa-bookmark text-amber-400" : "far fa-bookmark text-white/80";
 
+    const isSolid = !!d.sold_at;
+    const hasDiscount = d.original_price != null && Number(d.original_price) > 0 && Number(d.original_price) !== Number(d.price || 0);
+    const saleActive = d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
+
     const viewer = currentUserData;
     const showFollow = viewer && d.user_id !== viewer.id;
     const isFollowingPoster = followingUserIds.has(idKey(d.user_id));
@@ -4686,15 +4765,18 @@ function renderProductGridCard(id, d) {
             ${isVideo
                 ? `<video class="w-full h-auto block" muted loop playsinline preload="metadata" src="${esc(mediaUrl)}#t=0.1"></video>
                    <div class="absolute top-2 left-2 w-6 h-6 rounded-full bg-black/50 flex items-center justify-center text-white text-[10px]"><i class="fas fa-play"></i></div>`
-                : `<img class="w-full h-auto block" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
+                : `<img class="w-full h-auto block ${isSolid ? 'opacity-40 grayscale' : ''}" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
             }
+            ${isSolid ? `<div class="absolute inset-0 flex items-center justify-center"><span class="bg-black/80 text-white text-[10px] font-black uppercase tracking-[0.2em] px-3 py-1 rounded-full border border-white/20">Sold</span></div>` : ''}
+            ${!isSolid && saleActive ? `<div class="sale-countdown-badge absolute top-2 left-2 bg-rose-500/90 text-white text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</div>` : ''}
             <button
                 onclick="event.stopPropagation(); window.toggleCartItem('${escAttr(id)}')"
                 class="absolute top-2 right-2 w-7 h-7 flex items-center justify-center bg-black/50 rounded-full active:scale-90 transition">
                 <i class="${bookmarkClass} text-xs"></i>
             </button>
-            <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-2 pt-4 pb-1.5">
+            <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2 pt-5 pb-1.5 flex items-baseline gap-1.5">
                 <span class="text-amber-400 font-black text-[11px]">GH₵${esc(String(d.price || 0))}</span>
+                ${hasDiscount ? `<span class="text-slate-400 text-[9px] line-through">GH₵${esc(String(d.original_price))}</span>` : ''}
             </div>
         </div>
         <div class="p-2">
@@ -4760,6 +4842,10 @@ function renderServiceGridCard(id, d) {
 
     const isVideo = d.media_type === 'video';
 
+    const isSolid = !!d.sold_at;
+    const hasDiscount = d.original_price != null && Number(d.original_price) > 0 && Number(d.original_price) !== Number(d.price || 0);
+    const saleActive = d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
+
     const viewer = currentUserData;
     const showFollow = viewer && d.user_id !== viewer.id;
     const isFollowingPoster = followingUserIds.has(idKey(d.user_id));
@@ -4778,13 +4864,16 @@ function renderServiceGridCard(id, d) {
             ${isVideo
                 ? `<video class="w-full h-auto block" muted loop playsinline preload="metadata" src="${esc(mediaUrl)}#t=0.1"></video>
                    <div class="absolute top-2.5 left-2.5 w-7 h-7 rounded-full bg-black/50 flex items-center justify-center text-white text-xs"><i class="fas fa-play"></i></div>`
-                : `<img class="w-full h-auto block" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
+                : `<img class="w-full h-auto block ${isSolid ? 'opacity-40 grayscale' : ''}" src="${esc(mediaUrl)}" alt="${esc(d.title)}" loading="lazy">`
             }
-            <div class="absolute top-2.5 right-2.5 bg-amber-400 text-black text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full">
+            ${isSolid ? `<div class="absolute inset-0 flex items-center justify-center"><span class="bg-black/80 text-white text-[10px] font-black uppercase tracking-[0.2em] px-3 py-1 rounded-full border border-white/20">Sold</span></div>` : ''}
+            ${!isSolid && saleActive ? `<div class="sale-countdown-badge absolute top-9 right-2.5 bg-rose-500/90 text-white text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</div>` : ''}
+            <div class="absolute top-2.5 right-2.5 ${saleActive ? 'top-14' : ''} bg-amber-400 text-black text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full">
                 <i class="fas fa-bolt text-[9px]"></i> Service
             </div>
-            <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-3 pt-6 pb-2">
+            <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-3 pt-6 pb-2 flex items-baseline gap-1.5">
                 <span class="text-amber-400 font-black text-sm">GH₵${esc(String(d.price || 0))}</span>
+                ${hasDiscount ? `<span class="text-slate-400 text-[10px] line-through">GH₵${esc(String(d.original_price))}</span>` : ''}
             </div>
         </div>
         <div class="p-3">
@@ -4837,6 +4926,72 @@ function renderServiceGrid() {
         </div>`;
     setupFeedLoadMoreObserver();
 }
+
+// Deals tab renderer: only shows posts with an active flash sale (a
+// non-null original_price different from price AND sale_ends_at still in
+// the future). When no qualifying posts exist, OR every active sale has
+// expired, the tab is hidden entirely (handled by the setInterval below
+// that toggles the button's .hidden class). Reuses renderProductGridCard
+// for consistent visuals with the Products tab.
+function renderDealsGrid() {
+    const feed = document.getElementById('posts-feed');
+    if (!feed) return;
+
+    feed.classList.add('grid-mode');
+
+    const now = Date.now();
+    const dealEntries = allCachedPosts.filter(({ data: d }) => {
+        if (!d) return false;
+        const op = d.original_price != null ? Number(d.original_price) : null;
+        const price = Number(d.price || 0);
+        if (op == null || op <= 0 || op === price) return false;
+        if (!d.sale_ends_at) return false;
+        return new Date(d.sale_ends_at).getTime() > now;
+    });
+
+    if (dealEntries.length === 0) {
+        feed.innerHTML = `
+            <div class="text-center py-16 space-y-3 px-6">
+                <p class="text-4xl">⚡</p>
+                <p class="font-bold text-white">No live deals right now</p>
+                <p class="text-slate-500 text-xs">Check back later — sellers can post flash sales anytime.</p>
+            </div>`;
+        return;
+    }
+
+    feed.innerHTML = `<div class="masonry-columns py-2">${
+        dealEntries.map(({ id, data: d }) => renderProductGridCard(id, d)).join('')
+    }</div>`;
+
+    feed.innerHTML += `
+        <div id="feed-load-more-sentinel" class="py-6 text-center space-y-2 px-6">
+            ${feedHasMore
+                ? ''
+                : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`
+            }
+        </div>`;
+    setupFeedLoadMoreObserver();
+}
+
+// Tick the Deals-tab button visibility: hide when no active sale is in
+// the in-memory cache; show again when a new qualifying post arrives.
+// Lightweight — runs every two seconds rather than every second since
+// the visible state only needs to change when a deadline passes.
+setInterval(() => {
+    const btn = document.querySelector('.feed-tab-btn[data-tab="deals"]');
+    if (!btn) return;
+    const now = Date.now();
+    const hasLiveDeal = allCachedPosts.some(({ data: d }) => {
+        if (!d) return false;
+        const op = d.original_price != null ? Number(d.original_price) : null;
+        const price = Number(d.price || 0);
+        if (op == null || op <= 0 || op === price) return false;
+        if (!d.sale_ends_at) return false;
+        return new Date(d.sale_ends_at).getTime() > now;
+    });
+    btn.classList.toggle('opacity-40', !hasLiveDeal);
+    btn.title = hasLiveDeal ? 'Live flash-sale listings' : 'No live deals right now';
+}, 5000);
 
 // Tapping a service card opens a Reels-style continuous vertical scroller
 // through every currently-loaded service post, landing on the tapped one
@@ -5251,6 +5406,26 @@ window.toggleCartItem = async function (postId) {
     const found = allCachedPosts.find(p => idKey(p.id) === idKey(postId) || idKey(p.data?.id) === idKey(postId));
     if (found) postRecord = found.data ? found.data : found;
 
+    // Fix (Item 1): if the post isn't in the in-memory cache (realtime
+    // INSERT just fired, or the bookmark card was built outside the feed),
+    // look the row up directly from Supabase before falling back to DOM
+    // scraping — saving into localStorage still works either way, but
+    // without this path Add to Chart threw "Cannot link listing instance
+    // data." on any card whose post wasn't yet in allCachedPosts.
+    if (!postRecord && typeof supabase !== 'undefined') {
+        try {
+            const { data: row } = await supabase
+                .from('posts')
+                .select(FEED_SELECT_COLUMNS)
+                .eq('id', postId)
+                .maybeSingle();
+            if (row) {
+                postRecord = row;
+                allCachedPosts.push({ id: postId, data: row });
+            }
+        } catch (_) { /* fall through to DOM fallback */ }
+    }
+
     if (!postRecord) {
         const cardEl = document.getElementById(`feed-card-${postId}`);
         if (cardEl) {
@@ -5258,13 +5433,21 @@ window.toggleCartItem = async function (postId) {
             postRecord = {
                 title: cardEl.querySelector('p.text-white')?.textContent || 'Campus Item',
                 price: cardEl.querySelector('.text-amber-400')?.textContent?.replace('GH₵', '') || '0',
-                user_name: nameEl?.textContent || 'Student'
+                media_url: '',
+                media_type: 'image',
+                institution: '',
+                type: 'product',
+                user_id: '',
+                user_name: nameEl?.textContent || 'Student',
+                user_avatar: ''
             };
         }
     }
 
     if (!postRecord) {
-        showToast("Cannot link listing instance data.");
+        // Final guard so any unexpected shape cannot throw past here and
+        // leave the UI in the "Something went wrong" state the user saw.
+        try { showToast("Couldn't save that — please try again."); } catch (_) { /* toast helper not ready */ }
         return;
     }
 
@@ -5274,7 +5457,7 @@ window.toggleCartItem = async function (postId) {
     // 1. Optimistic UI: Handle local mutations instantly
     if (isRemoving) {
         userCartList.splice(index, 1);
-        showToast("Removed from Chart List");
+        showToast("Removed from Cart");
     } else {
         userCartList.push({
             id:          postId,
@@ -5288,7 +5471,7 @@ window.toggleCartItem = async function (postId) {
             user_name:   postRecord.user_name || 'Anonymous',
             user_avatar: postRecord.user_avatar || ''
         });
-        showToast("Added to Chart List! ✓");
+        showToast("Added to Cart ✓");
     }
 
     localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
@@ -5317,7 +5500,7 @@ window.toggleCartItem = async function (postId) {
     const detailBtn = document.getElementById(`detail-cart-btn-${postId}`);
     if (detailBtn) {
         const labelText = detailBtn.querySelector('.cart-btn-label');
-        if (labelText) labelText.textContent = !isRemoving ? "✓ Added to Chart" : "Add to Chart List";
+        if (labelText) labelText.textContent = !isRemoving ? "✓ In Cart" : "Add to Cart";
         detailBtn.className = !isRemoving
             ? "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-800 border border-slate-700 text-slate-400"
             : "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
@@ -5382,7 +5565,7 @@ window.toggleCartItem = async function (postId) {
         if (reelIcon) reelIcon.className = revertedIsSaved ? "fas fa-bookmark text-amber-400 text-2xl" : "far fa-bookmark text-white text-2xl";
         if (detailBtn) {
             const labelText = detailBtn.querySelector('.cart-btn-label');
-            if (labelText) labelText.textContent = revertedIsSaved ? "✓ Added to Chart" : "Add to Chart List";
+            if (labelText) labelText.textContent = revertedIsSaved ? "✓ In Cart" : "Add to Cart";
         }
         if (!document.getElementById('cart-container')?.classList.contains('hidden')) {
             renderCartListView();
@@ -6019,6 +6202,16 @@ function renderFeedFromCache() {
 
     feed.classList.remove('grid-mode', 'reels-mode');
 
+    // Deals tab: shows every post with an active flash sale
+    // (original_price != price and sale_ends_at still in the future),
+    // hidden the moment no qualifying post exists OR the timer expires.
+    // Renders in the same masonry style as Products/All/feed so desktop
+    // and mobile get a consistent visual treatment.
+    if (currentFeedType === 'deals') {
+        renderDealsGrid();
+        return;
+    }
+
     if (allCachedPosts.length === 0) {
         const isScopedEmpty = currentCampusScope !== 'everywhere' && currentUserData?.institution && currentFeedType !== 'following';
         feed.innerHTML = isScopedEmpty
@@ -6273,9 +6466,10 @@ function appendFeedCards(newItems) {
 // otherwise they stuck around on <body> and widened/hid things on
 // Profile, DMs, Explore, etc. that were never meant to be affected.
 function syncFeedTabBodyClasses(type) {
-    const isGridTab = type === 'all' || type === 'product' || type === 'skill';
+    const isGridTab = type === 'all' || type === 'product' || type === 'skill' || type === 'deals';
     document.body.classList.toggle('feed-tab-all', type === 'all');
     document.body.classList.toggle('feed-tab-grid', isGridTab);
+    document.body.classList.toggle('feed-tab-deals', type === 'deals');
 }
 
 // ─── 15. FILTERING ────────────────────────────────────────────────────────────
@@ -6955,6 +7149,27 @@ window.initProfileSelects = function () {
 };
 
 // ─── ACCOUNT SETTINGS ─────────────────────────────────────────────────────────
+// Theme switching: cycles through dark -> light -> system -> dark; saves
+// the choice to localStorage and re-applies it to the html element so the
+// CSS custom properties defined in main.css pick it up instantly. System
+// mode follows the OS prefers-color-scheme live and is wired up to do so
+// both on initial load (see the inline theme bootstrap in index.html)
+// and here on every change.
+window.setTheme = function (mode) {
+    const valid = ['dark', 'light', 'system'];
+    if (!valid.includes(mode)) mode = 'dark';
+    const apply = (m) => {
+        const resolved = m === 'system'
+            ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+            : m;
+        document.documentElement.setAttribute('data-theme', resolved);
+        document.documentElement.setAttribute('data-theme-mode', m);
+    };
+    apply(mode);
+    try { localStorage.setItem('campus_market_theme', mode); } catch (_) {}
+    showToast('Theme: ' + mode.charAt(0).toUpperCase() + mode.slice(1));
+};
+
 function populateAccountSettings() {
     if (!currentUserData) return;
     const nameInput  = document.getElementById('settingsDisplayName');
@@ -7639,6 +7854,19 @@ function initSettingsToggles() {
             }
         });
     });
+
+    // Theme picker (dark / light / system). Reading, not a toggle, so
+    // wired to 'change' on a <select> — value is reflected into the
+    // data-theme attributes via window.applyTheme() and persisted.
+    const themeSel = document.getElementById('settingsThemeSelect');
+    if (themeSel && !themeSel.dataset.wired) {
+        themeSel.value = currentThemeMode;
+        themeSel.dataset.wired = 'true';
+        themeSel.addEventListener('change', () => {
+            window.applyTheme(themeSel.value);
+            showToast('Theme: ' + (themeSel.value.charAt(0).toUpperCase() + themeSel.value.slice(1)));
+        });
+    }
 }
 
 // ─── ACCOUNT DELETION ─────────────────────────────────────────────────────────
