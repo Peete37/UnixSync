@@ -262,6 +262,11 @@ const _uiStack = [];
 // the user pops a view) from immediately pushing itself back onto the
 // stack — otherwise back-then-tap would loop or stick.
 const _viewHistory = [];
+// Tracks drilling into a "You might also like" post from within an
+// already-open detail modal, so the back button can return to the post
+// you came FROM instead of closing the whole modal (see openDetail()).
+let _detailPostStack = [];
+let _currentDetailPostId = null;
 
 window.addEventListener('popstate', () => {
     // Highest priority: a still-open overlay (modal/sheet/DM thread).
@@ -1468,6 +1473,17 @@ window.navigateTo = function (viewId, btn = null) {
         document.getElementById('site-header')?.classList.remove('header-reels-mode');
     }
 
+    // Fix: feed-tab-all/feed-tab-grid on <body> (desktop column width +
+    // right-rail visibility) previously only got set/cleared by
+    // filterFeed(), never by navigateTo() — so switching away from the
+    // feed left them stuck on <body>, over-widening (or hiding the rail
+    // on) Profile/DMs/Explore/Cart. Sync them on every navigation instead.
+    if (viewId === 'feed') {
+        syncFeedTabBodyClasses(currentFeedType);
+    } else {
+        document.body.classList.remove('feed-tab-all', 'feed-tab-grid');
+    }
+
     clearNavHighlights();
     setNavHighlight(btn, viewId);
 
@@ -1578,12 +1594,34 @@ window.togglePostModal = function () {
 };
 
 // ─── 9. DETAIL MODAL ──────────────────────────────────────────────────────────
-window.openDetail = async function (postId) {
+window.openDetail = async function (postId, fromBack = false) {
     const modal   = document.getElementById('detail-modal');
     const content = document.getElementById('detail-content');
     if (!modal || !content) return;
 
+    const wasOpen = !modal.classList.contains('hidden');
+
+    if (!fromBack) {
+        if (wasOpen && _currentDetailPostId && idKey(_currentDetailPostId) !== idKey(postId)) {
+            // Drilling into a related post from inside an already-open
+            // modal — remember where we came from so Back retraces the
+            // trail instead of closing the whole modal.
+            _detailPostStack.push(_currentDetailPostId);
+            pushUiState('detail-modal', () => window._goBackInDetailModal());
+        } else if (!wasOpen) {
+            _detailPostStack = [];
+            pushUiState('detail-modal', () => window.closeDetailModal(true));
+        }
+    }
+    _currentDetailPostId = postId;
+
     modal.classList.remove('hidden');
+    // Fix: nothing previously stopped the page underneath from also
+    // scrolling while the detail modal was open — on mobile, touch-
+    // scrolling inside the modal could bleed through to the feed behind
+    // it (rubber-banding), visibly showing the background feed sliding
+    // underneath instead of the modal fully occupying the screen.
+    document.body.style.overflow = 'hidden';
     pushUiState('detail-modal', () => window.closeDetailModal(true));
     content.innerHTML = `<div class="p-20 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Syncing Details...</div>`;
 
@@ -1795,6 +1833,9 @@ window.openDetail = async function (postId) {
 
 window.closeDetailModal = function (fromPop = false) {
     const modal = document.getElementById('detail-modal');
+    document.body.style.overflow = '';
+    _detailPostStack = [];
+    _currentDetailPostId = null;
     // Stop any video playing inside the detail view immediately — without
     // this, closing the modal left the video (and its audio) running
     // silently behind the scenes since only the modal's visibility was
@@ -1808,6 +1849,20 @@ window.closeDetailModal = function (fromPop = false) {
     });
     modal?.classList.add('hidden');
     if (!fromPop) popUiState('detail-modal');
+};
+
+// Handles the browser/gesture Back action while inside a "You might also
+// like" trail: steps back to the post you drilled in FROM. openDetail is
+// called with fromBack=true so it just reloads that post's content
+// without pushing yet another history entry. Once the trail is empty,
+// Back behaves exactly like closing the modal normally.
+window._goBackInDetailModal = function () {
+    const prevId = _detailPostStack.pop();
+    if (prevId) {
+        window.openDetail(prevId, true);
+    } else {
+        window.closeDetailModal(true);
+    }
 };
 
 // ─── 9b. MANAGE LISTING (mark sold / discount price / flash sale) ───────────
@@ -3588,6 +3643,24 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 window.addEventListener('resize', measureBottomNavHeight);
 window.addEventListener('orientationchange', () => setTimeout(measureBottomNavHeight, 200));
+
+// Safety net for the offline-auth fix above: if currentUserData somehow
+// never got populated (e.g. a connectivity blip during the very first
+// load), re-check auth as soon as the browser reports it's back online,
+// so Profile/DMs/Create self-heal instead of staying stuck behind the
+// sign-in gate until the person manually refreshes.
+window.addEventListener('online', async () => {
+    if (currentUserData) return;
+    try {
+        const { data } = await supabase.auth.getUser();
+        if (data?.user) {
+            console.warn('[Auth Observer] Back online — recovered a session that was missed while offline.');
+            // onAuthStateChange doesn't automatically refire just because
+            // getUser() succeeded, so nudge the same gates/state directly.
+            location.reload();
+        }
+    } catch (_) { /* still no session — nothing to recover */ }
+});
 
 // Re-apply the touch-action scope every time any media element is added
 // to the DOM. Each MutationObserver callback debounces so a busy render
@@ -6168,6 +6241,23 @@ function appendFeedCards(newItems) {
     }
 }
 
+// Fix: this used to only ever apply for the All tab ('feed-tab-all'),
+// even though Products and Services also render the same multi-column
+// masonry grid (see .masonry-columns / .masonry-columns-services) and
+// need identical desktop widening — without this, switching to
+// Products or Services left the grid stuck at the narrow ~520px
+// reading-column width with a large unused gap on wider screens,
+// since the CSS widening rules were only ever keyed to this one class.
+// Pulled out into its own function (see navigateTo()) because these
+// classes also need to be cleared when leaving the feed entirely —
+// otherwise they stuck around on <body> and widened/hid things on
+// Profile, DMs, Explore, etc. that were never meant to be affected.
+function syncFeedTabBodyClasses(type) {
+    const isGridTab = type === 'all' || type === 'product' || type === 'skill';
+    document.body.classList.toggle('feed-tab-all', type === 'all');
+    document.body.classList.toggle('feed-tab-grid', isGridTab);
+}
+
 // ─── 15. FILTERING ────────────────────────────────────────────────────────────
 window.filterFeed = function (type, clickedBtn = null) {
     if (!isAuthInitialized) return;
@@ -6176,16 +6266,7 @@ window.filterFeed = function (type, clickedBtn = null) {
     currentFeedType = type;
     _feedLoadGeneration++;
 
-    // Fix: this used to only ever apply for the All tab ('feed-tab-all'),
-    // even though Products and Services also render the same multi-column
-    // masonry grid (see .masonry-columns / .masonry-columns-services) and
-    // need identical desktop widening — without this, switching to
-    // Products or Services left the grid stuck at the narrow ~520px
-    // reading-column width with a large unused gap on wider screens,
-    // since the CSS widening rules were only ever keyed to this one class.
-    const isGridTab = type === 'all' || type === 'product' || type === 'skill';
-    document.body.classList.toggle('feed-tab-all', type === 'all');
-    document.body.classList.toggle('feed-tab-grid', isGridTab);
+    syncFeedTabBodyClasses(type);
 
     if (typeof window.closeHeaderSearch === 'function' && !window._searchNavInProgress) {
         window.closeHeaderSearch();
@@ -8453,12 +8534,19 @@ window.openDM_legacy = function (targetUserId, targetName) {
 // ─── 21. AUTH OBSERVER ───────────────────────────────────────────────────────
 if (activeAuthChange) {
     activeAuthChange(async (user) => {
-        // Bug fix: previously any auth-null event (including ones triggered
-        // by a network drop) would force the login modal open. Now we only
-        // treat this as a "signed out" transition when we're actually online,
-        // so losing connectivity never dumps credential fields on screen.
-        if (!navigator.onLine) {
-            console.warn("[Auth Observer] Network is offline. Ignoring auth state evaluation.");
+        // Bug fix: previously ANY auth event while offline was skipped
+        // entirely, including a real, locally-cached session being
+        // restored (which needs no network — Supabase reads it straight
+        // from localStorage). That meant if you happened to be offline
+        // the moment the app's first auth check fired, currentUserData
+        // never got set at all, and Profile/DMs/Create kept showing the
+        // sign-in gate forever afterwards, even once you were clearly
+        // still signed in elsewhere. Now we only skip the update for an
+        // actual sign-OUT event (user === null) while offline — that's
+        // the case a network drop can spuriously fake — and let a real
+        // user object through regardless of connectivity.
+        if (!navigator.onLine && !user) {
+            console.warn("[Auth Observer] Network is offline and no cached session — ignoring sign-out evaluation.");
             return;
         }
 
