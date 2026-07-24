@@ -797,24 +797,44 @@ function formatClockTime(dateStr) {
     return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
-// Renders a flash-sale end time as a short countdown string ("2h 15m
-// left", "45m left"), or '' once it's passed (rendering call sites are
-// responsible for checking sale_ends_at is still in the future before
-// showing anything at all — this only formats a positive remaining span).
+// Renders a flash-sale end time as a countdown string. Days-out sales
+// still show a coarse "Nd left" (a live second-by-second tick wouldn't
+// mean much a week out), but once under 24h it renders H:MM:SS so the
+// badge visibly ticks — see the setInterval below that updates every
+// element carrying this text once a second via its data-sale-ends
+// attribute, rather than only refreshing whenever the card happens to
+// re-render.
 function countdownText(endsAtStr) {
     if (!endsAtStr) return '';
     const remainingMs = new Date(endsAtStr).getTime() - Date.now();
     if (remainingMs <= 0) return '';
-    const totalMinutes = Math.floor(remainingMs / 60000);
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    if (hours >= 24) {
-        const days = Math.floor(hours / 24);
-        return `${days}d left`;
-    }
-    if (hours > 0) return `${hours}h ${minutes}m left`;
-    return `${minutes}m left`;
+    const totalSeconds = Math.floor(remainingMs / 1000);
+    const days = Math.floor(totalSeconds / 86400);
+    if (days >= 1) return `${days}d left`;
+    const hours   = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
+
+// Ticks every visible flash-sale badge once a second. Badges are found
+// by class rather than tracked individually, so this stays correct
+// across feed re-renders/scroll recycling without extra bookkeeping.
+// Once a sale's time is up the badge is simply removed from the DOM —
+// the post itself is never touched, matching "no auto-delete."
+setInterval(() => {
+    document.querySelectorAll('.sale-countdown-badge').forEach(el => {
+        const endsAt = el.getAttribute('data-sale-ends');
+        if (!endsAt) return;
+        const text = countdownText(endsAt);
+        if (!text) {
+            el.remove();
+        } else if (el.textContent !== text) {
+            el.textContent = text;
+        }
+    });
+}, 1000);
 
 // Fetches every rating for a seller and computes the average/count
 // client-side — the seller_ratings_select_all RLS policy already allows
@@ -1730,7 +1750,7 @@ window.openDetail = async function (postId, fromBack = false) {
                         ${isSoldDetail ? `<span class="bg-slate-800 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] px-2.5 py-1 rounded-full border border-slate-700">Sold</span>` : ''}
                         <span class="text-amber-400 font-black text-3xl leading-none">GH₵${esc(String(d.price || 0))}</span>
                         ${hasDiscountDetail ? `<span class="text-slate-500 text-base line-through">GH₵${esc(String(d.original_price))}</span>` : ''}
-                        ${!isSoldDetail && saleActiveDetail ? `<span class="bg-rose-500/90 text-white text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full">${esc(countdownText(d.sale_ends_at))}</span>` : ''}
+                        ${!isSoldDetail && saleActiveDetail ? `<span class="sale-countdown-badge bg-rose-500/90 text-white text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</span>` : ''}
                     </div>
                     <button onclick="window.openPostOptionsMenu('${escAttr(d.id)}', ${isOwn ? 'true' : 'false'}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-slate-400 hover:text-white transition px-1 shrink-0">
                         <i class="fas fa-ellipsis-vertical text-xl"></i>
@@ -4615,7 +4635,7 @@ function renderFeedMasonryCard(id, d, options = {}) {
             ${mediaBlock}
             ${isSold ? `<div class="absolute inset-0 flex items-center justify-center"><span class="bg-black/80 text-white text-[11px] font-black uppercase tracking-[0.2em] px-4 py-1.5 rounded-full border border-white/20">Sold</span></div>` : ''}
             ${!isSold && isSuggested ? `<div class="absolute top-2.5 left-2.5 bg-amber-400/90 text-black text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full">Suggested</div>` : ''}
-            ${!isSold && saleActive ? `<div class="absolute top-2.5 left-2.5 bg-rose-500/90 text-white text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full">${esc(countdownText(d.sale_ends_at))}</div>` : ''}
+            ${!isSold && saleActive ? `<div class="sale-countdown-badge absolute top-2.5 left-2.5 bg-rose-500/90 text-white text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</div>` : ''}
             ${!isSold ? `
             <button
                 onclick="event.stopPropagation(); window.toggleCartItem('${escAttr(id)}')"
