@@ -377,7 +377,7 @@
               </button>
             </div>
 
-            <div id="dms-content" class="hidden space-y-4"></div>
+            <div id="dms-content" class="hidden relative space-y-4"></div>
           </div>
 
           <div id="cart-container" class="hidden pb-24 space-y-4">
@@ -532,18 +532,21 @@
                 <button
                   id="profile-open-settings-btn"
                   onclick="window.openCampusSettings()"
-                  class="w-full py-3 px-4 rounded-2xl bg-slate-900 border border-slate-700 text-slate-300 font-black uppercase tracking-wider text-xs active:scale-[0.98] transition"
+                  class="profile-quick-action w-full py-3 px-4 rounded-2xl bg-slate-900 border border-slate-700 text-slate-300 font-black uppercase tracking-wider text-xs active:scale-[0.98] transition"
+                  type="button"
                 >
                   <i class="fas fa-sliders mr-2 text-[10px]"></i>Campus Settings
                 </button>
                 <button
+                  id="profile-saved-quick-btn"
                   onclick="
                     window.switchProfileTab(
                       'saved',
                       document.getElementById('profile-tab-saved'),
                     )
                   "
-                  class="w-full py-3 px-4 rounded-2xl bg-slate-900 border border-slate-700 text-slate-300 font-black uppercase tracking-wider text-xs active:scale-[0.98] active:bg-amber-400 active:text-black active:border-amber-400 transition"
+                  class="profile-quick-action w-full py-3 px-4 rounded-2xl bg-slate-900 border border-slate-700 text-slate-300 font-black uppercase tracking-wider text-xs active:scale-[0.98] active:bg-amber-400 active:text-black active:border-amber-400 transition"
+                  type="button"
                 >
                   <i class="fas fa-bookmark mr-2 text-[10px]"></i>Saved Items
                   <span
@@ -556,8 +559,10 @@
 
               <div class="flex border-b border-slate-900 text-sm">
                 <button
+                  id="profile-tab-posts"
                   onclick="window.switchProfileTab('posts', this)"
-                  class="profile-subtab-btn flex-1 py-3 text-center text-amber-400 font-bold border-b-2 border-amber-400 uppercase tracking-wider text-xs focus:outline-none"
+                  class="profile-subtab-btn is-active flex-1 py-3 text-center text-amber-400 font-bold border-b-2 border-amber-400 uppercase tracking-wider text-xs focus:outline-none"
+                  type="button"
                 >
                   My Gigs & Posts
                 </button>
@@ -565,6 +570,7 @@
                   id="profile-tab-saved"
                   onclick="window.switchProfileTab('saved', this)"
                   class="profile-subtab-btn flex-1 py-3 text-center text-slate-500 font-bold border-b-2 border-transparent uppercase tracking-wider text-xs focus:outline-none hover:text-slate-300"
+                  type="button"
                 >
                   Saved Items
                   <span id="profile-saved-count" class="ml-1 text-[10px]"
@@ -625,8 +631,8 @@
                       Saved Items
                     </h2>
                     <p class="text-slate-400 text-xs">
-                      Everything you've added to Chart is available here, with
-                      quick access back to the same seller.
+                      Everything you've saved is available here, with quick
+                      access back to the same seller.
                     </p>
                   </div>
                   <div id="profile-saved-items-wrapper" class="space-y-3"></div>
@@ -1918,6 +1924,13 @@
         });
       }
     </script>
+    <script
+      type="module"
+      src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
+      integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ=="
+      data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}'
+      crossorigin="anonymous"
+    ></script>
     <script
       type="module"
       src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"

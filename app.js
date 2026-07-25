@@ -135,6 +135,19 @@ const GHANA_DATA = {
 const ALL_REGIONS = Object.keys(GHANA_DATA).sort();
 const ALL_INSTITUTIONS = [...new Set(Object.values(GHANA_DATA).flat())].sort();
 
+function safeStorageJsonParse(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (err) {
+    console.warn(`Ignoring corrupted localStorage value for ${key}:`, err);
+    try {
+      localStorage.removeItem(key);
+    } catch (_) {}
+    return fallback;
+  }
+}
+
 // ─── 3. MODULE STATE ──────────────────────────────────────────────────────────
 let currentUserData = null;
 let currentFeedChan = null;
@@ -234,8 +247,9 @@ let conversationsCache = [];
 // THIS user viewed that thread. A conversation is unread if its
 // last_message_at is newer than the stored read timestamp AND the last
 // message wasn't sent by this user.
-const conversationLastRead = JSON.parse(
-  localStorage.getItem("campus_market_dm_last_read") || "{}",
+const conversationLastRead = safeStorageJsonParse(
+  "campus_market_dm_last_read",
+  {},
 );
 
 function markConversationRead(conversationId) {
@@ -284,16 +298,14 @@ function updateDmUnreadBadge() {
 // comparisons are always string-to-string regardless of where the id
 // originated.
 const idKey = (id) => String(id);
-const savedSearchAlerts = JSON.parse(
-  localStorage.getItem(SAVED_ALERTS_KEY) || "[]",
-);
+const savedSearchAlerts = safeStorageJsonParse(SAVED_ALERTS_KEY, []);
 const alertedPostIds = new Set(
-  JSON.parse(localStorage.getItem(ALERT_NOTIFIED_POSTS_KEY) || "[]").map(idKey),
+  safeStorageJsonParse(ALERT_NOTIFIED_POSTS_KEY, []).map(idKey),
 );
 
 // Persistent state maps that survive feed re-renders
 const likedPostIds = new Set(
-  JSON.parse(localStorage.getItem("campus_market_likes") || "[]").map(idKey),
+  safeStorageJsonParse("campus_market_likes", []).map(idKey),
 );
 const openCommentIds = new Set(); // tracks which comment sections are open
 
@@ -344,9 +356,7 @@ if (_savedThemeMode === "system" && window.matchMedia) {
   else if (mq.addListener) mq.addListener(onChange);
 }
 
-let userCartList = JSON.parse(
-  localStorage.getItem("campus_market_cart") || "[]",
-);
+let userCartList = safeStorageJsonParse("campus_market_cart", []);
 
 Object.defineProperty(window, "_currentUser", { get: () => currentUserData });
 Object.defineProperty(window, "_userCartList", { get: () => userCartList });
@@ -1735,16 +1745,24 @@ function setupFeedLoadMoreObserver() {
 }
 
 // ─── 8. NAVIGATION CONTROL ────────────────────────────────────────────────────
+function getNavLabelEl(btn) {
+  if (!btn) return null;
+  return (
+    [...btn.querySelectorAll("span")].find(
+      (el) =>
+        !el.classList.contains("nav-cart-badge") &&
+        !el.classList.contains("badge-dot"),
+    ) || null
+  );
+}
+
 function clearNavHighlights() {
   document
     .querySelectorAll("nav button, .bottom-nav button, nav a")
     .forEach((b) => {
       b.classList.remove("nav-active");
       b.classList.replace("text-white", "text-slate-400");
-      b.querySelector("span:last-child")?.classList.replace(
-        "text-white",
-        "text-slate-400",
-      );
+      getNavLabelEl(b)?.classList.replace("text-white", "text-slate-400");
     });
 }
 
@@ -1752,9 +1770,7 @@ function setNavHighlight(btn, viewId) {
   if (btn) {
     btn.classList.add("nav-active");
     btn.classList.replace("text-slate-400", "text-white");
-    btn
-      .querySelector("span:last-child")
-      ?.classList.replace("text-slate-400", "text-white");
+    getNavLabelEl(btn)?.classList.replace("text-slate-400", "text-white");
     return;
   }
 
@@ -1770,9 +1786,7 @@ function setNavHighlight(btn, viewId) {
   if (fallback) {
     fallback.classList.add("nav-active");
     fallback.classList.replace("text-slate-400", "text-white");
-    fallback
-      .querySelector("span:last-child")
-      ?.classList.replace("text-slate-400", "text-white");
+    getNavLabelEl(fallback)?.classList.replace("text-slate-400", "text-white");
   }
 }
 
@@ -1903,52 +1917,69 @@ window.navigateTo = function (viewId, btn = null) {
   }
 };
 
+function syncProfileTabChrome(tabType, selectedBtn = null) {
+  const subtabButtons = [...document.querySelectorAll(".profile-subtab-btn")];
+  const settingsBtn = document.getElementById("profile-open-settings-btn");
+  const savedQuickBtn = document.getElementById("profile-saved-quick-btn");
+
+  subtabButtons.forEach((btn) => {
+    btn.classList.remove("is-active");
+    btn.setAttribute("aria-pressed", "false");
+  });
+
+  [settingsBtn, savedQuickBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.classList.remove("is-active");
+    btn.setAttribute("aria-pressed", "false");
+  });
+
+  const subtabByType = {
+    posts: document.getElementById("profile-tab-posts"),
+    saved: document.getElementById("profile-tab-saved"),
+  };
+
+  const activeSubtab = selectedBtn || subtabByType[tabType] || null;
+  if (activeSubtab && activeSubtab.classList.contains("profile-subtab-btn")) {
+    activeSubtab.classList.add("is-active");
+    activeSubtab.setAttribute("aria-pressed", "true");
+  }
+
+  if (tabType === "settings" && settingsBtn) {
+    settingsBtn.classList.add("is-active");
+    settingsBtn.setAttribute("aria-pressed", "true");
+  }
+  if (tabType === "saved" && savedQuickBtn) {
+    savedQuickBtn.classList.add("is-active");
+    savedQuickBtn.setAttribute("aria-pressed", "true");
+  }
+}
+
+function renderSavedItemsLoadError(targetId = "profile-saved-items-wrapper") {
+  const wrapper = document.getElementById(targetId);
+  if (!wrapper) return;
+  wrapper.innerHTML = `
+        <div class="p-5 text-center bg-slate-900 border border-slate-800/70 rounded-3xl space-y-3">
+            <p class="text-slate-300 text-sm font-black uppercase tracking-wider">Couldn't load saved items</p>
+            <p class="text-slate-500 text-xs">Please try again.</p>
+            <button onclick="window.switchProfileTab('saved', document.getElementById('profile-tab-saved'))" class="inline-flex items-center gap-2 bg-amber-400 text-black font-black px-4 py-2.5 rounded-xl text-[11px] uppercase tracking-wider active:scale-[0.98] transition">
+                <i class="fas fa-rotate-right text-[10px]"></i> Retry
+            </button>
+        </div>`;
+}
+
 window.switchProfileTab = function (tabType, selectedBtn = null) {
   document
     .querySelectorAll(".profile-subview")
     .forEach((view) => view.classList.add("hidden"));
-
-  document.querySelectorAll(".profile-subtab-btn").forEach((btn) => {
-    btn.classList.replace("text-amber-400", "text-slate-400");
-    btn.classList.replace("border-amber-400", "border-transparent");
-  });
-
-  const settingsBtn = document.getElementById("profile-open-settings-btn");
-  if (settingsBtn) {
-    settingsBtn.classList.remove(
-      "bg-amber-400",
-      "text-black",
-      "border-amber-400",
-    );
-    settingsBtn.classList.add(
-      "bg-slate-900",
-      "text-slate-300",
-      "border-slate-700",
-    );
-  }
-
   document
     .getElementById(`profile-subview-${tabType}`)
     ?.classList.remove("hidden");
-
-  if (selectedBtn) {
-    selectedBtn.classList.replace("text-slate-400", "text-amber-400");
-    selectedBtn.classList.replace("border-transparent", "border-amber-400");
-  } else if (tabType === "settings" && settingsBtn) {
-    settingsBtn.classList.remove(
-      "bg-slate-900",
-      "text-slate-300",
-      "border-slate-700",
-    );
-    settingsBtn.classList.add("bg-amber-400", "text-black", "border-amber-400");
-  }
+  syncProfileTabChrome(tabType, selectedBtn);
 
   if (tabType === "saved") {
     renderCartListView().catch((err) => {
       console.error("Saved Items render failed:", err);
-      const wrapper = document.getElementById("profile-saved-items-wrapper");
-      if (wrapper)
-        wrapper.innerHTML = `<p class="p-10 text-center text-slate-500 text-xs uppercase">Couldn't load your saved items. Please try again.</p>`;
+      renderSavedItemsLoadError("profile-saved-items-wrapper");
     });
   }
 };
@@ -3932,9 +3963,7 @@ window._submitFromSendBtn = function (postId) {
 // Same string/number id mismatch as posts (comments.id is also a bigint
 // primary key) — normalized through idKey for the same reason.
 const likedCommentIds = new Set(
-  JSON.parse(localStorage.getItem("campus_market_comment_likes") || "[]").map(
-    idKey,
-  ),
+  safeStorageJsonParse("campus_market_comment_likes", []).map(idKey),
 );
 
 window.likeComment = async function (commentId, btn) {
@@ -4646,16 +4675,12 @@ window._runOptionsMenuAction = function (index) {
 //   create policy "insert own blocks" on blocked_users for insert with check (auth.uid() = blocker_id);
 //   create policy "delete own blocks" on blocked_users for delete using (auth.uid() = blocker_id);
 const blockedUserIds = new Set(
-  JSON.parse(localStorage.getItem("campus_market_blocked_users") || "[]").map(
-    idKey,
-  ),
+  safeStorageJsonParse("campus_market_blocked_users", []).map(idKey),
 );
 // Keeps display names alongside ids so the Blocked Users settings list has
 // something to show even before/without a `blocked_users` table (which
 // would otherwise require a join back to `profiles` to get a name).
-let blockedUserNames = JSON.parse(
-  localStorage.getItem("campus_market_blocked_names") || "{}",
-);
+let blockedUserNames = safeStorageJsonParse("campus_market_blocked_names", {});
 
 // Bulk-loaded set of user ids the viewer currently follows — lets every
 // feed card render its Follow/Following button with the CORRECT state
@@ -5168,9 +5193,7 @@ async function submitReport(targetType, targetId, reason = "unspecified") {
     // queue locally so the report isn't just lost, and be upfront
     // that it hasn't reached a real moderation backend yet.
     console.warn("Report insert failed, queuing locally:", err);
-    const queued = JSON.parse(
-      localStorage.getItem("campus_market_pending_reports") || "[]",
-    );
+    const queued = safeStorageJsonParse("campus_market_pending_reports", []);
     queued.push(payload);
     localStorage.setItem(
       "campus_market_pending_reports",
@@ -6739,16 +6762,7 @@ async function hydrateCartItemsFromSource() {
   }
 }
 
-function buildCartListMarkup() {
-  if (userCartList.length === 0) {
-    return `<p class="p-10 text-center text-slate-500 text-xs uppercase">Your list is empty</p>`;
-  }
-
-  // Fix: a single corrupted/null entry (e.g. a leftover from a botched
-  // localStorage write) used to throw inside .map() and take the whole
-  // Saved Items panel down with an uncaught "Something went wrong" —
-  // dropping bad entries here means the rest of the list still renders,
-  // and self-heals the stored list so it doesn't keep recurring.
+function getValidCartItems() {
   const validItems = userCartList.filter((item) => item && item.id != null);
   if (validItems.length !== userCartList.length) {
     userCartList = validItems;
@@ -6756,11 +6770,29 @@ function buildCartListMarkup() {
       localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
     } catch (_) {}
   }
+  return validItems;
+}
+
+function buildCartListMarkup() {
+  const validItems = getValidCartItems();
   if (validItems.length === 0) {
-    return `<p class="p-10 text-center text-slate-500 text-xs uppercase">Your list is empty</p>`;
+    return `
+            <div class="p-6 text-center bg-slate-900 border border-slate-800/70 rounded-3xl space-y-2">
+                <p class="text-white font-black text-sm uppercase tracking-wider">No saved items yet</p>
+                <p class="text-slate-500 text-xs">Bookmark listings to keep them here for later.</p>
+            </div>`;
   }
 
-  return validItems
+  const summary = `
+        <div class="saved-items-summary">
+            <div class="min-w-0">
+                <p class="text-white font-black text-sm uppercase tracking-wider">${validItems.length} saved item${validItems.length === 1 ? "" : "s"}</p>
+                <p class="text-slate-400 text-[11px]">Quick reopen, compare, or message the seller from one place.</p>
+            </div>
+            <span class="saved-item-meta-chip shrink-0"><i class="fas fa-bookmark text-amber-400"></i> Saved</span>
+        </div>`;
+
+  const cards = validItems
     .map((item) => {
       let firstUrl = item.media_url || "";
       if (firstUrl.startsWith("[")) {
@@ -6774,23 +6806,39 @@ function buildCartListMarkup() {
       const canContact =
         !!item.user_id &&
         (!currentUserData || idKey(item.user_id) !== idKey(currentUserData.id));
+      const typeLabel = item.type === "skill" ? "Service" : "Product";
+      const institution = item.institution
+        ? esc(item.institution)
+        : "Campus listing";
       const thumb = firstUrl
-        ? `<div class="relative w-14 h-14 rounded-lg overflow-hidden shrink-0 bg-slate-800">
+        ? `<div class="saved-item-thumb relative">
                    <img src="${esc(firstUrl)}" onerror="this.parentElement.innerHTML='<i class=\'fas fa-image text-slate-600\'></i>'; this.parentElement.classList.add('flex','items-center','justify-center');" class="w-full h-full object-cover" alt="">
-                   ${isVideo ? `<div class="absolute inset-0 flex items-center justify-center bg-black/30"><i class="fas fa-play text-white text-xs"></i></div>` : ""}
+                   ${isVideo ? `<div class="absolute inset-0 flex items-center justify-center bg-black/35"><i class="fas fa-play text-white text-xs"></i></div>` : ""}
                </div>`
-        : `<div class="w-14 h-14 rounded-lg shrink-0 bg-slate-800 flex items-center justify-center text-slate-600"><i class="fas fa-image"></i></div>`;
+        : `<div class="saved-item-thumb flex items-center justify-center text-slate-600"><i class="fas fa-image"></i></div>`;
 
       return `
-        <div class="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-3">
-            <div class="flex items-center gap-3 justify-between">
+        <div class="saved-item-card space-y-3">
+            <div class="flex items-start gap-3">
                 ${thumb}
-                <div class="min-w-0 flex-1 cursor-pointer" onclick="openDetail('${escAttr(item.id)}')">
-                    <p class="text-white font-bold text-sm truncate">${esc(item.title)}</p>
-                    <p class="text-amber-400 font-extrabold text-xs">GH₵${esc(String(item.price))}</p>
-                    ${item.user_name ? `<p class="text-slate-500 text-[11px] truncate mt-1">${esc(item.user_name)}</p>` : ""}
+                <div class="min-w-0 flex-1">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0">
+                            <div class="flex flex-wrap items-center gap-2 mb-2">
+                                <span class="saved-item-meta-chip">${typeLabel}</span>
+                                <span class="text-[10px] uppercase tracking-widest text-slate-500 font-bold truncate max-w-[170px]">${institution}</span>
+                            </div>
+                            <button onclick="openDetail('${escAttr(item.id)}')" class="text-left block w-full">
+                                <p class="text-white font-black text-sm leading-tight line-clamp-2">${esc(item.title || "Campus Item")}</p>
+                            </button>
+                            <p class="text-amber-400 font-extrabold text-sm mt-1">GH₵${esc(String(item.price ?? 0))}</p>
+                            ${item.user_name ? `<p class="text-slate-400 text-[11px] truncate mt-1">Seller: ${esc(item.user_name)}</p>` : ""}
+                        </div>
+                        <button onclick="window.toggleCartItem('${escAttr(item.id)}')" class="w-9 h-9 rounded-full bg-slate-950 border border-slate-800 text-red-400 shrink-0 active:scale-95 transition" aria-label="Remove saved item">
+                            <i class="fas fa-trash-can text-xs"></i>
+                        </button>
+                    </div>
                 </div>
-                <button onclick="window.toggleCartItem('${escAttr(item.id)}')" class="text-red-400 p-2 shrink-0"><i class="fas fa-trash-can"></i></button>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <button onclick="openDetail('${escAttr(item.id)}')" class="w-full bg-slate-800 border border-slate-700 text-white font-black py-2.5 rounded-xl text-[11px] uppercase tracking-wider active:scale-[0.98] transition">
@@ -6799,7 +6847,7 @@ function buildCartListMarkup() {
                 ${
                   canContact
                     ? `<button onclick="contactSeller('${escAttr(item.user_id)}', '${escAttr(item.user_name || "Seller")}', '${escAttr(item.user_avatar || "")}', '${escAttr(item.title || "Listing")}', '${escAttr(item.id)}')" class="w-full bg-amber-400 text-black font-black py-2.5 rounded-xl text-[11px] uppercase tracking-wider active:scale-[0.98] transition">
-                        Contact
+                        Contact Seller
                     </button>`
                     : `<button disabled class="w-full bg-slate-900 border border-slate-800 text-slate-500 font-black py-2.5 rounded-xl text-[11px] uppercase tracking-wider cursor-not-allowed">
                         ${currentUserData && item.user_id && idKey(item.user_id) === idKey(currentUserData.id) ? "Your Listing" : "Contact Unavailable"}
@@ -6809,6 +6857,8 @@ function buildCartListMarkup() {
         </div>`;
     })
     .join("");
+
+  return `${summary}<div class="space-y-3">${cards}</div>`;
 }
 
 async function renderCartListView() {
@@ -6819,9 +6869,10 @@ async function renderCartListView() {
     if (container) container.innerHTML = markup;
   });
 
+  const validCount = getValidCartItems().length;
   ["profile-saved-count", "profile-saved-count-pill"].forEach((id) => {
     const el = document.getElementById(id);
-    if (el) el.textContent = String(userCartList.length);
+    if (el) el.textContent = String(validCount);
   });
 }
 
@@ -8632,13 +8683,15 @@ function getAppSettings() {
     notifyMessages: true,
     notifyEngagement: true,
     notifyFollows: true,
-    ...JSON.parse(localStorage.getItem(APP_SETTINGS_KEY) || "{}"),
+    ...safeStorageJsonParse(APP_SETTINGS_KEY, {}),
   };
 }
 
 function saveAppSettings(partial) {
   const merged = { ...getAppSettings(), ...partial };
-  localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(merged));
+  try {
+    localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(merged));
+  } catch (_) {}
   return merged;
 }
 
@@ -9532,7 +9585,16 @@ async function openInboxView() {
     updateDmUnreadBadge();
   } catch (err) {
     console.error("Inbox load error:", err);
-    content.innerHTML = `<div class="p-12 text-center text-red-400 text-xs">Couldn't load your chats. Pull to refresh.</div>`;
+    content.innerHTML = `
+            <div class="text-center py-12 space-y-3 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
+                <p class="text-white font-black text-sm uppercase tracking-wider">Couldn't load chats</p>
+                <p class="text-slate-500 text-xs">Check your connection and try again.</p>
+                <div class="flex justify-center">
+                    <button onclick="window.navigateTo('dms')" class="inline-flex items-center gap-2 bg-amber-400 text-black font-black px-4 py-2.5 rounded-xl text-[11px] uppercase tracking-wider active:scale-[0.98] transition">
+                        <i class="fas fa-rotate-right text-[10px]"></i> Retry
+                    </button>
+                </div>
+            </div>`;
   }
 }
 
@@ -9540,9 +9602,6 @@ function renderInboxList() {
   const content = document.getElementById("dms-content");
   if (!content) return;
 
-  // A blocked person's existing conversation is hidden from the inbox
-  // entirely (not deleted — unblocking brings it right back) so it
-  // reads as "gone" rather than sitting there unusable.
   const visibleConversations = conversationsCache.filter(
     (conv) => !blockedUserIds.has(idKey(dmPeerInfo(conv).id)),
   );
@@ -9553,10 +9612,15 @@ function renderInboxList() {
                 <p class="text-white font-black text-sm uppercase tracking-wider">Messages</p>
                 <p class="text-slate-500 text-[11px]">Search users and start a chat anytime.</p>
             </div>
-            <button onclick="window.openDMUserSearch()" class="w-11 h-11 rounded-2xl bg-amber-400 text-black flex items-center justify-center text-lg active:scale-95 transition shadow-[0_10px_30px_rgba(251,191,36,0.18)]" aria-label="New chat">
-                <i class="fas fa-plus"></i>
+            <button onclick="window.openDMUserSearch()" class="inline-flex items-center gap-2 rounded-2xl bg-slate-800 border border-slate-700 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-200 active:scale-95 transition" aria-label="Find people">
+                <i class="fas fa-magnifying-glass text-[10px]"></i> Find People
             </button>
         </div>`;
+
+  const composeFab = `
+        <button onclick="window.openDMUserSearch()" class="dm-compose-fab" aria-label="Start new chat">
+            <i class="fas fa-pen-to-square text-sm"></i> New Chat
+        </button>`;
 
   if (visibleConversations.length === 0) {
     content.innerHTML = `
@@ -9564,11 +9628,12 @@ function renderInboxList() {
             <div class="text-center py-16 space-y-3 bg-slate-900 border border-slate-800/60 rounded-3xl p-6">
                 <p class="text-3xl">💬</p>
                 <p class="font-black text-white uppercase tracking-tight text-sm">No chats yet</p>
-                <p class="text-slate-500 text-xs max-w-xs mx-auto">Tap Contact on a listing, or use the + button to search for a student and message them directly.</p>
+                <p class="text-slate-500 text-xs max-w-xs mx-auto">Tap Contact on a listing, or use New Chat to search for a student and message them directly.</p>
                 <button onclick="window.openDMUserSearch()" class="inline-flex items-center gap-2 bg-amber-400 text-black font-black px-4 py-2.5 rounded-xl text-[11px] uppercase tracking-wider active:scale-95 transition">
                     <i class="fas fa-user-plus text-[10px]"></i> Start Chat
                 </button>
-            </div>`;
+            </div>
+            ${composeFab}`;
     return;
   }
 
@@ -9595,7 +9660,7 @@ function renderInboxList() {
                 ${isUnread ? '<div class="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0"></div>' : ""}
             </button>`;
     })
-    .join("")}</div>`;
+    .join("")}</div>${composeFab}`;
 }
 
 function subscribeConversationsList() {
