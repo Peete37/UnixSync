@@ -326,37 +326,40 @@ body {
     max-width: 520px;
   }
 
-  /* All/Products/Services tabs all widen to fill the screen
-         (Facebook-style) since they're the views using the multi-column
-         masonry layout — Following/Reels/DMs/Profile/etc. keep the
+  /* All/Products/Services/Deals/Profile all widen to fill the screen
+         (Facebook-style) since these are the views using a multi-column
+         masonry/grid layout — Following/Reels/DMs/etc. keep the
          comfortable 520px reading width above. The column itself has to
          widen (not just #feed-container), since a wider child can't
          exceed a narrower ancestor's max-width.
-         All gets its own wider cap (1040/1320px, below) since it also
-         reserves room for .desktop-right-rail's suggested-content panel
-         — Products/Services don't use that rail, so feed-tab-grid's own
-         cap is used for those two instead, slightly narrower but still
-         far wider than the old 520px every grid tab was stuck at. */
+         Fix: Products/Deals/Profile previously used their own slightly
+         narrower 900px base cap here, while All used 1040px — so on
+         medium desktop widths (1024–1439px) Products/Profile visibly sat
+         narrower than All even though both eventually converged to
+         1320px at 1440px+. Every one of these now shares the exact same
+         1040/1320px values as All, with !important so nothing else in
+         the cascade (or specificity ordering) can leave one of them
+         narrower than the others again. */
   body.feed-tab-grid .desktop-center-column {
-    max-width: 900px;
+    max-width: 1040px !important;
   }
   body.feed-tab-grid .desktop-center-column main,
   body.feed-tab-grid #feed-container {
-    max-width: 900px;
+    max-width: 1040px !important;
   }
   body.feed-tab-grid .site-header:not(.header-reels-mode) {
-    max-width: 900px;
+    max-width: 1040px !important;
   }
   @media (min-width: 1440px) {
     body.feed-tab-grid .desktop-center-column {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
     body.feed-tab-grid .desktop-center-column main,
     body.feed-tab-grid #feed-container {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
     body.feed-tab-grid .site-header:not(.header-reels-mode) {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
   }
 
@@ -364,31 +367,31 @@ body {
          grids here actually fill the screen like the Products/All
          tabs. The old cap kept Profile stuck at phone-column width on
          a 27" monitor — the visible "Profile tab is still small
-         compared to Product tab" complaint. Matches the same
-         breakpoint Products/All already use. */
+         compared to Product tab" complaint. Matches All's own values
+         exactly (see fix note above) rather than its own separate,
+         narrower ones. */
   body.profile-tab #profile-container,
   body.profile-tab .desktop-center-column {
-    max-width: 900px;
+    max-width: 1040px !important;
   }
   body.profile-tab .desktop-center-column main,
   body.profile-tab #profile-container {
-    max-width: 900px;
+    max-width: 1040px !important;
   }
   body.profile-tab .site-header:not(.header-reels-mode) {
-    max-width: 900px;
+    max-width: 1040px !important;
   }
   @media (min-width: 1440px) {
     body.profile-tab #profile-container,
-    body.profile-tab .desktop-tab .desktop-center-column,
     body.profile-tab .desktop-center-column {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
     body.profile-tab .desktop-center-column main,
     body.profile-tab #profile-container {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
     body.profile-tab .site-header:not(.header-reels-mode) {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
   }
 
@@ -396,48 +399,48 @@ body {
          masonry fills the screen rather than sitting in the narrow
          reading column. */
   body.feed-tab-deals .desktop-center-column {
-    max-width: 900px;
+    max-width: 1040px !important;
   }
   body.feed-tab-deals .desktop-center-column main,
   body.feed-tab-deals #feed-container {
-    max-width: 900px;
+    max-width: 1040px !important;
   }
   body.feed-tab-deals .site-header:not(.header-reels-mode) {
-    max-width: 900px;
+    max-width: 1040px !important;
   }
   @media (min-width: 1440px) {
     body.feed-tab-deals .desktop-center-column {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
     body.feed-tab-deals .desktop-center-column main,
     body.feed-tab-deals #feed-container {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
     body.feed-tab-deals .site-header:not(.header-reels-mode) {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
   }
 
   body.feed-tab-all .desktop-center-column {
-    max-width: 1040px;
+    max-width: 1040px !important;
   }
   body.feed-tab-all .desktop-center-column main,
   body.feed-tab-all #feed-container {
-    max-width: 1040px;
+    max-width: 1040px !important;
   }
   body.feed-tab-all .site-header:not(.header-reels-mode) {
-    max-width: 1040px;
+    max-width: 1040px !important;
   }
   @media (min-width: 1440px) {
     body.feed-tab-all .desktop-center-column {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
     body.feed-tab-all .desktop-center-column main,
     body.feed-tab-all #feed-container {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
     body.feed-tab-all .site-header:not(.header-reels-mode) {
-      max-width: 1320px;
+      max-width: 1320px !important;
     }
   }
 
@@ -971,6 +974,28 @@ body {
 @media (min-width: 1440px) {
   .masonry-columns-feed {
     column-count: 4;
+  }
+}
+
+/* Fix: #profile-grid ("My Gigs & Posts" / "Saved Items") was fixed
+       at grid-cols-3 in the HTML regardless of screen size — so widening
+       body.profile-tab's container (above) just stretched 3 tiles into 3
+       huge ones instead of actually filling the extra width with more
+       content, the way Products' masonry grid already does. Matches the
+       same 1024/1440/1920 breakpoints Products uses. */
+@media (min-width: 1024px) {
+  #profile-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1440px) {
+  #profile-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1920px) {
+  #profile-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
 
