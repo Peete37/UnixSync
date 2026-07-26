@@ -7290,9 +7290,7 @@ async function loadFollowingFeed() {
     updateFeedCursorFromPosts(posts, "following");
     applyFeedRankingToCache();
 
-    feed.innerHTML =
-      posts.map((d) => renderFeedCard(d.id, d)).join("") +
-      `
+    feed.innerHTML = `<div class="masonry-columns-feed py-2">${posts.map((d) => renderFeedMasonryCard(d.id, d)).join("")}</div>
             <div id="feed-load-more-sentinel" class="py-6">
                 ${feedHasMore ? "" : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`}
             </div>`;
@@ -7460,7 +7458,7 @@ function renderFeedFromCache() {
   // count fetches) happens afterward, over the now-rendered nodes —
   // splitting render from wiring means the browser only ever parses
   // and lays out the feed HTML one time per load, not once per card.
-  const isAllTab = currentFeedType === "all";
+  const isAllTab = currentFeedType === "all" || currentFeedType === "following";
   feed.classList.toggle("grid-mode", isAllTab);
   const cardRenderer = isAllTab ? renderFeedMasonryCard : renderFeedCard;
   const regularCardsHtml = allCachedPosts.map(({ id, data: d }) =>
@@ -7749,7 +7747,8 @@ function syncFeedTabBodyClasses(type) {
     type === "all" ||
     type === "product" ||
     type === "skill" ||
-    type === "deals";
+    type === "deals" ||
+    type === "following";
   document.body.classList.toggle("feed-tab-all", type === "all");
   document.body.classList.toggle("feed-tab-grid", isGridTab);
   document.body.classList.toggle("feed-tab-deals", type === "deals");
