@@ -2113,13 +2113,13 @@ window.openDetail = async function (postId, fromBack = false) {
       const slides = mediaUrls
         .map((url, i) =>
           d.media_type === "video"
-            ? `<video class="carousel-slide w-full h-[420px] object-contain bg-black shrink-0 snap-start" ${i === 0 ? "autoplay" : ""} controls src="${esc(url)}"></video>`
-            : `<img class="carousel-slide w-full h-[420px] object-contain bg-black shrink-0 snap-start" src="${esc(url)}" alt="Image ${i + 1}">`,
+            ? `<video class="carousel-slide w-full h-[500px] object-contain bg-black shrink-0 snap-start" ${i === 0 ? "autoplay" : ""} controls src="${esc(url)}"></video>`
+            : `<img class="carousel-slide w-full h-[500px] object-contain bg-black shrink-0 snap-start" src="${esc(url)}" alt="Image ${i + 1}">`,
         )
         .join("");
       mediaBlock = `
                 <div class="relative w-full">
-                    <div id="detail-carousel" class="flex overflow-x-auto snap-x snap-mandatory scroll-smooth no-scrollbar h-[420px]" style="scroll-snap-type:x mandatory;">
+                    <div id="detail-carousel" class="flex overflow-x-auto snap-x snap-mandatory scroll-smooth no-scrollbar h-[500px]" style="scroll-snap-type:x mandatory;">
                         ${slides}
                     </div>
                     <div class="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
@@ -2129,8 +2129,8 @@ window.openDetail = async function (postId, fromBack = false) {
     } else if (mediaUrls.length === 1) {
       mediaBlock =
         d.media_type === "video"
-          ? `<video class="w-full max-h-[600px] object-contain bg-black" controls autoplay src="${esc(mediaUrls[0])}"></video>`
-          : `<img class="w-full object-contain bg-black" src="${esc(mediaUrls[0])}" alt="Post Media">`;
+          ? `<video class="w-full max-h-[680px] object-contain bg-black" controls autoplay src="${esc(mediaUrls[0])}"></video>`
+          : `<img class="w-full min-h-[460px] max-h-[680px] object-contain bg-black" src="${esc(mediaUrls[0])}" alt="Post Media">`;
     }
 
     const followBlock =
@@ -2205,7 +2205,7 @@ window.openDetail = async function (postId, fromBack = false) {
                     <div class="flex items-baseline gap-2 flex-wrap">
                         ${isSoldDetail ? `<span class="bg-slate-800 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] px-2.5 py-1 rounded-full border border-slate-700">Sold</span>` : ""}
                         <span class="text-amber-400 font-black text-3xl leading-none">GH₵${esc(String(d.price || 0))}</span>
-                        ${hasDiscountDetail ? `<span class="sale-strike-price text-slate-500 text-base" data-sale-ends="${escAttr(d.sale_ends_at)}">Was GH₵${esc(String(d.original_price))}</span>` : ""}
+                        ${hasDiscountDetail ? `<span class="sale-strike-price text-slate-500 text-base" data-sale-ends="${escAttr(d.sale_ends_at)}">Now GH₵${esc(String(d.original_price))}</span>` : ""}
                         ${!isSoldDetail && saleActiveDetail ? `<span class="sale-countdown-badge bg-rose-500/90 text-white text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</span>` : ""}
                     </div>
                     <button onclick="window.openPostOptionsMenu('${escAttr(d.id)}', ${isOwn ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-slate-400 hover:text-white transition px-1 shrink-0">
@@ -5683,7 +5683,7 @@ function renderFeedMasonryCard(id, d, options = {}) {
             }
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2.5 pt-6 pb-2 flex items-baseline gap-1.5">
                 <span class="text-amber-400 font-black text-xs">GH₵${esc(String(d.price || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Was GH₵${esc(String(d.original_price))}</span>` : ""}
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Now GH₵${esc(String(d.original_price))}</span>` : ""}
             </div>
         </div>
         <div class="px-2.5 py-2">
@@ -5761,7 +5761,7 @@ function renderProductGridCard(id, d) {
             </button>
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2 pt-5 pb-1.5 flex items-baseline gap-1.5">
                 <span class="text-amber-400 font-black text-[11px]">GH₵${esc(String(d.price || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[9px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Was GH₵${esc(String(d.original_price))}</span>` : ""}
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[9px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Now GH₵${esc(String(d.original_price))}</span>` : ""}
             </div>
         </div>
         <div class="p-2">
@@ -5880,7 +5880,7 @@ function renderServiceGridCard(id, d) {
             </div>
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-3 pt-6 pb-2 flex items-baseline gap-1.5">
                 <span class="text-amber-400 font-black text-sm">GH₵${esc(String(d.price || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Was GH₵${esc(String(d.original_price))}</span>` : ""}
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Now GH₵${esc(String(d.original_price))}</span>` : ""}
             </div>
         </div>
         <div class="p-3">
