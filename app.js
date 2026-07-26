@@ -6812,7 +6812,7 @@ function buildCartListMarkup() {
         : "Campus listing";
       const thumb = firstUrl
         ? `<div class="saved-item-thumb relative">
-                   <img src="${esc(firstUrl)}" onerror="this.parentElement.innerHTML='<i class=\'fas fa-image text-slate-600\'></i>'; this.parentElement.classList.add('flex','items-center','justify-center');" class="w-full h-full object-cover" alt="">
+                   <img src="${esc(firstUrl)}" onerror="this.parentElement.innerHTML='<i class=\\'fas fa-image text-slate-600\\'></i>'; this.parentElement.classList.add('flex','items-center','justify-center');" class="w-full h-full object-cover" alt="">
                    ${isVideo ? `<div class="absolute inset-0 flex items-center justify-center bg-black/35"><i class="fas fa-play text-white text-xs"></i></div>` : ""}
                </div>`
         : `<div class="saved-item-thumb flex items-center justify-center text-slate-600"><i class="fas fa-image"></i></div>`;
