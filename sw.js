@@ -30,7 +30,7 @@
 //     never meant to be intercepted and just generate noisy console
 //     errors if handled.
 
-const SHELL_CACHE = 'campusmarket-shell-v2';
+const SHELL_CACHE = "campusmarket-shell-v3";
 
 // Same-origin files that make up the app shell. Add to this list if new
 // static assets are introduced (e.g. a manifest icon set). Keep this in
@@ -39,110 +39,121 @@ const SHELL_CACHE = 'campusmarket-shell-v2';
 // of these URLs 404s, so double check this list after renaming or
 // removing any top-level file.
 const SHELL_ASSETS = [
-    './',
-    './index.html',
-    './app.js',
-    './manifest.json'
+  "./",
+  "./index.html",
+  "./app.js",
+  "./main.css",
+  "./manifest.json",
 ];
 
-self.addEventListener('install', (event) => {
-    event.waitUntil(
-        caches.open(SHELL_CACHE)
-            .then((cache) => cache.addAll(SHELL_ASSETS))
-            .catch(() => {
-                // A single missing asset (e.g. manifest.json not deployed
-                // yet) shouldn't block installation of the whole worker.
-            })
-    );
-    self.skipWaiting();
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches
+      .open(SHELL_CACHE)
+      .then((cache) => cache.addAll(SHELL_ASSETS))
+      .catch(() => {
+        // A single missing asset (e.g. manifest.json not deployed
+        // yet) shouldn't block installation of the whole worker.
+      }),
+  );
+  self.skipWaiting();
 });
 
-self.addEventListener('activate', (event) => {
-    event.waitUntil(
-        caches.keys().then((keys) =>
-            Promise.all(
-                keys.filter((key) => key !== SHELL_CACHE)
-                    .map((key) => caches.delete(key))
-            )
-        )
-    );
-    self.clients.claim();
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches
+      .keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((key) => key !== SHELL_CACHE)
+            .map((key) => caches.delete(key)),
+        ),
+      ),
+  );
+  self.clients.claim();
 });
 
 function isSupabaseRequest(url) {
-    return url.hostname.endsWith('.supabase.co');
+  return url.hostname.endsWith(".supabase.co");
 }
 
 function isCdnShellAsset(url) {
-    // Third-party libraries that only change when the person explicitly
-    // ships a new version — safe to cache aggressively.
-    return (
-        url.hostname === 'cdn.jsdelivr.net' ||
-        url.hostname === 'cdnjs.cloudflare.com' ||
-        url.hostname === 'fonts.googleapis.com' ||
-        url.hostname === 'fonts.gstatic.com'
-    );
+  // Third-party libraries that only change when the person explicitly
+  // ships a new version — safe to cache aggressively.
+  return (
+    url.hostname === "cdn.jsdelivr.net" ||
+    url.hostname === "cdnjs.cloudflare.com" ||
+    url.hostname === "fonts.googleapis.com" ||
+    url.hostname === "fonts.gstatic.com"
+  );
 }
 
-self.addEventListener('fetch', (event) => {
-    const req = event.request;
-    if (req.method !== 'GET') return;
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  if (req.method !== "GET") return;
 
-    const url = new URL(req.url);
+  const url = new URL(req.url);
 
-    // Never intercept live app data — always go straight to the network.
-    if (isSupabaseRequest(url)) return;
+  // Never intercept live app data — always go straight to the network.
+  if (isSupabaseRequest(url)) return;
 
-    // Browser extensions sometimes route requests through page fetches —
-    // these were never meant for this service worker to handle.
-    if (url.protocol === 'chrome-extension:') return;
+  // Browser extensions sometimes route requests through page fetches —
+  // these were never meant for this service worker to handle.
+  if (url.protocol === "chrome-extension:") return;
 
-    const isSameOriginShell = url.origin === self.location.origin;
-    if (!isSameOriginShell && !isCdnShellAsset(url)) return;
+  const isSameOriginShell = url.origin === self.location.origin;
+  if (!isSameOriginShell && !isCdnShellAsset(url)) return;
 
-    // HTML page navigations: network-first. Always prefer the freshest
-    // markup; only fall back to cache (then to the cached index.html as
-    // a last resort, so a deep link still opens something) if the
-    // network request fails entirely.
-    const isPageRequest = req.headers.get('accept')?.includes('text/html');
-    if (isPageRequest) {
-        event.respondWith(
-            fetch(req)
-                .then((res) => {
-                    if (res && res.ok) {
-                        const cloned = res.clone();
-                        caches.open(SHELL_CACHE).then((cache) => cache.put(req, cloned));
-                    }
-                    return res;
-                })
-                .catch(() =>
-                    caches.match(req).then((cached) => cached || caches.match('./index.html'))
-                )
-        );
-        return;
-    }
-
-    // Everything else in the shell (app.js, CDN scripts/fonts):
-    // stale-while-revalidate. Serve the cached copy instantly if there
-    // is one, and quietly refresh it in the background for next time.
+  // HTML page navigations: network-first. Always prefer the freshest
+  // markup; only fall back to cache (then to the cached index.html as
+  // a last resort, so a deep link still opens something) if the
+  // network request fails entirely.
+  const isPageRequest = req.headers.get("accept")?.includes("text/html");
+  if (isPageRequest) {
     event.respondWith(
-        caches.open(SHELL_CACHE).then((cache) =>
-            cache.match(req).then((cached) => {
-                const networkFetch = fetch(req)
-                    .then((res) => {
-                        // Only cache successful, non-opaque responses —
-                        // an opaque (type: 'opaque') response, e.g. from a
-                        // cross-origin request without CORS, can't be
-                        // reliably reused later and isn't safe to store.
-                        if (res && res.ok && (res.type === 'basic' || res.type === 'cors')) {
-                            cache.put(req, res.clone());
-                        }
-                        return res;
-                    })
-                    .catch(() => cached); // offline fallback to whatever's cached
-
-                return cached || networkFetch;
-            })
-        )
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const cloned = res.clone();
+            caches.open(SHELL_CACHE).then((cache) => cache.put(req, cloned));
+          }
+          return res;
+        })
+        .catch(() =>
+          caches
+            .match(req)
+            .then((cached) => cached || caches.match("./index.html")),
+        ),
     );
+    return;
+  }
+
+  // Everything else in the shell (app.js, CDN scripts/fonts):
+  // stale-while-revalidate. Serve the cached copy instantly if there
+  // is one, and quietly refresh it in the background for next time.
+  event.respondWith(
+    caches.open(SHELL_CACHE).then((cache) =>
+      cache.match(req).then((cached) => {
+        const networkFetch = fetch(req)
+          .then((res) => {
+            // Only cache successful, non-opaque responses —
+            // an opaque (type: 'opaque') response, e.g. from a
+            // cross-origin request without CORS, can't be
+            // reliably reused later and isn't safe to store.
+            if (
+              res &&
+              res.ok &&
+              (res.type === "basic" || res.type === "cors")
+            ) {
+              cache.put(req, res.clone());
+            }
+            return res;
+          })
+          .catch(() => cached); // offline fallback to whatever's cached
+
+        return cached || networkFetch;
+      }),
+    ),
+  );
 });
