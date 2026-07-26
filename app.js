@@ -2205,7 +2205,7 @@ window.openDetail = async function (postId, fromBack = false) {
                     <div class="flex items-baseline gap-2 flex-wrap">
                         ${isSoldDetail ? `<span class="bg-slate-800 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] px-2.5 py-1 rounded-full border border-slate-700">Sold</span>` : ""}
                         <span class="text-amber-400 font-black text-3xl leading-none">GH₵${esc(String(d.price || 0))}</span>
-                        ${hasDiscountDetail ? `<span class="sale-strike-price text-slate-500 text-base line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.original_price))}</span>` : ""}
+                        ${hasDiscountDetail ? `<span class="sale-strike-price text-slate-500 text-base" data-sale-ends="${escAttr(d.sale_ends_at)}">Was GH₵${esc(String(d.original_price))}</span>` : ""}
                         ${!isSoldDetail && saleActiveDetail ? `<span class="sale-countdown-badge bg-rose-500/90 text-white text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</span>` : ""}
                     </div>
                     <button onclick="window.openPostOptionsMenu('${escAttr(d.id)}', ${isOwn ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-slate-400 hover:text-white transition px-1 shrink-0">
@@ -2785,7 +2785,7 @@ function _initAvatarLongPress() {
 
   profileAvatar.addEventListener("touchstart", startPress, { passive: true });
   profileAvatar.addEventListener("touchend", cancelPress);
-  profileAvatar.addEventListener("touchmove", cancelPress);
+  profileAvatar.addEventListener("touchmove", cancelPress, { passive: true });
   profileAvatar.addEventListener("mousedown", startPress);
   profileAvatar.addEventListener("mouseup", cancelPress);
   profileAvatar.addEventListener("mouseleave", cancelPress);
@@ -5683,7 +5683,7 @@ function renderFeedMasonryCard(id, d, options = {}) {
             }
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2.5 pt-6 pb-2 flex items-baseline gap-1.5">
                 <span class="text-amber-400 font-black text-xs">GH₵${esc(String(d.price || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.original_price))}</span>` : ""}
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Was GH₵${esc(String(d.original_price))}</span>` : ""}
             </div>
         </div>
         <div class="px-2.5 py-2">
@@ -5761,7 +5761,7 @@ function renderProductGridCard(id, d) {
             </button>
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2 pt-5 pb-1.5 flex items-baseline gap-1.5">
                 <span class="text-amber-400 font-black text-[11px]">GH₵${esc(String(d.price || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[9px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.original_price))}</span>` : ""}
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[9px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Was GH₵${esc(String(d.original_price))}</span>` : ""}
             </div>
         </div>
         <div class="p-2">
@@ -5880,7 +5880,7 @@ function renderServiceGridCard(id, d) {
             </div>
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-3 pt-6 pb-2 flex items-baseline gap-1.5">
                 <span class="text-amber-400 font-black text-sm">GH₵${esc(String(d.price || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.original_price))}</span>` : ""}
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Was GH₵${esc(String(d.original_price))}</span>` : ""}
             </div>
         </div>
         <div class="p-3">
@@ -8511,6 +8511,7 @@ async function loadProfileStats() {
     if (grid) {
       grid.innerHTML =
         postsRes.data?.map((d) => renderGridItem(d.id, d)).join("") || "";
+      wireGridTileTouchHandlers();
     }
   } catch (err) {
     console.warn("Profile stats error:", err);
@@ -10918,9 +10919,7 @@ function renderGridItem(id, post) {
         onmousedown="window._startGridTileHold('${escAttr(key)}')"
         onmouseup="window._cancelGridTileHold()"
         onmouseleave="window._cancelGridTileHold()"
-        ontouchstart="window._startGridTileHold('${escAttr(key)}')"
         ontouchend="window._cancelGridTileHold()"
-        ontouchmove="window._cancelGridTileHold()"
     >
         <span class="grid-tile-check"><i class="fas fa-check"></i></span>
         ${
@@ -10933,6 +10932,23 @@ function renderGridItem(id, post) {
             <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
         </div>
     </div>`;
+}
+
+// Wires touchstart/touchmove on every grid tile as real, passive listeners
+// (see renderGridItem — these can't be inline HTML attributes like the
+// mouse/touchend handlers, since inline attributes are always non-passive
+// and were the source of a "non-passive event listener" console violation
+// per tile). Call this once after the grid's innerHTML is (re)built.
+function wireGridTileTouchHandlers() {
+  document.querySelectorAll(".grid-tile[data-post-id]").forEach((tile) => {
+    const key = tile.getAttribute("data-post-id");
+    tile.addEventListener("touchstart", () => window._startGridTileHold(key), {
+      passive: true,
+    });
+    tile.addEventListener("touchmove", () => window._cancelGridTileHold(), {
+      passive: true,
+    });
+  });
 }
 
 // ─── GRID MULTI-SELECT (press-and-hold to select, then bulk delete) ────────
