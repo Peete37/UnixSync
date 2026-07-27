@@ -642,6 +642,78 @@
                   id="profile-subview-settings"
                   class="profile-subview hidden"
                 >
+                  <!-- Premium settings hero: gives the whole screen a focused,
+                     app-grade entry rather than dropping the user straight
+                     into a wall of stacked grey cards. Anchors the rest of
+                     the page visually so subsequent cards feel grouped
+                     under one experience instead of a long form. -->
+                  <div class="settings-hero" aria-hidden="true">
+                    <div class="settings-hero-glow"></div>
+                    <div class="settings-hero-content">
+                      <span class="settings-hero-eyebrow">CampusMarket</span>
+                      <span class="settings-hero-title"
+                        >Settings &amp; Preferences</span
+                      >
+                      <span class="settings-hero-sub" id="settingsHeroSub"
+                        >Personalise how CampusMarket looks and behaves for
+                        you.</span
+                      >
+                    </div>
+                  </div>
+
+                  <!-- Sticky segmented category tabs. Anchor-scrolls into the
+                     existing .settings-card IDs added below; doesn't
+                     duplicate any of the cards already in this view. -->
+                  <nav
+                    class="settings-tabs"
+                    id="settingsTabs"
+                    aria-label="Settings sections"
+                  >
+                    <button
+                      class="settings-tab is-active"
+                      data-target="settings-section-account"
+                      type="button"
+                    >
+                      <i class="fas fa-user"></i><span>Account</span>
+                    </button>
+                    <button
+                      class="settings-tab"
+                      data-target="settings-section-campus"
+                      type="button"
+                    >
+                      <i class="fas fa-map-marker-alt"></i><span>Campus</span>
+                    </button>
+                    <button
+                      class="settings-tab"
+                      data-target="settings-section-playback"
+                      type="button"
+                    >
+                      <i class="fas fa-circle-play"></i><span>Playback</span>
+                    </button>
+                    <button
+                      class="settings-tab"
+                      data-target="settings-section-notifications"
+                      type="button"
+                    >
+                      <i class="fas fa-bell"></i><span>Alerts</span>
+                    </button>
+                    <button
+                      class="settings-tab"
+                      data-target="settings-section-privacy"
+                      type="button"
+                    >
+                      <i class="fas fa-shield-halved"></i><span>Privacy</span>
+                    </button>
+                    <button
+                      class="settings-tab"
+                      data-target="settings-section-session"
+                      type="button"
+                    >
+                      <i class="fas fa-arrow-right-from-bracket"></i
+                      ><span>Session</span>
+                    </button>
+                  </nav>
+
                   <div class="campus-id-strip">
                     <span class="badge-dot"></span>
                     <div class="min-w-0">
@@ -660,7 +732,7 @@
                     </div>
                   </div>
 
-                  <div class="settings-card">
+                  <div id="settings-section-account" class="settings-card">
                     <div class="settings-card-header">
                       <span class="settings-card-icon"
                         ><i class="fas fa-user"></i
@@ -732,7 +804,7 @@
                     </div>
                   </div>
 
-                  <div class="settings-card">
+                  <div id="settings-section-campus" class="settings-card">
                     <div class="settings-card-header">
                       <span class="settings-card-icon"
                         ><i class="fas fa-map-marker-alt"></i
@@ -777,7 +849,7 @@
                     </div>
                   </div>
 
-                  <div class="settings-card">
+                  <div id="settings-section-playback" class="settings-card">
                     <div class="settings-card-header">
                       <span class="settings-card-icon"
                         ><i class="fas fa-wifi"></i
@@ -839,7 +911,10 @@
                     </div>
                   </div>
 
-                  <div class="settings-card">
+                  <div
+                    id="settings-section-notifications"
+                    class="settings-card"
+                  >
                     <div class="settings-card-header">
                       <span class="settings-card-icon"
                         ><i class="fas fa-bell"></i
@@ -885,7 +960,7 @@
                     </div>
                   </div>
 
-                  <div class="settings-card">
+                  <div id="settings-section-privacy" class="settings-card">
                     <div class="settings-card-header">
                       <span class="settings-card-icon"
                         ><i class="fas fa-shield-halved"></i
@@ -935,7 +1010,7 @@
                     </div>
                   </div>
 
-                  <div class="pt-2 space-y-2">
+                  <div id="settings-section-session" class="pt-2 space-y-2">
                     <button
                       onclick="window.signOutUser()"
                       class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
@@ -1924,6 +1999,13 @@
         });
       }
     </script>
+    <script
+      type="module"
+      src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
+      integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ=="
+      data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}'
+      crossorigin="anonymous"
+    ></script>
     <script
       type="module"
       src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"

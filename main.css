@@ -1940,6 +1940,149 @@ main {
 }
 
 /* ── PREMIUM CAMPUS SETTINGS ── */
+
+/* Premium hero card above the segmented category nav. Gives the
+         screen a focused entry point instead of dropping into a wall of
+         cards. The radial glow + slow drift gives a premium, app-grade
+         feel that matches modern iOS / app-store hero cards without
+         being heavy. */
+.settings-hero {
+  position: relative;
+  margin-bottom: 14px;
+  padding: 22px 20px 24px;
+  border-radius: 22px;
+  overflow: hidden;
+  background:
+    linear-gradient(
+      140deg,
+      rgba(251, 191, 36, 0.18) 0%,
+      rgba(251, 191, 36, 0.04) 38%,
+      rgba(15, 23, 42, 0.4) 100%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(30, 41, 59, 0.6) 0%,
+      rgba(15, 23, 42, 0.6) 100%
+    );
+  border: 1px solid rgba(251, 191, 36, 0.18);
+  box-shadow:
+    0 14px 40px -22px rgba(251, 191, 36, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.settings-hero-glow {
+  position: absolute;
+  top: -80px;
+  right: -60px;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at center,
+    rgba(251, 191, 36, 0.35) 0%,
+    rgba(251, 191, 36, 0) 70%
+  );
+  filter: blur(20px);
+  pointer-events: none;
+}
+.settings-hero-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.settings-hero-eyebrow {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #fbbf24;
+}
+.settings-hero-title {
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  color: #ffffff;
+  margin-top: 2px;
+}
+.settings-hero-sub {
+  font-size: 11px;
+  color: rgba(226, 232, 240, 0.7);
+  line-height: 1.45;
+  max-width: 32ch;
+  margin-top: 4px;
+}
+
+/* Sticky segmented tab nav. Premium iOS-style pill row that
+         scroll-anchors into existing .settings-card IDs (no card
+         duplication). Active tab uses an inner accent pill with the
+         amber brand colour so the user can see at a glance which
+         section they're on. */
+.settings-tabs {
+  position: sticky;
+  top: 56px;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  margin-bottom: 16px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.settings-tabs::-webkit-scrollbar {
+  display: none;
+}
+.settings-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 11px;
+  background: transparent;
+  border: 0;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background-color 0.15s,
+    transform 0.1s;
+}
+.settings-tab i {
+  font-size: 11px;
+}
+.settings-tab:hover {
+  color: #e2e8f0;
+}
+.settings-tab:active {
+  transform: scale(0.97);
+}
+.settings-tab.is-active {
+  background: linear-gradient(180deg, #fbbf24 0%, #f59e0b 100%);
+  color: #0b0f1a;
+  box-shadow: 0 4px 14px -6px rgba(251, 191, 36, 0.55);
+}
+
+/* Anchor scrolling offset so the sticky header doesn't hide the
+         top of the target card. */
+#settings-section-account,
+#settings-section-campus,
+#settings-section-playback,
+#settings-section-notifications,
+#settings-section-privacy,
+#settings-section-session {
+  scroll-margin-top: 124px;
+}
+
 .settings-card {
   background: linear-gradient(
     180deg,
@@ -2228,4 +2371,87 @@ main {
 .post-options-trigger:active {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
+}
+
+/* ─── UI-CONSISTENCY PASS — shared shell ─────────────────────────── */
+/* Standardises the small "eyebrow" line (tiny uppercase label used
+         in card headers like "Saved Items", "Campus Settings", "Discover
+         Hub") so they all read the same weight/size/colour no matter
+         which container rendered them. Also standardises the amber-CTA
+         primary button that opens every modal ("Sign In", "Save Name",
+         "Retry", etc.) so its hover/active feedback matches everywhere.
+         Plus tighter stat-tile rhythm — the 3-col Posts/Followers/
+         Following row, etc. — uses the same vertical padding everywhere. */
+.campus-eyebrow {
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  margin: 0;
+}
+.campus-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #fbbf24;
+  color: #020617;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 10px 24px;
+  border-radius: 12px;
+  font-size: 12px;
+  transition:
+    transform 0.1s ease,
+    background-color 0.15s ease;
+  border: 0;
+  cursor: pointer;
+}
+.campus-cta:hover {
+  background: #f59e0b;
+}
+.campus-cta:active {
+  transform: scale(0.97);
+}
+
+/* ─── MOBILE SPACING PASS — narrow phones & safe-area polish ────── */
+/* Bug hunting surfaced two mobile-only issues:
+         1. On phones ≤ 360px wide (Galaxy S8, iPhone SE 1st-gen) the
+            profile header's three-stat row crowded the labels and the
+            "Saved Items" count pill pushed onto its own line. Compact
+            down the hit-tiles and tighten the gap.
+         2. The bottom-nav overlay protected content from the notch on
+            landscape phones (where env(safe-area-inset-bottom) reads 0)
+            but on portrait devices with home-indicator insets, the very
+            last feed card slipped under the nav. Bump main padding. */
+@media (max-width: 360px) {
+  #profile-container .grid.grid-cols-3 > div {
+    padding: 10px 4px;
+  }
+  #profile-container .grid.grid-cols-3 .text-lg {
+    font-size: 16px;
+    line-height: 1.1;
+  }
+  #profile-container .grid.grid-cols-3 .text-\[9px\] {
+    font-size: 8px;
+    letter-spacing: 0.04em;
+  }
+  #profile-saved-quick-btn {
+    padding: 10px 8px;
+  }
+  #profile-saved-count-pill {
+    padding: 1px 6px;
+    min-width: 1.1rem;
+  }
+}
+
+/* Bottom safe-area for every screen section that scrolls under the
+         mobile nav. pb-24 (96px) on main isn't enough on devices with a
+         tall home indicator; bump by the safe-area so the last card is
+         always reachable. */
+main {
+  padding-bottom: max(96px, calc(96px + env(safe-area-inset-bottom, 0px)));
 }

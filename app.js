@@ -36,6 +36,12 @@ const FEED_DECAY_HALF_LIFE_HOURS = 72;
 const FEED_DECAY_ENGAGEMENT_WEIGHT = 0.18;
 const SAVED_ALERTS_KEY = "campus_market_saved_alerts";
 const ALERT_NOTIFIED_POSTS_KEY = "campus_market_alert_notified_posts";
+// Fix: counter for open modals that lock body scroll, so overlapping modals
+// (e.g. detail view opened while confirmation sheet is still up) only
+// release the lock on the LAST close. Without this, a confirm dialog
+// followed by a detail open/close could free scroll under the dialog.
+// Bug-hunting pass — declared at top so every open/close path can ++/-- it.
+let _bodyScrollLocks = 0;
 const DEFAULT_SAFE_SWAP_ZONES = {
   default: [
     "Main campus security post",
@@ -1986,6 +1992,81 @@ window.switchProfileTab = function (tabType, selectedBtn = null) {
 
 window.openCampusSettings = function () {
   window.switchProfileTab("settings");
+  // Wire the Premium Settings segmented nav the first time the view
+  // becomes visible. Cached as a flag so re-opening settings doesn't
+  // stack duplicate scroll listeners on the window object.
+  if (
+    !window.__settingsTabsInitDone &&
+    typeof window.initSettingsTabs === "function"
+  ) {
+    window.__settingsTabsInitDone = true;
+    window.initSettingsTabs();
+  }
+};
+
+// Bug fix: the Premium Settings redesign added a sticky segmented tab nav
+// that anchor-scrolls into the existing .settings-card section. Each tab
+// is just a data-target=sectionId button — this handler picks the tab,
+// marks it active (visual pill), scrolls the target into view, and
+// re-syncs the active state on scroll-back so the user sees which
+// section they're reading as they scroll past.
+window.initSettingsTabs = function () {
+  const tabs = document.querySelectorAll("#settingsTabs .settings-tab");
+  const sectionIds = [
+    "settings-section-account",
+    "settings-section-campus",
+    "settings-section-playback",
+    "settings-section-notifications",
+    "settings-section-privacy",
+    "settings-section-session",
+  ];
+  const sections = sectionIds
+    .map((id) => document.getElementById(id))
+    .filter(Boolean);
+  if (!tabs.length || !sections.length) return;
+
+  // Touch/scroll sync: whichever section is closest to the viewport top
+  // (within the scroll-margin-top offset) wins the active pill. Using
+  // rAF so we fire at most once per paint.
+  let rafId = null;
+  const syncActiveOnScroll = () => {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      const offset = 140; // matches scroll-margin-top in main.css
+      let activeId = sectionIds[0];
+      for (const sec of sections) {
+        const top = sec.getBoundingClientRect().top;
+        if (top - offset <= 0) activeId = sec.id;
+        else break;
+      }
+      tabs.forEach((tab) => {
+        const on = tab.dataset.target === activeId;
+        tab.classList.toggle("is-active", on);
+        tab.setAttribute("aria-current", on ? "true" : "false");
+      });
+    });
+  };
+
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", (ev) => {
+      const targetId = tab.dataset.target;
+      const target = document.getElementById(targetId);
+      if (!target) return;
+      ev.preventDefault();
+      // UX: smooth-scroll into view but visually mark the tab active
+      // immediately so the tap feels responsive (the scroll listener
+      // would otherwise wait for the next animation frame).
+      tabs.forEach((t) => {
+        t.classList.toggle("is-active", t === tab);
+        t.setAttribute("aria-current", t === tab ? "true" : "false");
+      });
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+
+  window.addEventListener("scroll", syncActiveOnScroll, { passive: true });
+  syncActiveOnScroll();
 };
 
 window.openUserDashboard = function (userId) {
@@ -2052,12 +2133,15 @@ window.openDetail = async function (postId, fromBack = false) {
   _currentDetailPostId = postId;
 
   modal.classList.remove("hidden");
-  // Fix: nothing previously stopped the page underneath from also
-  // scrolling while the detail modal was open — on mobile, touch-
-  // scrolling inside the modal could bleed through to the feed behind
-  // it (rubber-banding), visibly showing the background feed sliding
-  // underneath instead of the modal fully occupying the screen.
+  // Pair with the --_bodyScrollLocks counter in closeDetailModal: bump
+  // the lock on open so nested modals (e.g. a rates dialog from inside
+  // the detail view) still bleed-scroll lock correctly. Mirrors the
+  // pair++/-- pattern used elsewhere in the file.
+  _bodyScrollLocks++;
   document.body.style.overflow = "hidden";
+  // Fix: keep aria-hidden in sync with .hidden so assistive tech knows
+  // the modal is visible when the class is removed, and gone when added.
+  modal.setAttribute("aria-hidden", "false");
   // Fix: this used to unconditionally push ANOTHER 'detail-modal' history
   // entry here, on top of whatever the if/else block above already
   // pushed. When drilling into a "you might also like" post, that block
@@ -2312,7 +2396,16 @@ window.openDetail = async function (postId, fromBack = false) {
 
 window.closeDetailModal = function (fromPop = false) {
   const modal = document.getElementById("detail-modal");
-  document.body.style.overflow = "";
+  // Fix: scroll-lock leak. Previously set to '' unconditionally, which
+  // is correct ONLY when this close was the most recent open. If another
+  // modal overlaying the detail (or a sibling sheet like the options
+  // menu) is still open on close, clearing overflow here re-enabled the
+  // body scroll under THAT still-open overlay, defeating the rubber-band
+  // fix. Track our own count so only the LAST close releases the lock.
+  if (--_bodyScrollLocks <= 0) {
+    _bodyScrollLocks = 0;
+    document.body.style.overflow = "";
+  }
   _detailPostStack = [];
   _currentDetailPostId = null;
   // Stop any video playing inside the detail view immediately — without
@@ -2327,6 +2420,11 @@ window.closeDetailModal = function (fromPop = false) {
     } catch (_) {}
   });
   modal?.classList.add("hidden");
+  // Fix: keep aria-hidden in sync so assistive tech actually treats the
+  // modal as gone — .hidden alone is a visual hint only, and screen
+  // readers were still reading the now-invisible content because the
+  // attribute was never toggled off on close.
+  modal?.setAttribute("aria-hidden", "true");
   if (!fromPop) popUiState("detail-modal");
 };
 
@@ -6864,6 +6962,12 @@ function buildCartListMarkup() {
 async function renderCartListView() {
   await hydrateCartItemsFromSource();
   const markup = buildCartListMarkup();
+  // Fix: clear both wrappers so any previous "Couldn't load saved items"
+  // error banner from renderSavedItemsLoadError() — which only writes into
+  // one specific wrapper — doesn't leave a stale "Something went wrong"
+  // card sitting on the OTHER wrapper (cart vs profile) after recovery.
+  // Loading markup on top of the error markup also produced the stacked
+  // "error + 7 saved items" layout captured in screenshots.
   ["cart-items-wrapper", "profile-saved-items-wrapper"].forEach((id) => {
     const container = document.getElementById(id);
     if (container) container.innerHTML = markup;
@@ -10466,6 +10570,10 @@ if (activeAuthChange) {
 
     if (user) {
       const metadata = user.user_metadata || {};
+      // Mark first successful auth so the auto-login-popup below can
+      // distinguish a real sign-out from a transient offline null.
+      window.__sawInitialSession = true;
+      window.__lastSeenOnline = Date.now();
       document.getElementById("login-modal")?.classList.add("hidden");
       document.getElementById("signup-modal")?.classList.add("hidden");
       document.getElementById("onboarding-modal")?.remove();
@@ -10660,9 +10768,26 @@ if (activeAuthChange) {
 
       document.getElementById("campus-scope-banner")?.classList.add("hidden");
       subscribeFeed();
-      // Only auto-open the login modal on a genuine signed-out state
-      // while online — never as a side-effect of connectivity loss.
-      if (typeof window.openLoginModal === "function" && navigator.onLine) {
+      // Bug fix: the sign-in modal used to pop up automatically on ANY
+      // sign-out event, including the very common case where the
+      // network momentarily drops and Supabase reports a null session
+      // for an offline `INITIAL_SESSION` lookup. That looked like a
+      // forced re-login every time Wi-Fi blinked, on top of the
+      // earlier fix at the top of the handler that already bails on
+      // (offline && !user). Now we also require the auth runtime to
+      // have already seen a successful initial session at least once
+      // — i.e. we've truly booted — AND confirm we recently saw a
+      // healthy online window, so a network-mid-session reconnect
+      // that briefly reads null can't trigger the modal.
+      const hadInitialSession = !!window.__sawInitialSession;
+      const recentlyOnline =
+        Date.now() - (window.__lastSeenOnline || 0) < 15000;
+      if (
+        typeof window.openLoginModal === "function" &&
+        navigator.onLine &&
+        hadInitialSession &&
+        recentlyOnline
+      ) {
         window.openLoginModal();
       }
     }
