@@ -965,13 +965,13 @@ function notifySavedAlertsForPosts(posts, { source = "feed" } = {}) {
 function renderSavedAlertPills(activeTerm = "") {
   if (!savedSearchAlerts.length) return "";
   const normalizedActive = normalizeSearchAlertTerm(activeTerm);
-  // Fix: the pill button and its ✕ remove button used to be flex
+  // Fix: the pill button and its remove button used to be flex
   // siblings glued together with a negative margin (-ml-1). That only
   // looks attached when both happen to land on the same flex-wrap line;
-  // once the row wraps at a narrow width, the ✕ can end up on the next
-  // line, detached from the pill it's meant to remove. Wrapping each
-  // pair in its own inline-flex container keeps them physically
-  // together no matter where the wrap point falls.
+  // once the row wraps at a narrow width, the remove button can end up
+  // on the next line, detached from the pill it's meant to remove.
+  // Wrapping each pair in its own inline-flex container keeps them
+  // physically together no matter where the wrap point falls.
   return `
         <div class="flex flex-wrap gap-2 mb-3">
             ${savedSearchAlerts
@@ -5497,7 +5497,7 @@ window.openCommentOptionsMenu = function (
     ? [
         {
           label: "Delete comment",
-          icon: "fas fa-trash-can",
+          icon: "fas fa-xmark",
           danger: true,
           action: () => window.deleteComment(commentId, postId),
         },
@@ -6944,7 +6944,7 @@ function buildCartListMarkup() {
                             ${item.user_name ? `<p class="text-slate-400 text-[11px] truncate mt-1">Seller: ${esc(item.user_name)}</p>` : ""}
                         </div>
                         <button onclick="window.toggleCartItem('${escAttr(item.id)}')" class="w-9 h-9 rounded-full bg-slate-950 border border-slate-800 text-red-400 shrink-0 active:scale-95 transition" aria-label="Remove saved item">
-                            <i class="fas fa-trash-can text-xs"></i>
+                            <i class="fas fa-xmark text-sm"></i>
                         </button>
                     </div>
                 </div>
