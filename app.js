@@ -1426,6 +1426,22 @@ window.signOutUser = async function () {
   await window.logout();
 };
 
+// Lightweight confirm gate for Sign Out — this button sits directly above
+// Delete Account in the settings danger zone, so a plain one-tap sign-out
+// was an easy accidental trigger right next to a genuinely destructive
+// action. No typed confirmation needed here (signing out isn't
+// destructive), just a tap-to-confirm step.
+window.confirmSignOut = function () {
+  showConfirmDialog({
+    title: "Sign out?",
+    message:
+      "You'll need to sign in again to post, message, or manage your account.",
+    confirmLabel: "Sign Out",
+    danger: false,
+    onConfirm: () => window.signOutUser(),
+  });
+};
+
 // ─── 7. FEED SUBSCRIPTION HELPERS ────────────────────────────────────────────
 function unsubscribeFeed() {
   if (currentFeedChan) {
@@ -1992,81 +2008,40 @@ window.switchProfileTab = function (tabType, selectedBtn = null) {
 
 window.openCampusSettings = function () {
   window.switchProfileTab("settings");
-  // Wire the Premium Settings segmented nav the first time the view
-  // becomes visible. Cached as a flag so re-opening settings doesn't
-  // stack duplicate scroll listeners on the window object.
-  if (
-    !window.__settingsTabsInitDone &&
-    typeof window.initSettingsTabs === "function"
-  ) {
-    window.__settingsTabsInitDone = true;
-    window.initSettingsTabs();
-  }
+  // Instagram-style drill-down: always land on the flat category list
+  // first, even if a sub-screen was left open the last time Settings
+  // was visited. Reset is silent (no ui-stack pop) since there's
+  // nothing to animate back from on first entry.
+  window.closeSettingsSubScreen(true);
 };
 
-// Bug fix: the Premium Settings redesign added a sticky segmented tab nav
-// that anchor-scrolls into the existing .settings-card section. Each tab
-// is just a data-target=sectionId button — this handler picks the tab,
-// marks it active (visual pill), scrolls the target into view, and
-// re-syncs the active state on scroll-back so the user sees which
-// section they're reading as they scroll past.
-window.initSettingsTabs = function () {
-  const tabs = document.querySelectorAll("#settingsTabs .settings-tab");
-  const sectionIds = [
-    "settings-section-account",
-    "settings-section-campus",
-    "settings-section-playback",
-    "settings-section-notifications",
-    "settings-section-privacy",
-    "settings-section-session",
-  ];
-  const sections = sectionIds
-    .map((id) => document.getElementById(id))
-    .filter(Boolean);
-  if (!tabs.length || !sections.length) return;
+// Instagram-style settings navigation: the list screen shows one row per
+// category; tapping a row opens ONE dedicated sub-screen at a time
+// (hidden/shown, no scrolling/anchoring), with its own back button. Wired
+// into the same pushUiState/popUiState stack every other overlay in the
+// app uses, so the hardware/device back button steps back to the list
+// screen first instead of leaving Settings entirely.
+window.openSettingsScreen = function (name) {
+  const list = document.getElementById("settings-list-screen");
+  const target = document.getElementById(`settings-screen-${name}`);
+  if (!target) return;
 
-  // Touch/scroll sync: whichever section is closest to the viewport top
-  // (within the scroll-margin-top offset) wins the active pill. Using
-  // rAF so we fire at most once per paint.
-  let rafId = null;
-  const syncActiveOnScroll = () => {
-    if (rafId) return;
-    rafId = requestAnimationFrame(() => {
-      rafId = null;
-      const offset = 140; // matches scroll-margin-top in main.css
-      let activeId = sectionIds[0];
-      for (const sec of sections) {
-        const top = sec.getBoundingClientRect().top;
-        if (top - offset <= 0) activeId = sec.id;
-        else break;
-      }
-      tabs.forEach((tab) => {
-        const on = tab.dataset.target === activeId;
-        tab.classList.toggle("is-active", on);
-        tab.setAttribute("aria-current", on ? "true" : "false");
-      });
-    });
-  };
+  document
+    .querySelectorAll(".settings-subscreen")
+    .forEach((el) => el.classList.add("hidden"));
+  list?.classList.add("hidden");
+  target.classList.remove("hidden");
+  target.scrollTop = 0;
 
-  tabs.forEach((tab) => {
-    tab.addEventListener("click", (ev) => {
-      const targetId = tab.dataset.target;
-      const target = document.getElementById(targetId);
-      if (!target) return;
-      ev.preventDefault();
-      // UX: smooth-scroll into view but visually mark the tab active
-      // immediately so the tap feels responsive (the scroll listener
-      // would otherwise wait for the next animation frame).
-      tabs.forEach((t) => {
-        t.classList.toggle("is-active", t === tab);
-        t.setAttribute("aria-current", t === tab ? "true" : "false");
-      });
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  });
+  pushUiState("settings-subscreen", () => window.closeSettingsSubScreen(true));
+};
 
-  window.addEventListener("scroll", syncActiveOnScroll, { passive: true });
-  syncActiveOnScroll();
+window.closeSettingsSubScreen = function (fromPop = false) {
+  document
+    .querySelectorAll(".settings-subscreen")
+    .forEach((el) => el.classList.add("hidden"));
+  document.getElementById("settings-list-screen")?.classList.remove("hidden");
+  if (!fromPop) popUiState("settings-subscreen");
 };
 
 window.openUserDashboard = function (userId) {
@@ -4648,6 +4623,7 @@ function showConfirmDialog({
   message,
   confirmLabel = "Delete",
   danger = true,
+  requireText = null,
   onConfirm,
 }) {
   let modal = document.getElementById("confirm-dialog-modal");
@@ -4659,17 +4635,42 @@ function showConfirmDialog({
     document.body.appendChild(modal);
   }
 
+  // Optional "type to confirm" step: for the highest-stakes destructive
+  // actions (account deletion), a single tap on a red button is too easy
+  // to hit by accident. When requireText is set, the confirm button stays
+  // disabled until the person types that exact word into the field below —
+  // the same pattern GitHub/similar apps use before permanently destroying
+  // data. Every other existing caller (comment/post delete, etc.) leaves
+  // requireText unset and keeps behaving exactly as before.
+  const typedConfirmMarkup = requireText
+    ? `
+            <div class="space-y-1.5 text-left">
+                <label for="confirm-dialog-typed" class="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Type <span class="text-red-400">${esc(requireText)}</span> to confirm
+                </label>
+                <input
+                    id="confirm-dialog-typed"
+                    type="text"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    class="w-full bg-slate-900 border border-slate-700 focus:border-red-500 rounded-xl px-3 py-2.5 text-white text-sm outline-none transition"
+                />
+            </div>`
+    : "";
+
   modal.innerHTML = `
         <div class="bg-[#0f172a] border border-slate-800/80 rounded-3xl p-5 w-full max-w-xs space-y-4 shadow-2xl">
             <div class="text-center space-y-1.5">
                 <p class="text-white font-black text-sm">${esc(title)}</p>
                 <p class="text-slate-400 text-xs leading-relaxed">${esc(message)}</p>
             </div>
+            ${typedConfirmMarkup}
             <div class="flex gap-2">
                 <button id="confirm-dialog-cancel" class="flex-1 bg-slate-800 text-slate-300 font-bold py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
                     Cancel
                 </button>
-                <button id="confirm-dialog-confirm" class="flex-1 ${danger ? "bg-red-500 text-white" : "bg-amber-400 text-black"} font-black py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition">
+                <button id="confirm-dialog-confirm" ${requireText ? "disabled" : ""} class="flex-1 ${danger ? "bg-red-500 text-white" : "bg-amber-400 text-black"} font-black py-2.5 rounded-xl text-xs uppercase tracking-wider active:scale-95 transition disabled:opacity-40 disabled:pointer-events-none">
                     ${esc(confirmLabel)}
                 </button>
             </div>
@@ -4678,9 +4679,19 @@ function showConfirmDialog({
   modal.classList.remove("hidden");
   pushUiState("confirm-dialog", () => closeConfirmDialog(true));
 
+  const confirmBtn = document.getElementById("confirm-dialog-confirm");
+  if (requireText) {
+    const typedInput = document.getElementById("confirm-dialog-typed");
+    typedInput.addEventListener("input", () => {
+      confirmBtn.disabled = typedInput.value.trim() !== requireText;
+    });
+    typedInput.focus();
+  }
+
   document.getElementById("confirm-dialog-cancel").onclick = () =>
     closeConfirmDialog();
-  document.getElementById("confirm-dialog-confirm").onclick = () => {
+  confirmBtn.onclick = () => {
+    if (requireText && confirmBtn.disabled) return;
     closeConfirmDialog();
     onConfirm();
   };
@@ -6910,7 +6921,7 @@ function buildCartListMarkup() {
         : "Campus listing";
       const thumb = firstUrl
         ? `<div class="saved-item-thumb relative">
-                   <img src="${esc(firstUrl)}" onerror="this.parentElement.innerHTML='<i class=\\'fas fa-image text-slate-600\\'></i>'; this.parentElement.classList.add('flex','items-center','justify-center');" class="w-full h-full object-cover" alt="">
+                   <img src="${esc(firstUrl)}" onerror="var p=this.parentElement; if(p){ p.classList.add('flex','items-center','justify-center'); p.innerHTML='<i class=\\'fas fa-image text-slate-600\\'></i>'; }" class="w-full h-full object-cover" alt="">
                    ${isVideo ? `<div class="absolute inset-0 flex items-center justify-center bg-black/35"><i class="fas fa-play text-white text-xs"></i></div>` : ""}
                </div>`
         : `<div class="saved-item-thumb flex items-center justify-center text-slate-600"><i class="fas fa-image"></i></div>`;
@@ -9507,6 +9518,7 @@ window.confirmDeleteAccount = function () {
       "This removes your posts, comments, profile info, and your account itself from CampusMarket. This can't be undone.",
     confirmLabel: "Delete Account",
     danger: true,
+    requireText: "DELETE",
     onConfirm: async () => {
       try {
         showToast("Deleting your data…");

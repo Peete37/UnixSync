@@ -2012,75 +2012,92 @@ main {
   margin-top: 4px;
 }
 
-/* Sticky segmented tab nav. Premium iOS-style pill row that
-         scroll-anchors into existing .settings-card IDs (no card
-         duplication). Active tab uses an inner accent pill with the
-         amber brand colour so the user can see at a glance which
-         section they're on. */
-.settings-tabs {
-  position: sticky;
-  top: 56px;
-  z-index: 5;
+/* Instagram-style settings list: a flat set of rows, each opening
+         its own dedicated sub-screen (below) rather than anchoring to a
+         section further down a shared scrolling page. */
+.settings-list-row {
+  width: 100%;
   display: flex;
-  gap: 6px;
-  padding: 6px;
-  margin-bottom: 16px;
-  border-radius: 16px;
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.settings-tabs::-webkit-scrollbar {
-  display: none;
-}
-.settings-tab {
-  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border-radius: 11px;
-  background: transparent;
-  border: 0;
-  color: #94a3b8;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  white-space: nowrap;
+  gap: 12px;
+  min-height: 56px;
+  padding: 14px 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.08);
+  color: #fff;
+  text-align: left;
+  transition: background 0.15s;
+}
+.settings-list-row:first-of-type {
+  border-top: none;
+}
+.settings-list-row:active {
+  background: rgba(255, 255, 255, 0.04);
+}
+.settings-list-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+  font-size: 13px;
   flex-shrink: 0;
-  cursor: pointer;
-  transition:
-    color 0.15s,
-    background-color 0.15s,
-    transform 0.1s;
 }
-.settings-tab i {
+.settings-list-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+.settings-list-row .chev {
+  color: #475569;
   font-size: 11px;
-}
-.settings-tab:hover {
-  color: #e2e8f0;
-}
-.settings-tab:active {
-  transform: scale(0.97);
-}
-.settings-tab.is-active {
-  background: linear-gradient(180deg, #fbbf24 0%, #f59e0b 100%);
-  color: #0b0f1a;
-  box-shadow: 0 4px 14px -6px rgba(251, 191, 36, 0.55);
+  flex-shrink: 0;
 }
 
-/* Anchor scrolling offset so the sticky header doesn't hide the
-         top of the target card. */
-#settings-section-account,
-#settings-section-campus,
-#settings-section-playback,
-#settings-section-notifications,
-#settings-section-privacy,
-#settings-section-session {
-  scroll-margin-top: 124px;
+/* Sub-screen header: solid (not translucent) so it can't bleed
+         through and overlap the content scrolling beneath it — the exact
+         issue the old sticky tab bar had. Sits at the very top of its
+         own screen rather than mid-page, so there's nothing to collide
+         with in the first place. */
+.settings-subscreen-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 4px;
+  margin-bottom: 14px;
+  background: #0b1220;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+}
+.settings-back-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(148, 163, 184, 0.1);
+  color: #e2e8f0;
+  font-size: 13px;
+  flex-shrink: 0;
+  transition:
+    background 0.15s,
+    transform 0.1s;
+}
+.settings-back-btn:active {
+  background: rgba(148, 163, 184, 0.2);
+  transform: scale(0.94);
+}
+.settings-subscreen-title {
+  font-size: 15px;
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: -0.01em;
 }
 
 .settings-card {
@@ -2092,9 +2109,13 @@ main {
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 20px;
   overflow: hidden;
+  /* Subtle lift so cards read as distinct raised surfaces rather
+           than a flat stacked list — part of giving the panel real
+           depth instead of a plain form. */
+  box-shadow: 0 10px 28px -20px rgba(0, 0, 0, 0.6);
 }
 .settings-card + .settings-card {
-  margin-top: 14px;
+  margin-top: 18px;
 }
 .settings-card-header {
   display: flex;
@@ -2103,9 +2124,9 @@ main {
   padding: 16px 16px 12px;
 }
 .settings-card-icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2114,16 +2135,26 @@ main {
   font-size: 13px;
   flex-shrink: 0;
 }
+/* Rows were 13px vertical padding with only a 1px hairline between
+         them — on mobile that's a small, easy-to-miss tap target with
+         barely any separation from its neighbor. Taller rows + a real
+         minimum height give each control (toggle, link) more isolated
+         space to land a tap in. */
 .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 13px 16px;
+  min-height: 52px;
+  padding: 15px 16px;
   border-top: 1px solid rgba(148, 163, 184, 0.08);
+  transition: background 0.15s;
 }
 .settings-row:first-of-type {
   border-top: none;
+}
+.settings-row:active {
+  background: rgba(255, 255, 255, 0.03);
 }
 .settings-row-link {
   width: 100%;
@@ -2143,8 +2174,8 @@ main {
 /* Styled switch used in place of raw checkboxes for a more premium feel */
 .settings-switch {
   position: relative;
-  width: 42px;
-  height: 24px;
+  width: 44px;
+  height: 26px;
   flex-shrink: 0;
   appearance: none;
   -webkit-appearance: none;
@@ -2153,15 +2184,19 @@ main {
   cursor: pointer;
   transition: background 0.2s;
   outline: none;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 .settings-switch:checked {
   background: #fbbf24;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.15),
+    0 0 10px -2px rgba(251, 191, 36, 0.55);
 }
 .settings-switch::before {
   content: "";
   position: absolute;
-  top: 3px;
-  left: 3px;
+  top: 4px;
+  left: 4px;
   width: 18px;
   height: 18px;
   border-radius: 50%;
@@ -2171,6 +2206,62 @@ main {
 }
 .settings-switch:checked::before {
   transform: translateX(18px);
+}
+
+/* Danger zone: kept visually distinct from every other settings
+         card — extra top margin so it never scrolls flush against a
+         routine card, a red-tinted wash/border instead of the neutral
+         slate used everywhere else, and an explicit "Danger Zone" label.
+         The goal is that this never gets mistaken for just another row
+         while scrolling past it. */
+.settings-danger-zone {
+  margin-top: 26px;
+  padding: 16px;
+  border-radius: 20px;
+  background: linear-gradient(
+    180deg,
+    rgba(127, 29, 29, 0.16) 0%,
+    rgba(15, 23, 42, 0.4) 100%
+  );
+  border: 1px solid rgba(248, 113, 113, 0.22);
+}
+.settings-danger-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #f87171;
+  margin-bottom: 12px;
+}
+.settings-danger-btn {
+  width: 100%;
+  background: rgba(127, 29, 29, 0.35);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  color: #fca5a5;
+  font-weight: 800;
+  padding: 14px;
+  border-radius: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+  transition:
+    background 0.15s,
+    transform 0.1s;
+}
+.settings-danger-btn:hover {
+  background: rgba(153, 27, 27, 0.5);
+}
+.settings-danger-btn:active {
+  transform: scale(0.97);
+}
+.settings-danger-sub {
+  font-size: 10.5px;
+  color: rgba(252, 165, 165, 0.55);
+  line-height: 1.5;
+  margin-top: 10px;
 }
 
 .campus-id-strip {

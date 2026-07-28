@@ -642,394 +642,466 @@
                   id="profile-subview-settings"
                   class="profile-subview hidden"
                 >
-                  <!-- Premium settings hero: gives the whole screen a focused,
-                     app-grade entry rather than dropping the user straight
-                     into a wall of stacked grey cards. Anchors the rest of
-                     the page visually so subsequent cards feel grouped
-                     under one experience instead of a long form. -->
-                  <div class="settings-hero" aria-hidden="true">
-                    <div class="settings-hero-glow"></div>
-                    <div class="settings-hero-content">
-                      <span class="settings-hero-eyebrow">CampusMarket</span>
-                      <span class="settings-hero-title"
-                        >Settings &amp; Preferences</span
-                      >
-                      <span class="settings-hero-sub" id="settingsHeroSub"
-                        >Personalise how CampusMarket looks and behaves for
-                        you.</span
-                      >
-                    </div>
-                  </div>
-
-                  <!-- Sticky segmented category tabs. Anchor-scrolls into the
-                     existing .settings-card IDs added below; doesn't
-                     duplicate any of the cards already in this view. -->
-                  <nav
-                    class="settings-tabs"
-                    id="settingsTabs"
-                    aria-label="Settings sections"
-                  >
-                    <button
-                      class="settings-tab is-active"
-                      data-target="settings-section-account"
-                      type="button"
-                    >
-                      <i class="fas fa-user"></i><span>Account</span>
-                    </button>
-                    <button
-                      class="settings-tab"
-                      data-target="settings-section-campus"
-                      type="button"
-                    >
-                      <i class="fas fa-map-marker-alt"></i><span>Campus</span>
-                    </button>
-                    <button
-                      class="settings-tab"
-                      data-target="settings-section-playback"
-                      type="button"
-                    >
-                      <i class="fas fa-circle-play"></i><span>Playback</span>
-                    </button>
-                    <button
-                      class="settings-tab"
-                      data-target="settings-section-notifications"
-                      type="button"
-                    >
-                      <i class="fas fa-bell"></i><span>Alerts</span>
-                    </button>
-                    <button
-                      class="settings-tab"
-                      data-target="settings-section-privacy"
-                      type="button"
-                    >
-                      <i class="fas fa-shield-halved"></i><span>Privacy</span>
-                    </button>
-                    <button
-                      class="settings-tab"
-                      data-target="settings-section-session"
-                      type="button"
-                    >
-                      <i class="fas fa-arrow-right-from-bracket"></i
-                      ><span>Session</span>
-                    </button>
-                  </nav>
-
-                  <div class="campus-id-strip">
-                    <span class="badge-dot"></span>
-                    <div class="min-w-0">
-                      <p
-                        class="text-white text-xs font-bold truncate"
-                        id="settingsCampusStripName"
-                      >
-                        Campus Account
-                      </p>
-                      <p
-                        class="text-slate-400 text-[11px] truncate"
-                        id="settingsCampusStripInst"
-                      >
-                        Set your institution below
-                      </p>
-                    </div>
-                  </div>
-
-                  <div id="settings-section-account" class="settings-card">
-                    <div class="settings-card-header">
-                      <span class="settings-card-icon"
-                        ><i class="fas fa-user"></i
-                      ></span>
-                      <h3
-                        class="text-white font-black text-xs uppercase tracking-widest"
-                      >
-                        Account
-                      </h3>
-                    </div>
-                    <div class="px-4 pb-4 space-y-3">
-                      <div>
-                        <label
-                          for="settingsDisplayName"
-                          class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
-                          >Display Name</label
+                  <!-- ── LIST SCREEN ── Instagram-style: a flat list of
+                     category rows. Tapping one opens a dedicated
+                     sub-screen (below) with its own back button, instead
+                     of scrolling/anchoring within one long shared page.
+                     Kept as its own container so openCampusSettings() can
+                     always reset back to this view on re-entry. -->
+                  <div id="settings-list-screen" class="settings-list-screen">
+                    <div class="settings-hero" aria-hidden="true">
+                      <div class="settings-hero-glow"></div>
+                      <div class="settings-hero-content">
+                        <span class="settings-hero-eyebrow">CampusMarket</span>
+                        <span class="settings-hero-title"
+                          >Settings &amp; Preferences</span
                         >
-                        <input
-                          type="text"
-                          id="settingsDisplayName"
-                          name="settingsDisplayName"
-                          placeholder="Your name"
-                          class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
-                        />
+                        <span class="settings-hero-sub" id="settingsHeroSub"
+                          >Personalise how CampusMarket looks and behaves for
+                          you.</span
+                        >
                       </div>
-                      <div>
-                        <label
-                          for="settingsBio"
-                          class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
-                          >Bio</label
+                    </div>
+
+                    <div class="campus-id-strip">
+                      <span class="badge-dot"></span>
+                      <div class="min-w-0">
+                        <p
+                          class="text-white text-xs font-bold truncate"
+                          id="settingsCampusStripName"
                         >
-                        <textarea
-                          id="settingsBio"
-                          name="settingsBio"
-                          maxlength="150"
-                          rows="3"
-                          placeholder="Tell people a bit about yourself or what you offer..."
-                          oninput="
-                            document.getElementById(
-                              'settingsBioCount',
-                            ).textContent = this.value.length
-                          "
-                          class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400 resize-none"
-                        ></textarea>
-                        <p class="text-right text-[9px] text-slate-600 mt-1">
-                          <span id="settingsBioCount">0</span>/150
+                          Campus Account
+                        </p>
+                        <p
+                          class="text-slate-400 text-[11px] truncate"
+                          id="settingsCampusStripInst"
+                        >
+                          Set your institution below
                         </p>
                       </div>
-                      <div>
-                        <label
-                          for="settingsEmail"
-                          class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
-                          >Email</label
-                        >
-                        <input
-                          type="email"
-                          id="settingsEmail"
-                          name="settingsEmail"
-                          disabled
-                          class="w-full mt-1 bg-slate-950 border border-slate-800 text-slate-500 text-sm rounded-xl px-3 py-2.5 cursor-not-allowed"
-                        />
-                      </div>
+                    </div>
+
+                    <div class="settings-card">
                       <button
-                        id="saveAccountBtn"
-                        class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-2.5 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                        class="settings-list-row"
+                        onclick="window.openSettingsScreen('account')"
+                        type="button"
                       >
-                        Save Name
+                        <span class="settings-list-icon"
+                          ><i class="fas fa-user"></i
+                        ></span>
+                        <span class="settings-list-label">Account</span>
+                        <i class="fas fa-chevron-right chev"></i>
+                      </button>
+                      <button
+                        class="settings-list-row"
+                        onclick="window.openSettingsScreen('campus')"
+                        type="button"
+                      >
+                        <span class="settings-list-icon"
+                          ><i class="fas fa-map-marker-alt"></i
+                        ></span>
+                        <span class="settings-list-label">Campus</span>
+                        <i class="fas fa-chevron-right chev"></i>
+                      </button>
+                      <button
+                        class="settings-list-row"
+                        onclick="window.openSettingsScreen('playback')"
+                        type="button"
+                      >
+                        <span class="settings-list-icon"
+                          ><i class="fas fa-wifi"></i
+                        ></span>
+                        <span class="settings-list-label"
+                          >Data &amp; Playback</span
+                        >
+                        <i class="fas fa-chevron-right chev"></i>
+                      </button>
+                      <button
+                        class="settings-list-row"
+                        onclick="window.openSettingsScreen('notifications')"
+                        type="button"
+                      >
+                        <span class="settings-list-icon"
+                          ><i class="fas fa-bell"></i
+                        ></span>
+                        <span class="settings-list-label">Notifications</span>
+                        <i class="fas fa-chevron-right chev"></i>
+                      </button>
+                      <button
+                        class="settings-list-row"
+                        onclick="window.openSettingsScreen('privacy')"
+                        type="button"
+                      >
+                        <span class="settings-list-icon"
+                          ><i class="fas fa-shield-halved"></i
+                        ></span>
+                        <span class="settings-list-label"
+                          >Privacy &amp; Support</span
+                        >
+                        <i class="fas fa-chevron-right chev"></i>
                       </button>
                     </div>
-                  </div>
 
-                  <div id="settings-section-campus" class="settings-card">
-                    <div class="settings-card-header">
-                      <span class="settings-card-icon"
-                        ><i class="fas fa-map-marker-alt"></i
-                      ></span>
-                      <h3
-                        class="text-white font-black text-xs uppercase tracking-widest"
-                      >
-                        Local Campus Selection
-                      </h3>
+                    <div class="settings-card">
+                      <div class="p-4">
+                        <button
+                          onclick="
+                            window.confirmSignOut && window.confirmSignOut()
+                          "
+                          class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3.5 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                        >
+                          <i class="fas fa-sign-out-alt mr-2"></i>Sign Out
+                        </button>
+                      </div>
                     </div>
-                    <div class="px-4 pb-4 space-y-3">
-                      <div>
-                        <label
-                          for="profileRegion"
-                          class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
-                          >Your Region</label
-                        >
-                        <select
-                          id="profileRegion"
-                          name="profileRegion"
-                          class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
-                        ></select>
-                      </div>
-                      <div>
-                        <label
-                          for="profileInstitution"
-                          class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
-                          >Your Institution</label
-                        >
-                        <select
-                          id="profileInstitution"
-                          name="profileInstitution"
-                          class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
-                        ></select>
-                      </div>
+
+                    <!-- Danger zone: kept directly on the list screen (not
+                       its own sub-screen — Instagram does the same with
+                       "Log out" / "Delete account" at the very bottom of
+                       the settings list). Still requires typing DELETE
+                       via showConfirmDialog's requireText option. -->
+                    <div class="settings-danger-zone">
+                      <p class="settings-danger-label">
+                        <i class="fas fa-triangle-exclamation"></i>Danger Zone
+                      </p>
                       <button
-                        id="saveLocationBtn"
-                        class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 mt-2 shadow-lg shadow-amber-400/10"
+                        onclick="
+                          window.confirmDeleteAccount &&
+                            window.confirmDeleteAccount()
+                        "
+                        class="settings-danger-btn"
                       >
-                        Save Selection Changes
+                        <i class="fas fa-trash-can mr-2"></i>Delete Account
                       </button>
+                      <p class="settings-danger-sub">
+                        Permanently removes your posts, comments, and profile.
+                        This can't be undone.
+                      </p>
                     </div>
+
+                    <p class="text-center text-slate-600 text-[10px] pt-1 pb-2">
+                      CampusMarket v1.0 · Ghana
+                    </p>
                   </div>
 
-                  <div id="settings-section-playback" class="settings-card">
-                    <div class="settings-card-header">
-                      <span class="settings-card-icon"
-                        ><i class="fas fa-wifi"></i
-                      ></span>
-                      <h3
-                        class="text-white font-black text-xs uppercase tracking-widest"
+                  <!-- ── SUB-SCREENS ── each hidden by default; opened one at
+                     a time by openSettingsScreen(). Every existing input
+                     id (settingsDisplayName, profileRegion, etc.) is
+                     unchanged so none of the wiring in app.js needed to
+                     move. -->
+                  <div
+                    id="settings-screen-account"
+                    class="settings-subscreen hidden"
+                    data-settings-screen="account"
+                  >
+                    <div class="settings-subscreen-header">
+                      <button
+                        class="settings-back-btn"
+                        onclick="window.closeSettingsSubScreen()"
+                        type="button"
+                        aria-label="Back to Settings"
                       >
-                        Data & Playback
-                      </h3>
+                        <i class="fas fa-arrow-left"></i>
+                      </button>
+                      <h2 class="settings-subscreen-title">Account</h2>
                     </div>
-                    <div>
-                      <label class="settings-row cursor-pointer">
-                        <div class="min-w-0">
-                          <p class="text-white text-xs font-bold">
-                            Data Saver Mode
-                          </p>
-                          <p class="text-slate-500 text-[10px] mt-0.5">
-                            Lower image/video quality to use less data
+                    <div class="settings-card">
+                      <div class="px-4 py-4 space-y-3">
+                        <div>
+                          <label
+                            for="settingsDisplayName"
+                            class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                            >Display Name</label
+                          >
+                          <input
+                            type="text"
+                            id="settingsDisplayName"
+                            name="settingsDisplayName"
+                            placeholder="Your name"
+                            class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
+                          />
+                        </div>
+                        <div>
+                          <label
+                            for="settingsBio"
+                            class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                            >Bio</label
+                          >
+                          <textarea
+                            id="settingsBio"
+                            name="settingsBio"
+                            maxlength="150"
+                            rows="3"
+                            placeholder="Tell people a bit about yourself or what you offer..."
+                            oninput="
+                              document.getElementById(
+                                'settingsBioCount',
+                              ).textContent = this.value.length
+                            "
+                            class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400 resize-none"
+                          ></textarea>
+                          <p class="text-right text-[9px] text-slate-600 mt-1">
+                            <span id="settingsBioCount">0</span>/150
                           </p>
                         </div>
-                        <input
-                          type="checkbox"
-                          id="settingsDataSaver"
-                          class="settings-switch"
-                        />
-                      </label>
-                      <label class="settings-row cursor-pointer">
-                        <div class="min-w-0">
-                          <p class="text-white text-xs font-bold">
-                            Autoplay Videos
-                          </p>
-                          <p class="text-slate-500 text-[10px] mt-0.5">
-                            Play videos automatically while scrolling
-                          </p>
+                        <div>
+                          <label
+                            for="settingsEmail"
+                            class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                            >Email</label
+                          >
+                          <input
+                            type="email"
+                            id="settingsEmail"
+                            name="settingsEmail"
+                            disabled
+                            class="w-full mt-1 bg-slate-950 border border-slate-800 text-slate-500 text-sm rounded-xl px-3 py-2.5 cursor-not-allowed"
+                          />
                         </div>
-                        <input
-                          type="checkbox"
-                          id="settingsAutoplay"
-                          checked
-                          class="settings-switch"
-                        />
-                      </label>
-                      <label class="settings-row cursor-pointer">
-                        <div class="min-w-0">
-                          <p class="text-white text-xs font-bold">Theme</p>
-                          <p class="text-slate-500 text-[10px] mt-0.5">
-                            Dark, light, or follow your device setting
-                          </p>
-                        </div>
-                        <select
-                          id="settingsThemeSelect"
-                          class="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-white text-[11px] font-bold uppercase tracking-wider focus:outline-none focus:border-amber-400 transition"
+                        <button
+                          id="saveAccountBtn"
+                          class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-2.5 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
                         >
-                          <option value="dark">Dark</option>
-                          <option value="light">Light</option>
-                          <option value="system">System</option>
-                        </select>
-                      </label>
+                          Save Name
+                        </button>
+                      </div>
                     </div>
                   </div>
 
                   <div
-                    id="settings-section-notifications"
-                    class="settings-card"
+                    id="settings-screen-campus"
+                    class="settings-subscreen hidden"
+                    data-settings-screen="campus"
                   >
-                    <div class="settings-card-header">
-                      <span class="settings-card-icon"
-                        ><i class="fas fa-bell"></i
-                      ></span>
-                      <h3
-                        class="text-white font-black text-xs uppercase tracking-widest"
+                    <div class="settings-subscreen-header">
+                      <button
+                        class="settings-back-btn"
+                        onclick="window.closeSettingsSubScreen()"
+                        type="button"
+                        aria-label="Back to Settings"
                       >
-                        Notifications
-                      </h3>
+                        <i class="fas fa-arrow-left"></i>
+                      </button>
+                      <h2 class="settings-subscreen-title">Campus</h2>
                     </div>
-                    <div>
-                      <label class="settings-row cursor-pointer">
-                        <p class="text-white text-xs font-bold">Messages</p>
-                        <input
-                          type="checkbox"
-                          id="settingsNotifyMessages"
-                          checked
-                          class="settings-switch"
-                        />
-                      </label>
-                      <label class="settings-row cursor-pointer">
-                        <p class="text-white text-xs font-bold">
-                          Likes & Comments
-                        </p>
-                        <input
-                          type="checkbox"
-                          id="settingsNotifyEngagement"
-                          checked
-                          class="settings-switch"
-                        />
-                      </label>
-                      <label class="settings-row cursor-pointer">
-                        <p class="text-white text-xs font-bold">
-                          New Followers
-                        </p>
-                        <input
-                          type="checkbox"
-                          id="settingsNotifyFollows"
-                          checked
-                          class="settings-switch"
-                        />
-                      </label>
-                    </div>
-                  </div>
-
-                  <div id="settings-section-privacy" class="settings-card">
-                    <div class="settings-card-header">
-                      <span class="settings-card-icon"
-                        ><i class="fas fa-shield-halved"></i
-                      ></span>
-                      <h3
-                        class="text-white font-black text-xs uppercase tracking-widest"
-                      >
-                        Privacy & Support
-                      </h3>
-                    </div>
-                    <div>
-                      <button
-                        onclick="window.openInfoSheet('verification')"
-                        class="settings-row settings-row-link"
-                      >
-                        <span class="text-xs font-bold">Get Verified</span>
-                        <i class="fas fa-chevron-right chev"></i>
-                      </button>
-                      <button
-                        onclick="window.openInfoSheet('blocked')"
-                        class="settings-row settings-row-link"
-                      >
-                        <span class="text-xs font-bold">Blocked Users</span>
-                        <i class="fas fa-chevron-right chev"></i>
-                      </button>
-                      <button
-                        onclick="window.openInfoSheet('archived')"
-                        class="settings-row settings-row-link"
-                      >
-                        <span class="text-xs font-bold">Archived Posts</span>
-                        <i class="fas fa-chevron-right chev"></i>
-                      </button>
-                      <button
-                        onclick="window.openInfoSheet('help')"
-                        class="settings-row settings-row-link"
-                      >
-                        <span class="text-xs font-bold">Help & Support</span>
-                        <i class="fas fa-chevron-right chev"></i>
-                      </button>
-                      <button
-                        onclick="window.openInfoSheet('privacy')"
-                        class="settings-row settings-row-link"
-                      >
-                        <span class="text-xs font-bold">Privacy Policy</span>
-                        <i class="fas fa-chevron-right chev"></i>
-                      </button>
+                    <div class="settings-card">
+                      <div class="px-4 py-4 space-y-3">
+                        <div>
+                          <label
+                            for="profileRegion"
+                            class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                            >Your Region</label
+                          >
+                          <select
+                            id="profileRegion"
+                            name="profileRegion"
+                            class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
+                          ></select>
+                        </div>
+                        <div>
+                          <label
+                            for="profileInstitution"
+                            class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                            >Your Institution</label
+                          >
+                          <select
+                            id="profileInstitution"
+                            name="profileInstitution"
+                            class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
+                          ></select>
+                        </div>
+                        <button
+                          id="saveLocationBtn"
+                          class="w-full bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 mt-2 shadow-lg shadow-amber-400/10"
+                        >
+                          Save Selection Changes
+                        </button>
+                      </div>
                     </div>
                   </div>
 
-                  <div id="settings-section-session" class="pt-2 space-y-2">
-                    <button
-                      onclick="window.signOutUser()"
-                      class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
-                    >
-                      <i class="fas fa-sign-out-alt mr-2"></i>Sign Out
-                    </button>
-                    <button
-                      onclick="
-                        window.confirmDeleteAccount &&
-                          window.confirmDeleteAccount()
-                      "
-                      class="w-full bg-red-950/40 hover:bg-red-950/60 border border-red-900/50 text-red-400 font-bold py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
-                    >
-                      <i class="fas fa-triangle-exclamation mr-2"></i>Delete
-                      Account
-                    </button>
-                    <p class="text-center text-slate-600 text-[10px] pt-1">
-                      CampusMarket v1.0 · Ghana
-                    </p>
+                  <div
+                    id="settings-screen-playback"
+                    class="settings-subscreen hidden"
+                    data-settings-screen="playback"
+                  >
+                    <div class="settings-subscreen-header">
+                      <button
+                        class="settings-back-btn"
+                        onclick="window.closeSettingsSubScreen()"
+                        type="button"
+                        aria-label="Back to Settings"
+                      >
+                        <i class="fas fa-arrow-left"></i>
+                      </button>
+                      <h2 class="settings-subscreen-title">
+                        Data &amp; Playback
+                      </h2>
+                    </div>
+                    <div class="settings-card">
+                      <div>
+                        <label class="settings-row cursor-pointer">
+                          <div class="min-w-0">
+                            <p class="text-white text-xs font-bold">
+                              Data Saver Mode
+                            </p>
+                            <p class="text-slate-500 text-[10px] mt-0.5">
+                              Lower image/video quality to use less data
+                            </p>
+                          </div>
+                          <input
+                            type="checkbox"
+                            id="settingsDataSaver"
+                            class="settings-switch"
+                          />
+                        </label>
+                        <label class="settings-row cursor-pointer">
+                          <div class="min-w-0">
+                            <p class="text-white text-xs font-bold">
+                              Autoplay Videos
+                            </p>
+                            <p class="text-slate-500 text-[10px] mt-0.5">
+                              Play videos automatically while scrolling
+                            </p>
+                          </div>
+                          <input
+                            type="checkbox"
+                            id="settingsAutoplay"
+                            checked
+                            class="settings-switch"
+                          />
+                        </label>
+                        <label class="settings-row cursor-pointer">
+                          <div class="min-w-0">
+                            <p class="text-white text-xs font-bold">Theme</p>
+                            <p class="text-slate-500 text-[10px] mt-0.5">
+                              Dark, light, or follow your device setting
+                            </p>
+                          </div>
+                          <select
+                            id="settingsThemeSelect"
+                            class="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-white text-[11px] font-bold uppercase tracking-wider focus:outline-none focus:border-amber-400 transition"
+                          >
+                            <option value="dark">Dark</option>
+                            <option value="light">Light</option>
+                            <option value="system">System</option>
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    id="settings-screen-notifications"
+                    class="settings-subscreen hidden"
+                    data-settings-screen="notifications"
+                  >
+                    <div class="settings-subscreen-header">
+                      <button
+                        class="settings-back-btn"
+                        onclick="window.closeSettingsSubScreen()"
+                        type="button"
+                        aria-label="Back to Settings"
+                      >
+                        <i class="fas fa-arrow-left"></i>
+                      </button>
+                      <h2 class="settings-subscreen-title">Notifications</h2>
+                    </div>
+                    <div class="settings-card">
+                      <div>
+                        <label class="settings-row cursor-pointer">
+                          <p class="text-white text-xs font-bold">Messages</p>
+                          <input
+                            type="checkbox"
+                            id="settingsNotifyMessages"
+                            checked
+                            class="settings-switch"
+                          />
+                        </label>
+                        <label class="settings-row cursor-pointer">
+                          <p class="text-white text-xs font-bold">
+                            Likes & Comments
+                          </p>
+                          <input
+                            type="checkbox"
+                            id="settingsNotifyEngagement"
+                            checked
+                            class="settings-switch"
+                          />
+                        </label>
+                        <label class="settings-row cursor-pointer">
+                          <p class="text-white text-xs font-bold">
+                            New Followers
+                          </p>
+                          <input
+                            type="checkbox"
+                            id="settingsNotifyFollows"
+                            checked
+                            class="settings-switch"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    id="settings-screen-privacy"
+                    class="settings-subscreen hidden"
+                    data-settings-screen="privacy"
+                  >
+                    <div class="settings-subscreen-header">
+                      <button
+                        class="settings-back-btn"
+                        onclick="window.closeSettingsSubScreen()"
+                        type="button"
+                        aria-label="Back to Settings"
+                      >
+                        <i class="fas fa-arrow-left"></i>
+                      </button>
+                      <h2 class="settings-subscreen-title">
+                        Privacy &amp; Support
+                      </h2>
+                    </div>
+                    <div class="settings-card">
+                      <div>
+                        <button
+                          onclick="window.openInfoSheet('verification')"
+                          class="settings-row settings-row-link"
+                        >
+                          <span class="text-xs font-bold">Get Verified</span>
+                          <i class="fas fa-chevron-right chev"></i>
+                        </button>
+                        <button
+                          onclick="window.openInfoSheet('blocked')"
+                          class="settings-row settings-row-link"
+                        >
+                          <span class="text-xs font-bold">Blocked Users</span>
+                          <i class="fas fa-chevron-right chev"></i>
+                        </button>
+                        <button
+                          onclick="window.openInfoSheet('archived')"
+                          class="settings-row settings-row-link"
+                        >
+                          <span class="text-xs font-bold">Archived Posts</span>
+                          <i class="fas fa-chevron-right chev"></i>
+                        </button>
+                        <button
+                          onclick="window.openInfoSheet('help')"
+                          class="settings-row settings-row-link"
+                        >
+                          <span class="text-xs font-bold">Help & Support</span>
+                          <i class="fas fa-chevron-right chev"></i>
+                        </button>
+                        <button
+                          onclick="window.openInfoSheet('privacy')"
+                          class="settings-row settings-row-link"
+                        >
+                          <span class="text-xs font-bold">Privacy Policy</span>
+                          <i class="fas fa-chevron-right chev"></i>
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
