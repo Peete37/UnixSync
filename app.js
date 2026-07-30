@@ -8451,12 +8451,36 @@ window.handlePostSubmission = async function () {
     // stored as a JSON array in media_url, which both the feed carousel
     // and detail-view carousel already render as a swipeable gallery.
     for (let i = 0; i < mediaFiles.length; i++) {
-      const file = mediaFiles[i];
+      let file = mediaFiles[i];
       const ext = (file.name || "file").split(".").pop();
       const storagePath = `${currentUserData.id}/${Date.now()}-${i}.${ext}`;
 
       if (submitBtnLabel)
         submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Uploading ${i + 1}/${mediaFiles.length}...`;
+
+      // Egress fix: listing photos were uploaded at their original
+      // camera resolution (up to 15MB, up to 10 per post) and then
+      // that same full-size file gets served on every view — feed,
+      // grid, saved items, detail carousel. Avatars already went
+      // through compressImageFile before upload; photos never did,
+      // making them by far the largest driver of Supabase egress.
+      // 1600px/0.8 keeps them sharp in the full-screen detail
+      // carousel while cutting typical phone-camera file size by
+      // roughly 80-90%. Videos are left untouched (compression only
+      // handles raster images).
+      if (file.type && file.type.startsWith("image/")) {
+        try {
+          file = await compressImageFile(file, {
+            maxDimension: 1600,
+            quality: 0.8,
+          });
+        } catch (compressErr) {
+          console.warn(
+            "Photo compression failed, uploading original:",
+            compressErr,
+          );
+        }
+      }
 
       await withUploadRetry(
         async () => {
