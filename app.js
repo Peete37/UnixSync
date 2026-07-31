@@ -535,6 +535,111 @@ window.addEventListener("load", () => {
     if (nav) trackPerf("page_load", nav.duration);
   } catch (_) {}
 });
+
+// ─── SYSTEM ANNOUNCEMENTS ───────────────────────────────────────────────────
+// Maintenance/incident banner. Publishing is entirely manual (see
+// system-announcements-migration.sql) — this code only ever READS.
+// Re-checked periodically (not just once at boot) so a maintenance
+// window that starts or ends while someone already has the app open
+// still shows/clears correctly without needing a refresh.
+const SYSTEM_ANNOUNCEMENT_CHECK_MS = 5 * 60 * 1000;
+let systemAnnouncementTimer = null;
+
+async function checkSystemAnnouncements() {
+  try {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
+      .from("system_announcements")
+      .select("id, title, message, severity, starts_at, ends_at")
+      .lte("starts_at", nowIso)
+      .or(`ends_at.is.null,ends_at.gt.${nowIso}`)
+      .order("severity", { ascending: false }) // critical > warning > info alphabetically descending happens to match; fine for a rare, manually-curated table
+      .order("starts_at", { ascending: false })
+      .limit(1);
+
+    if (error) throw error;
+    const announcement = data?.[0];
+    const banner = document.getElementById("system-announcement-banner");
+    if (!banner) return;
+
+    if (!announcement) {
+      banner.classList.add("hidden");
+      return;
+    }
+
+    // Don't re-show one this device already dismissed — but DO show
+    // it again if it's a different announcement than whatever was
+    // last dismissed.
+    if (
+      localStorage.getItem("campus_market_dismissed_announcement") ===
+      announcement.id
+    ) {
+      banner.classList.add("hidden");
+      return;
+    }
+
+    banner.dataset.announcementId = announcement.id;
+    banner.dataset.severity = announcement.severity;
+    document.getElementById("system-announcement-title").textContent =
+      announcement.title;
+    document.getElementById("system-announcement-message").textContent =
+      announcement.message;
+    banner.classList.remove("hidden");
+  } catch (err) {
+    console.warn("[Announcements] check failed (non-fatal):", err);
+  }
+}
+
+window.dismissSystemAnnouncement = function () {
+  const banner = document.getElementById("system-announcement-banner");
+  if (banner?.dataset.announcementId) {
+    localStorage.setItem(
+      "campus_market_dismissed_announcement",
+      banner.dataset.announcementId,
+    );
+  }
+  banner?.classList.add("hidden");
+};
+
+function startSystemAnnouncementWatch() {
+  checkSystemAnnouncements();
+  if (systemAnnouncementTimer) clearInterval(systemAnnouncementTimer);
+  systemAnnouncementTimer = setInterval(
+    checkSystemAnnouncements,
+    SYSTEM_ANNOUNCEMENT_CHECK_MS,
+  );
+}
+
+// Runs regardless of sign-in state — a maintenance notice needs to reach
+// signed-out visitors too, so this is NOT tied to the auth-boot sequence
+// the way session tracking/event logging above are.
+startSystemAnnouncementWatch();
+
+// ─── USAGE EVENT TRACKING ───────────────────────────────────────────────────
+// Same fire-and-forget pattern as everything else in this section. Backs
+// the cohort/dropout analysis queries in user-events-migration.sql —
+// those need a history of when people were actually active, which is
+// exactly what logging events over time provides.
+//
+// userIdOverride exists for exactly one situation: sign-in/sign-up
+// success, where this needs to fire BEFORE currentUserData gets set by
+// the auth-state observer that runs after. Every other call site can
+// omit the third argument and it'll use currentUserData.id normally.
+async function trackEvent(eventName, detail = {}, userIdOverride = null) {
+  const userId = userIdOverride || currentUserData?.id;
+  if (!userId) return;
+  try {
+    await supabase.from("user_events").insert({
+      user_id: userId,
+      user_id_snapshot: userId,
+      event_name: eventName,
+      detail,
+    });
+  } catch (err) {
+    console.warn(`[Events] failed to track "${eventName}" (non-fatal):`, err);
+  }
+}
+
 // Records sensitive account actions to the `audit_log` table (see
 // audit-log-migration.sql, run once in the Supabase SQL editor). Fire-and-
 // forget by design: an audit log write failing must never block or fail
@@ -2946,12 +3051,16 @@ window.signInWithEmailPassword = async function (email, password) {
       btn.textContent = "Signing in…";
       btn.disabled = true;
     }
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
     if (error) throw error;
     startNewDeviceSession();
+    // currentUserData isn't populated until the auth-state observer
+    // runs after this — passing the id explicitly here means the
+    // event is still correctly attributed instead of silently no-op'ing.
+    trackEvent("signed_in", {}, data?.user?.id);
     document.getElementById("login-modal")?.classList.add("hidden");
     showToast("Welcome back! ✓");
   } catch (err) {
@@ -2978,13 +3087,14 @@ window.registerWithEmail = async function (name, email, password) {
       btn.textContent = "Creating account…";
       btn.disabled = true;
     }
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: { data: { full_name: name } },
     });
     if (error) throw error;
     startNewDeviceSession();
+    trackEvent("signed_up", {}, data?.user?.id);
     document.getElementById("signup-modal")?.classList.add("hidden");
     showToast("Account created! Check your email to confirm. ✓");
   } catch (err) {
@@ -8852,6 +8962,7 @@ window.handlePostSubmission = async function () {
     });
 
     if (insertError) throw insertError;
+    trackEvent("post_created", { type });
 
     document.getElementById("postTitle").value = "";
     document.getElementById("postDescription").value = "";
@@ -11308,6 +11419,19 @@ window.addEventListener("online", () => {
 let _lastGlobalErrorToastAt = 0;
 function showGlobalErrorToast(context, err) {
   console.error(`[Global Error Handler] ${context}:`, err);
+
+  // Sentry: reported from this one place rather than adding separate
+  // window.addEventListener('error'/'unhandledrejection') listeners —
+  // every error that already reaches this function is, by definition,
+  // every error worth knowing about. If the Sentry loader script isn't
+  // set up yet (see index.html), `Sentry` is simply undefined and this
+  // is skipped — it can never itself throw or break error handling.
+  if (typeof Sentry !== "undefined") {
+    Sentry.captureException(
+      err instanceof Error ? err : new Error(`${context}: ${err}`),
+    );
+  }
+
   const now = Date.now();
   if (now - _lastGlobalErrorToastAt < 4000) return; // avoid toast spam from a cascade of related errors
   _lastGlobalErrorToastAt = now;

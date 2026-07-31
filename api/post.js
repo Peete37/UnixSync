@@ -22,6 +22,7 @@
 // file like this, since anything under /api is reachable by anyone.
 
 import { createClient } from "@supabase/supabase-js";
+import { checkRateLimit } from "../lib/rateLimit.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -41,6 +42,17 @@ export default async function handler(req, res) {
   //     the error message stays meaningful instead of a generic 404.
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  // Rate limit checked before doing any real work — this is a public,
+  // unauthenticated, cached endpoint, exactly the kind that's cheap for
+  // someone to hammer. See lib/rateLimit.js for setup; this fails open
+  // (lets requests through) until Upstash is actually configured.
+  const { limited, retryAfter } = await checkRateLimit(req);
+  if (limited) {
+    res.setHeader("Retry-After", String(retryAfter));
+    res.status(429).json({ error: "Too many requests, slow down." });
     return;
   }
 

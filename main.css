@@ -2546,3 +2546,62 @@ main {
 main {
   padding-bottom: max(96px, calc(96px + env(safe-area-inset-bottom, 0px)));
 }
+
+/* System announcement banner — maintenance/incident notices. Severity
+   controls the accent color (info=blue, warning=amber, critical=red) via
+   a data attribute set in JS rather than separate classes, so the same
+   markup handles all three. Sits above app-shell's content, never
+   scrolls away. */
+#system-announcement-banner {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+  background: #0f172a;
+}
+#system-announcement-banner[data-severity="warning"] {
+  background: rgba(120, 53, 15, 0.35);
+  border-bottom-color: rgba(251, 191, 36, 0.3);
+}
+#system-announcement-banner[data-severity="critical"] {
+  background: rgba(127, 29, 29, 0.4);
+  border-bottom-color: rgba(248, 113, 113, 0.35);
+}
+.system-announcement-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.system-announcement-icon {
+  color: #fbbf24;
+  font-size: 13px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+#system-announcement-banner[data-severity="critical"]
+  .system-announcement-icon {
+  color: #f87171;
+}
+.system-announcement-title {
+  color: #fff;
+  font-weight: 800;
+  font-size: 12px;
+}
+.system-announcement-message {
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+.system-announcement-dismiss {
+  color: #94a3b8;
+  font-size: 12px;
+  padding: 4px;
+  flex-shrink: 0;
+}

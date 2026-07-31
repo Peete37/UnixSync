@@ -36,6 +36,19 @@
     />
     <meta name="apple-mobile-web-app-title" content="CampusMarket" />
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Error tracking (Sentry). Replace YOUR_LOADER_KEY below with the
+         real one from your Sentry project settings -> Client Keys (DSN)
+         -> Loader Script, after creating a free account at sentry.io.
+         This loader script is Sentry's own no-bundler-needed option —
+         it self-configures, no separate Sentry.init() call needed. It
+         hooks into your existing global error handler in app.js
+         (showGlobalErrorToast), so every error that already shows the
+         person a toast ALSO gets reported here — nothing needs to be
+         duplicated or called twice. -->
+    <script
+      src="https://js-de.sentry-cdn.com/4a29a22478b8b4f2ed3bb7062e132b8a.min.js"
+      crossorigin="anonymous"
+    ></script>
     <link rel="manifest" href="manifest.json" />
     <link
       rel="stylesheet"
@@ -56,6 +69,34 @@
        stay contained within this column instead of spanning the full
        browser window on desktop. -->
     <div id="app-shell">
+      <!-- System announcement banner (maintenance/incident notices). Hidden
+           by default — only shown when checkSystemAnnouncements() in
+           app.js finds an active row in system_announcements. Sits above
+           everything else in app-shell so it's visible no matter which
+           tab/subview is currently open. -->
+      <div id="system-announcement-banner" class="hidden" role="alert">
+        <div class="system-announcement-content">
+          <i class="fas fa-triangle-exclamation system-announcement-icon"></i>
+          <div class="min-w-0">
+            <p
+              id="system-announcement-title"
+              class="system-announcement-title"
+            ></p>
+            <p
+              id="system-announcement-message"
+              class="system-announcement-message"
+            ></p>
+          </div>
+        </div>
+        <button
+          onclick="window.dismissSystemAnnouncement()"
+          class="system-announcement-dismiss"
+          aria-label="Dismiss"
+        >
+          <i class="fas fa-xmark"></i>
+        </button>
+      </div>
+
       <input
         type="file"
         id="mediaInput"

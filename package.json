@@ -1,10 +1,11 @@
 {
-  "name": "compus-gig",
+  "name": "unix-sync",
   "version": "1.0.0",
   "description": "",
   "main": "app.js",
+  "type": "module",
   "scripts": {
-    "dev": "npx tailwindcss -1 main.css -o dist.css --watch",
+    "dev": "npx tailwindcss -i main.css -o dist.css --watch",
     "build": "npx tailwindcss -i main.css -o dist.css"
   },
   "devDependencies": {
@@ -12,6 +13,8 @@
     "tailwindcss": "^4.3.0"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.111.0"
+    "@supabase/supabase-js": "^2.111.0",
+    "@upstash/ratelimit": "^2.0.8",
+    "@upstash/redis": "^1.38.1"
   }
 }
