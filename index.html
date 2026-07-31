@@ -867,6 +867,38 @@
                         </button>
                       </div>
                     </div>
+
+                    <div class="settings-card">
+                      <div class="settings-card-header">
+                        <span class="settings-card-icon"
+                          ><i class="fas fa-mobile-screen-button"></i
+                        ></span>
+                        <h3
+                          class="text-white font-black text-xs uppercase tracking-widest"
+                        >
+                          Sessions
+                        </h3>
+                      </div>
+                      <div class="px-4 pb-4">
+                        <p
+                          class="text-slate-500 text-[11px] leading-relaxed mb-3"
+                        >
+                          You're signed in on up to 3 devices at a time. If you
+                          don't recognise activity on your account, sign out
+                          everywhere else.
+                        </p>
+                        <button
+                          onclick="
+                            window.signOutOtherSessions &&
+                              window.signOutOtherSessions()
+                          "
+                          class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-2.5 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                        >
+                          <i class="fas fa-right-from-bracket mr-2"></i>Sign Out
+                          Other Devices
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
                   <div

@@ -245,6 +245,315 @@ let activeConversationId = null;
 let activeConversationPeer = null; // { id, name, avatar }
 let conversationsCache = [];
 
+// ─── SESSION MANAGEMENT ────────────────────────────────────────────────────
+// Three requirements live here:
+//   1. Session expiration on a defined timeline — an IDLE timeout (signed
+//      out after inactivity) and an ABSOLUTE timeout (signed out after N
+//      days no matter how active), on top of Supabase's own JWT expiry.
+//   2. A concurrent-session limit — tracked in a `user_sessions` table
+//      (see session-management-migration.sql, run once in the Supabase
+//      SQL editor) since the client SDK has no built-in concept of "how
+//      many other devices am I logged into right now."
+//   3. Instant revocation — "sign out my other devices" from Settings.
+//
+// IMPORTANT, stated plainly rather than glossed over: user_sessions is a
+// COOPERATIVE signal, not a cryptographic one. A real device running this
+// real app sees a revoke via Realtime and signs itself out within about a
+// second. That alone does not invalidate the underlying Supabase refresh
+// token at the server. For the actual hard guarantee — the thing that
+// stops a raw stolen token from working at all, even outside this app —
+// signOutOtherSessions() below ALSO calls Supabase's own native
+// supabase.auth.signOut({ scope: 'others' }), which really does invalidate
+// those tokens server-side. Both layers matter; don't remove either one
+// thinking the other covers it.
+const SESSION_IDLE_TIMEOUT_MS = 45 * 60 * 1000; // 45 min inactivity
+const SESSION_ABSOLUTE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000; // 7 days since login
+const SESSION_HEARTBEAT_MS = 60 * 1000; // keep-alive interval
+const SESSION_EXPIRY_CHECK_MS = 60 * 1000;
+const MAX_CONCURRENT_SESSIONS = 3;
+
+let sessionHeartbeatTimer = null;
+let sessionIdleCheckTimer = null;
+let sessionRevokeChannel = null;
+
+function _newSessionId() {
+  return crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+// Reads the current device's session id, minting one if this is the first
+// time we've checked (e.g. a session that predates this feature shipping).
+// Does NOT reset the absolute-timeout clock — see startNewDeviceSession()
+// for that, which only runs on an actual fresh sign-in.
+function getDeviceSessionId() {
+  let id = localStorage.getItem("campus_market_session_id");
+  if (!id) {
+    id = _newSessionId();
+    localStorage.setItem("campus_market_session_id", id);
+  }
+  if (!localStorage.getItem("campus_market_session_started_at")) {
+    localStorage.setItem(
+      "campus_market_session_started_at",
+      String(Date.now()),
+    );
+  }
+  if (!localStorage.getItem("campus_market_last_activity_at")) {
+    localStorage.setItem("campus_market_last_activity_at", String(Date.now()));
+  }
+  return id;
+}
+
+// Call this at the moment of an actual fresh sign-in (not a page refresh
+// of an already-signed-in session) — mints a brand new session id and
+// resets both the idle and absolute clocks to right now.
+function startNewDeviceSession() {
+  const id = _newSessionId();
+  const now = String(Date.now());
+  localStorage.setItem("campus_market_session_id", id);
+  localStorage.setItem("campus_market_session_started_at", now);
+  localStorage.setItem("campus_market_last_activity_at", now);
+  return id;
+}
+
+function touchSessionActivity() {
+  localStorage.setItem("campus_market_last_activity_at", String(Date.now()));
+}
+
+function clearDeviceSessionStorage() {
+  localStorage.removeItem("campus_market_session_id");
+  localStorage.removeItem("campus_market_session_started_at");
+  localStorage.removeItem("campus_market_last_activity_at");
+}
+
+function guessDeviceLabel() {
+  const ua = navigator.userAgent || "";
+  const isMobile = /Mobi|Android/i.test(ua);
+  let browser = "Browser";
+  if (ua.includes("Edg")) browser = "Edge";
+  else if (ua.includes("Chrome")) browser = "Chrome";
+  else if (ua.includes("Firefox")) browser = "Firefox";
+  else if (ua.includes("Safari")) browser = "Safari";
+  return `${browser} · ${isMobile ? "Mobile" : "Desktop"}`;
+}
+
+// Registers this device as an active session and enforces the concurrent
+// limit by soft-revoking the oldest session(s) beyond MAX_CONCURRENT_SESSIONS.
+// Best-effort by design — session tracking must never block sign-in itself.
+async function registerDeviceSession() {
+  if (!currentUserData?.id) return;
+  const sessionId = getDeviceSessionId();
+
+  try {
+    await supabase.from("user_sessions").upsert(
+      {
+        user_id: currentUserData.id,
+        session_id: sessionId,
+        device_label: guessDeviceLabel(),
+        last_seen_at: new Date().toISOString(),
+        revoked: false,
+        revoked_at: null,
+      },
+      { onConflict: "user_id,session_id" },
+    );
+
+    const { data: activeSessions, error } = await supabase
+      .from("user_sessions")
+      .select("id, session_id, created_at")
+      .eq("user_id", currentUserData.id)
+      .eq("revoked", false)
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+    if (!activeSessions || activeSessions.length <= MAX_CONCURRENT_SESSIONS)
+      return;
+
+    // Over the limit: soft-revoke the oldest excess. Sorted ascending
+    // by created_at, so this device (the most recent) is never among
+    // the ones removed.
+    const excessIds = activeSessions
+      .slice(0, activeSessions.length - MAX_CONCURRENT_SESSIONS)
+      .map((s) => s.id);
+    if (excessIds.length) {
+      await supabase
+        .from("user_sessions")
+        .update({ revoked: true, revoked_at: new Date().toISOString() })
+        .in("id", excessIds);
+    }
+  } catch (err) {
+    console.warn("[Sessions] registerDeviceSession failed (non-fatal):", err);
+  }
+}
+
+// "Sign out my other devices." Marks every other session row revoked
+// (fast, cooperative — other open tabs react within ~1s via Realtime)
+// and calls Supabase's native scope:'others' sign-out for the real
+// server-enforced guarantee, in case one of those devices is offline
+// right now and won't see the Realtime event until it reconnects.
+window.signOutOtherSessions = async function () {
+  if (!currentUserData?.id) {
+    showToast("Sign in first.");
+    return;
+  }
+  const mySessionId = getDeviceSessionId();
+  try {
+    await supabase
+      .from("user_sessions")
+      .update({ revoked: true, revoked_at: new Date().toISOString() })
+      .eq("user_id", currentUserData.id)
+      .neq("session_id", mySessionId);
+
+    const { error } = await supabase.auth.signOut({ scope: "others" });
+    if (error) throw error;
+
+    logAuditEvent("sessions_revoked_others");
+    showToast("Signed out of your other devices.");
+  } catch (err) {
+    console.error("[Sessions] signOutOtherSessions failed:", err);
+    showToast("Could not sign out other devices — try again.");
+  }
+};
+
+function startSessionHeartbeat() {
+  stopSessionHeartbeat();
+  sessionHeartbeatTimer = setInterval(async () => {
+    if (!currentUserData?.id || !isOnline) return;
+    try {
+      await supabase
+        .from("user_sessions")
+        .update({ last_seen_at: new Date().toISOString() })
+        .eq("user_id", currentUserData.id)
+        .eq("session_id", getDeviceSessionId());
+    } catch (_) {
+      // Non-critical — next heartbeat retries.
+    }
+  }, SESSION_HEARTBEAT_MS);
+}
+function stopSessionHeartbeat() {
+  if (sessionHeartbeatTimer) {
+    clearInterval(sessionHeartbeatTimer);
+    sessionHeartbeatTimer = null;
+  }
+}
+
+// Idle + absolute expiry, checked on an interval rather than a single
+// setTimeout — a laptop that sleeps pauses JS timers but not the wall
+// clock, so a periodic check against real timestamps catches the true
+// elapsed time whenever the tab wakes back up, instead of firing early
+// or (worse) never firing at all.
+function startSessionExpiryWatch() {
+  stopSessionExpiryWatch();
+  ["click", "keydown", "touchstart", "scroll"].forEach((evt) =>
+    window.addEventListener(evt, touchSessionActivity, { passive: true }),
+  );
+  sessionIdleCheckTimer = setInterval(() => {
+    if (!currentUserData?.id) return;
+    const now = Date.now();
+    const startedAt = Number(
+      localStorage.getItem("campus_market_session_started_at") || now,
+    );
+    const lastActivity = Number(
+      localStorage.getItem("campus_market_last_activity_at") || now,
+    );
+
+    if (now - lastActivity > SESSION_IDLE_TIMEOUT_MS) {
+      showToast("You've been signed out after being idle for a while.");
+      window.logout();
+    } else if (now - startedAt > SESSION_ABSOLUTE_TIMEOUT_MS) {
+      showToast("Your session has expired — please sign in again.");
+      window.logout();
+    }
+  }, SESSION_EXPIRY_CHECK_MS);
+}
+function stopSessionExpiryWatch() {
+  if (sessionIdleCheckTimer) {
+    clearInterval(sessionIdleCheckTimer);
+    sessionIdleCheckTimer = null;
+  }
+}
+
+// Realtime listener: if this exact session gets marked revoked — by
+// signOutOtherSessions() on another device, or by the concurrent-limit
+// enforcement in registerDeviceSession() bumping it off — sign out
+// immediately instead of waiting for the next heartbeat or API call.
+function startSessionRevokeListener() {
+  stopSessionRevokeListener();
+  if (!currentUserData?.id) return;
+  sessionRevokeChannel = supabase
+    .channel(`user-sessions-${currentUserData.id}`)
+    .on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: "user_sessions",
+        filter: `user_id=eq.${currentUserData.id}`,
+      },
+      (payload) => {
+        const row = payload.new;
+        if (row?.session_id === getDeviceSessionId() && row.revoked) {
+          showToast(
+            "You've been signed out — this session was ended from another device.",
+          );
+          window.logout();
+        }
+      },
+    )
+    .subscribe();
+}
+function stopSessionRevokeListener() {
+  if (sessionRevokeChannel) {
+    supabase.removeChannel(sessionRevokeChannel);
+    sessionRevokeChannel = null;
+  }
+}
+
+// ─── PERFORMANCE TRACKING ───────────────────────────────────────────────────
+// Fire-and-forget, same pattern as the audit log above — a failed perf
+// write must never affect the actual page. See perf-tracking-migration.sql
+// for the table this writes to and ready-made queries to view the data.
+async function trackPerf(eventName, durationMs) {
+  try {
+    await supabase.from("perf_events").insert({
+      event_name: eventName,
+      duration_ms: Math.round(durationMs),
+      path: window.location.pathname,
+      user_id: currentUserData?.id || null,
+    });
+  } catch (_) {
+    // Telemetry failing silently is correct here — never surface this
+    // to the person using the app.
+  }
+}
+
+// Real page load timing, from the browser's own Navigation Timing API —
+// not a hand-rolled timer, so it reflects what actually happened (DNS,
+// TLS, download, DOM parse) rather than just "script start to script end."
+window.addEventListener("load", () => {
+  try {
+    const nav = performance.getEntriesByType("navigation")[0];
+    if (nav) trackPerf("page_load", nav.duration);
+  } catch (_) {}
+});
+// Records sensitive account actions to the `audit_log` table (see
+// audit-log-migration.sql, run once in the Supabase SQL editor). Fire-and-
+// forget by design: an audit log write failing must never block or fail
+// the actual action it's describing — logging that something happened
+// can't be a precondition for the thing itself happening.
+async function logAuditEvent(action, detail = {}) {
+  if (!currentUserData?.id) return;
+  try {
+    await supabase.from("audit_log").insert({
+      user_id: currentUserData.id,
+      user_id_snapshot: currentUserData.id,
+      action,
+      detail,
+    });
+  } catch (err) {
+    console.warn(`[Audit] failed to log "${action}" (non-fatal):`, err);
+  }
+}
+
 // Fix: `last_read_by_me` was referenced when computing unread state but
 // never actually written anywhere (a single boolean column can't
 // correctly represent "read by ME" for a two-person conversation
@@ -2642,6 +2951,7 @@ window.signInWithEmailPassword = async function (email, password) {
       password,
     });
     if (error) throw error;
+    startNewDeviceSession();
     document.getElementById("login-modal")?.classList.add("hidden");
     showToast("Welcome back! ✓");
   } catch (err) {
@@ -2674,6 +2984,7 @@ window.registerWithEmail = async function (name, email, password) {
       options: { data: { full_name: name } },
     });
     if (error) throw error;
+    startNewDeviceSession();
     document.getElementById("signup-modal")?.classList.add("hidden");
     showToast("Account created! Check your email to confirm. ✓");
   } catch (err) {
@@ -9545,6 +9856,12 @@ window.confirmDeleteAccount = function () {
     requireText: "DELETE",
     onConfirm: async () => {
       try {
+        // Logged first, before any deletion runs — an audit trail
+        // should capture the attempt itself, not just a clean
+        // success. If something fails halfway through the sequence
+        // below, this entry still exists to show what was
+        // attempted and when.
+        logAuditEvent("account_deletion_started");
         showToast("Deleting your data…");
 
         const { data: myPosts } = await supabase
@@ -10710,6 +11027,21 @@ if (activeAuthChange) {
       if (!hasBootedFeedForSession) {
         hasBootedFeedForSession = true;
 
+        // Performance tracking: time from navigation start to the
+        // signed-in boot sequence beginning. Purely additive —
+        // doesn't await anything or change what runs below.
+        trackPerf("auth_boot", performance.now());
+
+        // Session management: register this device, enforce the
+        // concurrent-session limit, and start the idle/absolute
+        // expiry watch + revoke listener. Grouped with the rest of
+        // the one-time boot work for the same reason — it must run
+        // exactly once per real sign-in, not on every auth event.
+        registerDeviceSession();
+        startSessionHeartbeat();
+        startSessionExpiryWatch();
+        startSessionRevokeListener();
+
         // Load the block list before the first render so a blocked
         // person's posts never flash on screen for a moment before
         // being filtered out.
@@ -10766,6 +11098,11 @@ if (activeAuthChange) {
       // instead of being permanently skipped because it already
       // ran once for the previous person.
       hasBootedFeedForSession = false;
+
+      stopSessionHeartbeat();
+      stopSessionExpiryWatch();
+      stopSessionRevokeListener();
+      clearDeviceSessionStorage();
 
       if (authProfileNav) {
         authProfileNav.innerHTML = `<i class="fas fa-sign-in-alt text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Sign In</span>`;
