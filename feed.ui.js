@@ -31,7 +31,7 @@ function renderMedia(post) {
                 alt="Post media"
                 class="snap-start w-[85%] h-80 object-cover rounded-2xl flex-shrink-0 bg-slate-900"
               />
-            `
+            `,
           )
           .join("")}
       </div>
@@ -55,7 +55,8 @@ function renderMedia(post) {
 }
 
 function renderLocation(post) {
-  if (!post.location || (!post.location.lat && !post.location.landmark)) return "";
+  if (!post.location || (!post.location.lat && !post.location.landmark))
+    return "";
 
   return `
     <div class="mt-3 flex items-center justify-between gap-3">
@@ -124,7 +125,7 @@ export function renderFeed(posts = []) {
   if (!posts.length) {
     return `
       <div class="p-8 text-center text-slate-400">
-        No posts yet. Be the first to post on Kofid-Connect.
+        No posts yet. Be the first to post on unix sync.
       </div>
     `;
   }

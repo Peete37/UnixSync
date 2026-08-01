@@ -268,7 +268,7 @@ let conversationsCache = [];
 // thinking the other covers it.
 const SESSION_IDLE_TIMEOUT_MS = 45 * 60 * 1000; // 45 min inactivity
 const SESSION_ABSOLUTE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000; // 7 days since login
-const SESSION_HEARTBEAT_MS = 60 * 1000; // keep-alive interval
+const SESSION_HEARTBEAT_MS = 10 * 60 * 1000; // keep-alive interval — see note below
 const SESSION_EXPIRY_CHECK_MS = 60 * 1000;
 const MAX_CONCURRENT_SESSIONS = 3;
 
@@ -416,6 +416,13 @@ window.signOutOtherSessions = async function () {
 
 function startSessionHeartbeat() {
   stopSessionHeartbeat();
+  // Was every 60s originally — cut to every 10 minutes. The only thing
+  // last_seen_at is actually used for is deciding which rows are "stale"
+  // in the 90-day cleanup query (user-sessions-migration.sql), which
+  // doesn't need minute-level precision. At 60s, every signed-in tab
+  // open in the background was writing to the database 1,440 times a
+  // day for no benefit; at 10 minutes it's 144 — same usefulness, a
+  // tenth of the database write volume.
   sessionHeartbeatTimer = setInterval(async () => {
     if (!currentUserData?.id || !isOnline) return;
     try {
@@ -3051,11 +3058,54 @@ window.signInWithEmailPassword = async function (email, password) {
       btn.textContent = "Signing in…";
       btn.disabled = true;
     }
+
+    // Account lockout check, before attempting sign-in at all. If the
+    // check itself fails (network hiccup, function cold-start error),
+    // this fails OPEN — the sign-in attempt proceeds normally rather
+    // than blocking someone from logging in because a side-system had
+    // a problem. The lockout enforcement itself lives entirely in the
+    // login-guard Edge Function / login_attempts table, not here —
+    // this is just the client-side check-and-display step.
+    try {
+      const { data: lockoutCheck } = await supabase.functions.invoke(
+        "login-guard",
+        {
+          body: { action: "check", email },
+        },
+      );
+      if (lockoutCheck?.locked) {
+        const mins = Math.ceil((lockoutCheck.retryAfterSeconds || 60) / 60);
+        showToast(
+          `Too many failed attempts. Try again in ${mins} minute${mins === 1 ? "" : "s"}.`,
+        );
+        return;
+      }
+    } catch (_) {
+      /* fail open — see comment above */
+    }
+
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
-    if (error) throw error;
+    if (error) {
+      // Record the failure (fire-and-forget — must not block showing
+      // the person their actual error message) before re-throwing
+      // into the catch block below.
+      supabase.functions
+        .invoke("login-guard", { body: { action: "failure", email } })
+        .catch(() => {});
+      throw error;
+    }
+
+    // Successful login clears any prior failed-attempt count for this
+    // email — a person who mistypes their password twice and then
+    // gets it right on the third try shouldn't stay one step closer
+    // to lockout indefinitely.
+    supabase.functions
+      .invoke("login-guard", { body: { action: "success", email } })
+      .catch(() => {});
+
     startNewDeviceSession();
     // currentUserData isn't populated until the auth-state observer
     // runs after this — passing the id explicitly here means the
@@ -3153,6 +3203,12 @@ window.handleAvatarUpload = async function (inputEl) {
           .upload(storagePath, compressed, {
             contentType: "image/jpeg",
             upsert: true,
+            // Safe to cache for a full year: storagePath is
+            // timestamp-based (see where it's built above), so
+            // the same path is never reused for different
+            // content — there's nothing for a long cache to
+            // ever go stale against.
+            cacheControl: "31536000",
           });
         if (uploadErr) throw uploadErr;
       },
@@ -7686,12 +7742,14 @@ async function _deletePostById(postId) {
     const targets = currentPost.media_url.startsWith("[")
       ? JSON.parse(currentPost.media_url)
       : [currentPost.media_url];
-    for (const url of targets) {
-      const pathParts = url.split("/storage/v1/object/public/posts/");
-      const storagePath = pathParts[1];
-      if (storagePath)
-        await supabase.storage.from("posts").remove([storagePath]);
-    }
+    // Batched into one call instead of one remove() per file — Supabase
+    // Storage's remove() already accepts an array, so a 5-photo post
+    // used to cost 5 separate round-trips to delete for no reason.
+    const storagePaths = targets
+      .map((url) => url.split("/storage/v1/object/public/posts/")[1])
+      .filter(Boolean);
+    if (storagePaths.length)
+      await supabase.storage.from("posts").remove(storagePaths);
   }
 
   // Fix: deleting a post used to leave every like, comment, and save
@@ -8907,7 +8965,13 @@ window.handlePostSubmission = async function () {
         async () => {
           const { error: uploadError } = await supabase.storage
             .from("posts")
-            .upload(storagePath, file, { contentType: file.type });
+            .upload(storagePath, file, {
+              contentType: file.type,
+              // Same reasoning as the avatar upload above —
+              // storagePath includes a timestamp, so it's
+              // never reused for different content.
+              cacheControl: "31536000",
+            });
           if (uploadError) throw uploadError;
         },
         {
@@ -9980,19 +10044,22 @@ window.confirmDeleteAccount = function () {
           .select("id, media_url")
           .eq("user_id", currentUserData.id);
 
-        for (const post of myPosts || []) {
-          if (post.media_url) {
-            const targets = post.media_url.startsWith("[")
-              ? JSON.parse(post.media_url)
-              : [post.media_url];
-            for (const url of targets) {
-              const storagePath = url.split(
-                "/storage/v1/object/public/posts/",
-              )[1];
-              if (storagePath)
-                await supabase.storage.from("posts").remove([storagePath]);
-            }
-          }
+        // Collected across every post first, then removed in ONE
+        // call — this used to be a nested loop making one
+        // storage.remove() call per photo per post (a user with
+        // 20 posts x 5 photos each was making 100 sequential
+        // round-trips just to delete their own photos).
+        const allStoragePaths = (myPosts || []).flatMap((post) => {
+          if (!post.media_url) return [];
+          const targets = post.media_url.startsWith("[")
+            ? JSON.parse(post.media_url)
+            : [post.media_url];
+          return targets
+            .map((url) => url.split("/storage/v1/object/public/posts/")[1])
+            .filter(Boolean);
+        });
+        if (allStoragePaths.length) {
+          await supabase.storage.from("posts").remove(allStoragePaths);
         }
 
         await supabase.from("posts").delete().eq("user_id", currentUserData.id);
@@ -10107,12 +10174,13 @@ let currentTypingChan = null;
 let typingStopTimer = null;
 
 function unsubscribeActiveThread() {
+  // currentMessagesChan and currentTypingChan point to the same merged
+  // channel now (see subscribeActiveThreadMessages) — one removeChannel
+  // call tears down both the message listeners and the typing presence
+  // together, since they were never actually separate connections.
   if (currentMessagesChan) {
     supabase.removeChannel(currentMessagesChan);
     currentMessagesChan = null;
-  }
-  if (currentTypingChan) {
-    supabase.removeChannel(currentTypingChan);
     currentTypingChan = null;
   }
   clearTimeout(typingStopTimer);
@@ -10760,8 +10828,9 @@ function subscribeActiveThreadMessages() {
   if (currentMessagesChan) {
     supabase.removeChannel(currentMessagesChan);
     currentMessagesChan = null;
+    currentTypingChan = null; // same underlying channel as currentMessagesChan — see merge note below
   }
-  if (!activeConversationId) return;
+  if (!activeConversationId || !currentUserData) return;
 
   // Tracks message ids already rendered in this thread session, as a
   // second safety net alongside container.dataset.lastOptimisticId — in
@@ -10773,8 +10842,22 @@ function subscribeActiveThreadMessages() {
   // which one wins the race.
   const renderedMessageIds = new Set();
 
-  currentMessagesChan = supabase
-    .channel(`messages-live-${activeConversationId}`)
+  // Merged: this used to be two separate channels (messages-live-* for
+  // the postgres_changes listeners below, typing-* for presence) that
+  // always opened and closed at exactly the same moment — entering or
+  // leaving a specific conversation, never independently. Combining
+  // them into one channel with both a postgres_changes binding and a
+  // presence config cuts the Realtime channel count for anyone
+  // actively chatting from 2 down to 1. currentTypingChan and
+  // currentMessagesChan below deliberately point to the SAME channel
+  // object, so every existing .track()/.presenceState() call elsewhere
+  // in the file (_handleTypingInput, sendChatMessage) keeps working
+  // completely unchanged — they don't know or care that it used to be
+  // a separate channel.
+  const threadChannel = supabase
+    .channel(`messages-live-${activeConversationId}`, {
+      config: { presence: { key: currentUserData.id } },
+    })
     .on(
       "postgres_changes",
       {
@@ -10846,35 +10929,21 @@ function subscribeActiveThreadMessages() {
         }
       },
     )
-    .subscribe();
-
-  subscribeTypingPresence();
-}
-
-// Typing indicator via Supabase Presence — deliberately avoids any
-// schema change (no new column/table) by using a presence channel keyed
-// to the conversation, where each side just broadcasts a boolean typing
-// flag that the other side listens for.
-function subscribeTypingPresence() {
-  if (currentTypingChan) {
-    supabase.removeChannel(currentTypingChan);
-    currentTypingChan = null;
-  }
-  if (!activeConversationId || !currentUserData) return;
-
-  currentTypingChan = supabase.channel(`typing-${activeConversationId}`, {
-    config: { presence: { key: currentUserData.id } },
-  });
-
-  currentTypingChan
+    // Typing indicator via Supabase Presence, now sharing this same
+    // channel instead of its own — deliberately still avoids any
+    // schema change (no new column/table), each side just broadcasts
+    // a boolean typing flag the other side listens for.
     .on("presence", { event: "sync" }, () => {
-      const state = currentTypingChan.presenceState();
+      const state = threadChannel.presenceState();
       const peerIsTyping = Object.keys(state)
         .filter((uid) => uid !== currentUserData.id)
         .some((uid) => state[uid]?.[0]?.typing);
       setTypingStatusVisible(peerIsTyping);
     })
     .subscribe();
+
+  currentMessagesChan = threadChannel;
+  currentTypingChan = threadChannel;
 }
 
 function setTypingStatusVisible(visible) {
@@ -10889,13 +10958,27 @@ function setTypingStatusVisible(visible) {
 // "typing" presence immediately, then automatically broadcasts
 // "stopped typing" after a short pause, so the peer's indicator clears
 // on its own if the person stops without sending.
+//
+// Fix: this used to call .track({typing:true}) on every single keystroke
+// — typing a 50-character message sent 50 separate Presence messages
+// over the Realtime connection instead of 1. isCurrentlyTyping tracks
+// whether a "typing:true" has already been sent for this typing burst,
+// so a keystroke only triggers a new track() call on the transition
+// into typing, not on every key after that — the stop-timer reset still
+// happens every keystroke (that part needs to, to correctly detect a
+// pause), just without needlessly re-sending the same state.
+let isCurrentlyTyping = false;
 window._handleTypingInput = function () {
   if (!currentTypingChan || !currentUserData) return;
 
-  currentTypingChan.track({ typing: true });
+  if (!isCurrentlyTyping) {
+    isCurrentlyTyping = true;
+    currentTypingChan.track({ typing: true });
+  }
 
   clearTimeout(typingStopTimer);
   typingStopTimer = setTimeout(() => {
+    isCurrentlyTyping = false;
     currentTypingChan?.track({ typing: false });
   }, 2000);
 };
@@ -10920,6 +11003,7 @@ window.sendChatMessage = async function () {
   input.style.height = "auto";
   window._syncChatSendState(input);
   clearTimeout(typingStopTimer);
+  isCurrentlyTyping = false; // kept in sync with _handleTypingInput's flag — otherwise the next keystroke after sending wouldn't re-announce typing:true
   currentTypingChan?.track({ typing: false });
 
   const optimisticMsg = {
