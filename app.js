@@ -21,6 +21,7 @@ const FEED_SELECT_COLUMNS = [
   "sold_at",
   "sale_ends_at",
   "media_url",
+  "thumbnail_url",
   "media_type",
   "institution",
   "region",
@@ -32,6 +33,30 @@ const FEED_SELECT_COLUMNS = [
   "type",
   "created_at",
 ].join(", ");
+
+// Prefers the small thumbnail_url over the full-size media_url — this is
+// the fix for the Cached Egress overage: every grid tile (Saved Items,
+// Profile grid, Archived Posts, public profile grid — all roughly
+// 48-150px on screen) was loading the same full 1600px listing photo
+// used in the full-size detail carousel. Falls back to the first
+// media_url for posts created before thumbnail_url existed (it'll be
+// null/empty for those), so nothing breaks for older posts — they just
+// don't get the bandwidth savings retroactively, same as the original
+// photo-compression fix only applying to new uploads.
+function pickThumbnailUrl(post) {
+  const parseFirst = (raw) => {
+    if (!raw) return "";
+    if (raw.startsWith("[")) {
+      try {
+        return JSON.parse(raw)[0] || "";
+      } catch (_) {
+        return raw;
+      }
+    }
+    return raw;
+  };
+  return parseFirst(post?.thumbnail_url) || parseFirst(post?.media_url);
+}
 const FEED_DECAY_HALF_LIFE_HOURS = 72;
 const FEED_DECAY_ENGAGEMENT_WEIGHT = 0.18;
 const SAVED_ALERTS_KEY = "campus_market_saved_alerts";
@@ -831,6 +856,17 @@ const _viewHistory = [];
 let _detailPostStack = [];
 let _currentDetailPostId = null;
 
+// Exit confirmation: when both the overlay stack and the view-history
+// stack are empty, a back-press would otherwise close the app/PWA
+// immediately — easy to trigger by accident (one extra back-tap right
+// after opening it, or a gesture that goes slightly too far). Requires a
+// second back-press within 2 seconds, same "press back again to exit"
+// convention most Android apps use (Instagram, Twitter, etc.) — a toast,
+// not a modal, since a modal here would be more disruptive than the
+// problem it's solving.
+let _exitConfirmArmed = false;
+let _exitConfirmTimer = null;
+
 window.addEventListener("popstate", () => {
   // Highest priority: a still-open overlay (modal/sheet/DM thread).
   // Close it first, leave the underlying view alone.
@@ -875,8 +911,32 @@ window.addEventListener("popstate", () => {
     return;
   }
 
-  // Nothing reachable — let the browser/app handle exit as a normal web
-  // history pop (closes PWA, tabs back, etc).
+  // Nothing reachable — this is a genuine exit back-press (both the
+  // overlay stack and the view-history stack are empty). Require a
+  // second back-press within 2 seconds before actually letting it
+  // happen, rather than exiting on the very first one.
+  if (!_exitConfirmArmed) {
+    _exitConfirmArmed = true;
+    showToast("Press back again to exit");
+    // Re-push a history entry so THIS back-press is absorbed instead
+    // of actually navigating away. If the second press comes within
+    // the window below, it'll find both stacks still empty and fall
+    // through past this block to the real exit (nothing re-pushes
+    // state at that point, so the browser/app handles it normally).
+    try {
+      history.pushState({ uiExitGuard: true }, "");
+    } catch (_) {}
+    clearTimeout(_exitConfirmTimer);
+    _exitConfirmTimer = setTimeout(() => {
+      _exitConfirmArmed = false;
+    }, 2000);
+    return;
+  }
+  _exitConfirmArmed = false;
+  clearTimeout(_exitConfirmTimer);
+  // Falls through here on a genuine second press — let the
+  // browser/app handle exit as a normal web history pop (closes PWA,
+  // tabs back, etc). Nothing further to do.
 });
 // ─── FEED REFRESH COALESCING ──────────────────────────────────────────────────
 // Hoisted to module scope on purpose: when the user switches across feed
@@ -7380,14 +7440,7 @@ function buildCartListMarkup() {
 
   const cards = validItems
     .map((item) => {
-      let firstUrl = item.media_url || "";
-      if (firstUrl.startsWith("[")) {
-        try {
-          firstUrl = JSON.parse(firstUrl)[0] || "";
-        } catch (_) {
-          /* leave as-is */
-        }
-      }
+      const firstUrl = pickThumbnailUrl(item);
       const isVideo = item.media_type === "video";
       const canContact =
         !!item.user_id &&
@@ -7702,7 +7755,9 @@ async function fetchArchivedPosts() {
   try {
     const { data, error } = await supabase
       .from("posts")
-      .select("id, title, media_url, media_type, price, archived_at")
+      .select(
+        "id, title, media_url, thumbnail_url, media_type, price, archived_at",
+      )
       .eq("user_id", currentUserData.id)
       .eq("is_archived", true)
       .order("archived_at", { ascending: false });
@@ -8924,6 +8979,7 @@ window.handlePostSubmission = async function () {
 
   try {
     const publicUrls = [];
+    let thumbnailUrl = "";
     let primaryMediaType = "image";
 
     // Multi-file upload: every file the user attached is uploaded and
@@ -8947,7 +9003,8 @@ window.handlePostSubmission = async function () {
       // carousel while cutting typical phone-camera file size by
       // roughly 80-90%. Videos are left untouched (compression only
       // handles raster images).
-      if (file.type && file.type.startsWith("image/")) {
+      const isImage = file.type && file.type.startsWith("image/");
+      if (isImage) {
         try {
           file = await compressImageFile(file, {
             maxDimension: 1600,
@@ -8989,6 +9046,51 @@ window.handlePostSubmission = async function () {
       } = supabase.storage.from("posts").getPublicUrl(storagePath);
       publicUrls.push(publicUrl);
 
+      // Cached Egress fix: every grid/list view (Saved Items,
+      // Profile grid, Archived Posts, public profile grid — all
+      // roughly 48-150px on screen) was loading this SAME
+      // full-1600px file just to shrink it down visually in CSS —
+      // the bytes still had to be downloaded at full size first.
+      // Only the FIRST image needs a thumbnail at all, since that's
+      // the only one any grid view ever shows. Derived from the
+      // already-compressed 1600px `file` above rather than the raw
+      // original — faster to downsample further, and it's already
+      // had EXIF/orientation handled by that first pass. Best-effort:
+      // if this fails, thumbnailUrl just stays empty and
+      // pickThumbnailUrl() falls back to the full-size image, same
+      // as it does for any older post that predates this feature.
+      if (i === 0 && isImage) {
+        try {
+          const thumbFile = await compressImageFile(file, {
+            maxDimension: 400,
+            quality: 0.7,
+          });
+          const thumbPath = `${currentUserData.id}/${Date.now()}-0-thumb.jpg`;
+          const { error: thumbErr } = await supabase.storage
+            .from("posts")
+            .upload(thumbPath, thumbFile, {
+              contentType: "image/jpeg",
+              cacheControl: "31536000",
+            });
+          if (!thumbErr) {
+            const {
+              data: { publicUrl: thumbPublicUrl },
+            } = supabase.storage.from("posts").getPublicUrl(thumbPath);
+            thumbnailUrl = thumbPublicUrl;
+          } else {
+            console.warn(
+              "Thumbnail upload failed (non-fatal, grids fall back to full image):",
+              thumbErr,
+            );
+          }
+        } catch (thumbGenErr) {
+          console.warn(
+            "Thumbnail generation failed (non-fatal, grids fall back to full image):",
+            thumbGenErr,
+          );
+        }
+      }
+
       if (i === 0 && file.type.startsWith("video")) {
         primaryMediaType = "video";
       }
@@ -9015,6 +9117,7 @@ window.handlePostSubmission = async function () {
       original_price: parsedOriginalPrice,
       sale_ends_at: saleEndsIso,
       media_url: JSON.stringify(publicUrls),
+      thumbnail_url: thumbnailUrl || null,
       media_type: primaryMediaType,
       institution,
       region,
@@ -9091,7 +9194,7 @@ async function loadProfileStats() {
       // cosmetic.
       supabase
         .from("posts")
-        .select("id, title, media_url, media_type, price")
+        .select("id, title, media_url, thumbnail_url, media_type, price")
         .eq("user_id", currentUserData.id)
         .eq("is_archived", false)
         .order("created_at", { ascending: false }),
@@ -9480,17 +9583,7 @@ async function loadArchivedPostsIntoSheet() {
 
   bodyEl.innerHTML = posts
     .map((d) => {
-      let thumb = "";
-      if (d.media_url) {
-        try {
-          const urls = d.media_url.startsWith("[")
-            ? JSON.parse(d.media_url)
-            : [d.media_url];
-          thumb = urls[0] || "";
-        } catch (_) {
-          thumb = d.media_url;
-        }
-      }
+      const thumb = pickThumbnailUrl(d);
       const archivedDate = d.archived_at
         ? new Date(d.archived_at).toLocaleDateString(undefined, {
             month: "short",
@@ -9602,7 +9695,7 @@ window.openPublicProfile = async function (userId) {
         .eq("follower_id", userId),
       supabase
         .from("posts")
-        .select("id, title, media_url, media_type, price")
+        .select("id, title, media_url, thumbnail_url, media_type, price")
         .eq("user_id", userId)
         .eq("is_archived", false)
         .order("created_at", { ascending: false }),
@@ -11572,6 +11665,11 @@ function renderPublicGridItem(id, post) {
       mediaUrl = d.media_url;
     }
   }
+  // Thumbnails only apply to the <img> branch below — video posts still
+  // use the full mediaUrl for playback (there's no separate small
+  // video preview generated at upload time), so this is kept distinct
+  // from mediaUrl rather than replacing it.
+  const thumbUrl = pickThumbnailUrl(d);
   const fallbackImage =
     "https://images.unsplash.com/photo-1563013544-824ae1d704d3?w=300";
   const isVideo = d.media_type === "video";
@@ -11582,7 +11680,7 @@ function renderPublicGridItem(id, post) {
           isVideo
             ? `<video class="w-full h-full object-cover" src="${mediaUrl}#t=0.1" preload="metadata" muted playsinline></video>
                <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
-            : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
+            : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${thumbUrl || fallbackImage}" alt="" loading="lazy">`
         }
         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
             <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
@@ -11605,6 +11703,9 @@ function renderGridItem(id, post) {
       mediaUrl = d.media_url;
     }
   }
+  // Thumbnails only apply to the <img> branch below — see the matching
+  // note in renderPublicGridItem above.
+  const thumbUrl = pickThumbnailUrl(d);
 
   const fallbackImage =
     "https://images.unsplash.com/photo-1563013544-824ae1d704d3?w=300";
@@ -11631,7 +11732,7 @@ function renderGridItem(id, post) {
           isVideo
             ? `<video class="w-full h-full object-cover" src="${mediaUrl}#t=0.1" preload="metadata" muted playsinline></video>
                <div class="absolute top-1.5 right-1.5 text-white drop-shadow text-[10px]"><i class="fas fa-video"></i></div>`
-            : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${mediaUrl || fallbackImage}" alt="" loading="lazy">`
+            : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${thumbUrl || fallbackImage}" alt="" loading="lazy">`
         }
         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
             <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
