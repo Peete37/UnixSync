@@ -49,6 +49,13 @@
       src="https://js-de.sentry-cdn.com/4a29a22478b8b4f2ed3bb7062e132b8a.min.js"
       crossorigin="anonymous"
     ></script>
+    <!-- Bot protection on signup (Cloudflare Turnstile). See
+         SUPABASE_TURNSTILE_SETUP.md for the one-time setup. -->
+    <script
+      src="https://challenges.cloudflare.com/turnstile/v0/api.js"
+      async
+      defer
+    ></script>
     <link rel="manifest" href="manifest.json" />
     <link
       rel="stylesheet"
@@ -1049,7 +1056,7 @@
                           <div class="min-w-0">
                             <p class="text-white text-xs font-bold">Theme</p>
                             <p class="text-slate-500 text-[10px] mt-0.5">
-                              Dark, light, or follow your device setting
+                              Light and System are coming soon
                             </p>
                           </div>
                           <select
@@ -1057,8 +1064,10 @@
                             class="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-white text-[11px] font-bold uppercase tracking-wider focus:outline-none focus:border-amber-400 transition"
                           >
                             <option value="dark">Dark</option>
-                            <option value="light">Light</option>
-                            <option value="system">System</option>
+                            <option value="light" disabled>Light (soon)</option>
+                            <option value="system" disabled>
+                              System (soon)
+                            </option>
                           </select>
                         </label>
                       </div>
@@ -1851,6 +1860,22 @@
                 />
               </div>
             </div>
+
+            <!-- Bot protection (Cloudflare Turnstile) — see
+                 SUPABASE_TURNSTILE_SETUP.md for the one-time setup this
+                 needs (a free Cloudflare account + enabling Captcha
+                 protection in Supabase's Auth settings). Renders as an
+                 invisible/one-tap check for real people; the actual
+                 verification happens server-side inside Supabase Auth
+                 itself when signUp() is called with this token — nothing
+                 to check or trust on the client side here. -->
+            <div
+              class="cf-turnstile flex justify-center"
+              data-sitekey="0x4AAAAAAEE8AhH3rSu53f0p"
+              data-callback="window._onTurnstileVerified"
+              data-theme="dark"
+            ></div>
+
             <button
               type="submit"
               class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3.5 rounded-full text-sm transition active:scale-95 shadow-lg shadow-amber-400/20 mt-2"
