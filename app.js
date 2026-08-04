@@ -2859,7 +2859,7 @@ window.openDetail = async function (postId, fromBack = false) {
                         ${!isOwn && viewer ? `<button onclick="window.openRateSellerSheet('${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-[10px] text-amber-400 hover:text-amber-300 transition uppercase tracking-widest font-bold">Rate seller</button>` : ""}
                     </div>
                 </div>
-                <p class="text-slate-400 leading-relaxed font-light">${esc(d.description) || "No description provided."}</p>
+                <p class="text-slate-300 leading-relaxed font-light">${esc(d.description) || "No description provided."}</p>
                 ${detailActionsBlock}
                 <div id="comment-preview-${escAttr(d.id)}" class="space-y-2">
                     <p class="text-[10px] text-slate-600 animate-pulse">Loading comments...</p>
@@ -9024,10 +9024,26 @@ window.handlePostSubmission = async function () {
   const submitBtnLabel = document.getElementById("publishPostBtnLabel");
   const attachBtn = document.getElementById("attachMediaBtn");
 
-  if (!title) {
-    showToast("Please enter a title.");
+  // Fix: this used to check title first and return immediately if it
+  // was missing — meaning someone who'd left BOTH the title empty AND
+  // never attached any media only ever saw "add a title," with the
+  // missing-media problem hidden until they fixed the title and hit
+  // Publish a second time. Checking presence of everything required
+  // together first, before any of the "is what you typed valid" checks
+  // below, means one combined message covers everything actually
+  // missing in a single pass.
+  const missingRequired = [];
+  if (!title) missingRequired.push("a title");
+  if (!mediaFiles || mediaFiles.length === 0)
+    missingRequired.push("at least one photo or video");
+  if (missingRequired.length > 0) {
+    showToast(`Please add ${missingRequired.join(" and ")}.`);
     return;
   }
+
+  // From here on title and media are both confirmed present — these
+  // remaining checks are about the VALIDITY of what was entered, which
+  // is still meaningful to report one at a time.
   if (title.length > 100) {
     showToast("Title must be 100 characters or fewer.");
     return;
@@ -9044,11 +9060,6 @@ window.handlePostSubmission = async function () {
   }
   if (parsedPrice > 1000000) {
     showToast("Price seems too high — please double-check it.");
-    return;
-  }
-
-  if (!mediaFiles || mediaFiles.length === 0) {
-    showToast("Please attach at least one image or video.");
     return;
   }
 

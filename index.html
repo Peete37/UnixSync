@@ -34,7 +34,7 @@
       name="apple-mobile-web-app-status-bar-style"
       content="black-translucent"
     />
-    <meta name="apple-mobile-web-app-title" content="NikSyn" />
+    <meta name="apple-mobile-web-app-title" content="CampusMarket" />
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <!-- Error tracking (Sentry). Replace YOUR_LOADER_KEY below with the
          real one from your Sentry project settings -> Client Keys (DSN)
@@ -46,7 +46,7 @@
          person a toast ALSO gets reported here — nothing needs to be
          duplicated or called twice. -->
     <script
-      src="https://js-de.sentry-cdn.com/4a29a22478b8b4f2ed3bb7062e132b8a.min.js"
+      src="https://js.sentry-cdn.com/YOUR_LOADER_KEY.min.js"
       crossorigin="anonymous"
     ></script>
     <!-- Bot protection on signup (Cloudflare Turnstile). See
@@ -112,20 +112,25 @@
         multiple
       />
 
-      <!-- Camera capture (item #3 — like WhatsApp's camera option
-           alongside gallery). No `multiple` here since a camera capture
-           is inherently one shot at a time; `capture="environment"`
-           opens the device's back camera directly instead of the
-           gallery picker. Feeds into the exact same
-           openEditMediaModal() review flow as gallery-picked files (see
-           the matching change listener below), so nothing about
-           validation, compression, or the edit-before-upload screen
-           needs to know which input a file came from. -->
+      <!-- Camera capture (WhatsApp-style camera option alongside
+           gallery). No `multiple` — a capture is one shot at a time.
+
+           Fix: this was originally accept="image/*,video/*" combined
+           with capture="environment" — mixing both media types in one
+           capture input is exactly what makes browsers fall back to the
+           general file picker (gallery) instead of launching the camera
+           directly, since the OS can't tell which camera MODE (photo or
+           video) to open. Restricting to accept="image/*" — photos are
+           the overwhelming majority use case for a listing photo — makes
+           the camera launch reliably. Video recording still works fine
+           via Gallery on devices that support it inline; a dedicated
+           video-capture button can be added later if that's specifically
+           needed. -->
       <input
         type="file"
         id="cameraInput"
         class="hidden"
-        accept="image/*,video/*"
+        accept="image/*"
         capture="environment"
       />
 
@@ -279,7 +284,9 @@
                     "skill",
                     "deals",
                   ];
-                  const saved = localStorage.getItem("campus_market_feed_tab");
+                  const saved = sessionStorage.getItem(
+                    "campus_market_feed_tab",
+                  );
                   const activeTab = validTabs.includes(saved) ? saved : "all";
                   document
                     .querySelectorAll("#feed-tabs .feed-tab-btn")
@@ -291,7 +298,7 @@
                       btn.classList.toggle("border-transparent", !isActive);
                     });
                 } catch (_) {
-                  // localStorage can throw in some locked-down/private-browsing
+                  // sessionStorage can throw in some locked-down/private-browsing
                   // contexts — falling back to the default "All" highlight
                   // (already the else-branch above) is a fine degrade.
                 }
@@ -1895,7 +1902,7 @@
                  to check or trust on the client side here. -->
             <div
               class="cf-turnstile flex justify-center"
-              data-sitekey="0x4AAAAAAEE8AhH3rSu53f0p"
+              data-sitekey="YOUR_TURNSTILE_SITE_KEY"
               data-callback="window._onTurnstileVerified"
               data-theme="dark"
             ></div>
