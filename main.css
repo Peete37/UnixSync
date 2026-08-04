@@ -2605,3 +2605,30 @@ main {
   padding: 4px;
   flex-shrink: 0;
 }
+
+/* ─── CREATE LISTING / DETAIL READABILITY TWEAKS ───────────────────────────── */
+.post-composer-field::placeholder {
+  color: #94a3b8;
+  opacity: 0.88;
+}
+
+#publishPostBtn.is-disabled {
+  background: #1e293b !important;
+  color: #94a3b8 !important;
+  box-shadow: none !important;
+  cursor: not-allowed;
+}
+
+#publishPostBtn.is-disabled:hover {
+  background: #1e293b !important;
+}
+
+#postValidationHint.is-ready {
+  color: #86efac;
+}
+
+.listing-description {
+  color: #e2e8f0;
+  line-height: 1.7;
+  font-weight: 400;
+}
