@@ -34,7 +34,7 @@
       name="apple-mobile-web-app-status-bar-style"
       content="black-translucent"
     />
-    <meta name="apple-mobile-web-app-title" content="CampusMarket" />
+    <meta name="apple-mobile-web-app-title" content="NikSyn" />
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <!-- Error tracking (Sentry). Replace YOUR_LOADER_KEY below with the
          real one from your Sentry project settings -> Client Keys (DSN)
@@ -110,6 +110,23 @@
         class="hidden"
         accept="image/*,video/*"
         multiple
+      />
+
+      <!-- Camera capture (item #3 — like WhatsApp's camera option
+           alongside gallery). No `multiple` here since a camera capture
+           is inherently one shot at a time; `capture="environment"`
+           opens the device's back camera directly instead of the
+           gallery picker. Feeds into the exact same
+           openEditMediaModal() review flow as gallery-picked files (see
+           the matching change listener below), so nothing about
+           validation, compression, or the edit-before-upload screen
+           needs to know which input a file came from. -->
+      <input
+        type="file"
+        id="cameraInput"
+        class="hidden"
+        accept="image/*,video/*"
+        capture="environment"
       />
 
       <!-- Everything from here through just before the mobile bottom nav
@@ -1409,13 +1426,12 @@
                   >Price (GH₵)</label
                 >
                 <input
-                  type="number"
+                  type="text"
+                  inputmode="decimal"
                   id="postPrice"
                   name="postPrice"
                   placeholder="0.00"
-                  min="0"
-                  max="1000000"
-                  step="0.01"
+                  oninput="window._formatPriceInput(this)"
                   class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
                 />
               </div>
@@ -1456,11 +1472,10 @@
                     >Original price (optional)</label
                   >
                   <input
-                    type="number"
+                    type="text"
+                    inputmode="decimal"
                     id="postOriginalPrice"
-                    min="0"
-                    max="1000000"
-                    step="0.01"
+                    oninput="window._formatPriceInput(this)"
                     placeholder="e.g. higher than your listing price above"
                     class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
                   />
@@ -1499,15 +1514,24 @@
                 class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
                 >Media Showcase</span
               >
-              <button
-                id="attachMediaBtn"
-                onclick="document.getElementById('mediaInput').click()"
-                type="button"
-                class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-2"
-              >
-                <i class="fas fa-cloud-upload-alt text-amber-400"></i> Attach
-                Images / Videos
-              </button>
+              <div class="grid grid-cols-2 gap-2">
+                <button
+                  id="cameraCaptureBtn"
+                  onclick="document.getElementById('cameraInput').click()"
+                  type="button"
+                  class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-2"
+                >
+                  <i class="fas fa-camera text-amber-400"></i> Camera
+                </button>
+                <button
+                  id="attachMediaBtn"
+                  onclick="document.getElementById('mediaInput').click()"
+                  type="button"
+                  class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-2"
+                >
+                  <i class="fas fa-images text-amber-400"></i> Gallery
+                </button>
+              </div>
               <p
                 id="mediaFileCount"
                 class="text-[10px] text-slate-500 mt-1.5 text-center"
@@ -2024,6 +2048,24 @@
             }
           });
 
+          // Camera capture goes through the identical review flow —
+          // openEditMediaModal doesn't care which input a file came from.
+          const cameraInput = document.getElementById("cameraInput");
+          cameraInput?.addEventListener("change", function () {
+            if (
+              cameraInput.files &&
+              cameraInput.files.length > 0 &&
+              typeof window.openEditMediaModal === "function"
+            ) {
+              window.openEditMediaModal(cameraInput.files);
+            }
+            // Cameras (unlike the gallery picker) don't clear their own
+            // value between captures on every device — reset explicitly
+            // so taking a second photo later isn't silently ignored
+            // because the browser thinks the same file is still selected.
+            cameraInput.value = "";
+          });
+
           function refreshCartBadges() {
             const list = window._userCartList || [];
             const n = list.length;
@@ -2169,6 +2211,20 @@
         });
       }
     </script>
+    <script
+      type="module"
+      src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
+      integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ=="
+      data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}'
+      crossorigin="anonymous"
+    ></script>
+    <script
+      type="module"
+      src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
+      integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ=="
+      data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}'
+      crossorigin="anonymous"
+    ></script>
     <script
       type="module"
       src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
