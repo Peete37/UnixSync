@@ -214,7 +214,6 @@ const _validFeedTabs = [
   "skill",
   "deals",
 ];
-const FEED_TAB_STORAGE_KEY = "campus_market_feed_tab";
 // Fix: this was reading from localStorage, which survives even a full
 // app close/reopen — so whichever tab (e.g. Products) was open when the
 // person last left the app stayed "stuck" forever, always opening there
@@ -222,13 +221,8 @@ const FEED_TAB_STORAGE_KEY = "campus_market_feed_tab";
 // actively navigating around within one visit (switching tabs, opening a
 // post and coming back), but clears once the app/tab is actually closed
 // — the "opens on the wrong tab after being away for a while" symptom
-// only happens with localStorage, not sessionStorage. Clear the old
-// localStorage key too so first-paint tab highlighting cannot briefly read
-// a stale Products/Services value before app.js restores the true session tab.
-try {
-  localStorage.removeItem(FEED_TAB_STORAGE_KEY);
-} catch (_) {}
-const _savedFeedTab = sessionStorage.getItem(FEED_TAB_STORAGE_KEY);
+// only happens with localStorage, not sessionStorage.
+const _savedFeedTab = sessionStorage.getItem("campus_market_feed_tab");
 let currentFeedType = _validFeedTabs.includes(_savedFeedTab)
   ? _savedFeedTab
   : "all"; // tracks active tab: all | reels | following | product | skill | deals
@@ -2635,111 +2629,11 @@ window.togglePostModal = function () {
   if (willOpen) {
     pushUiState("post-modal", () => {
       document.getElementById("post-modal")?.classList.add("hidden");
-      if (typeof window.syncPostComposerState === "function")
-        window.syncPostComposerState();
     });
   } else {
     popUiState("post-modal");
   }
-
-  if (typeof window.syncPostComposerState === "function")
-    window.syncPostComposerState();
 };
-
-function getPendingPostMediaFiles() {
-  if (finalMediaFiles && finalMediaFiles.length > 0) return finalMediaFiles;
-  const rawInputFiles = document.getElementById("mediaInput")?.files;
-  return rawInputFiles ? Array.from(rawInputFiles) : [];
-}
-
-function getPostComposerState() {
-  const title = document.getElementById("postTitle")?.value.trim() || "";
-  const mediaFiles = getPendingPostMediaFiles();
-  const missingTitle = !title;
-  const missingMedia = mediaFiles.length === 0;
-  const isComplete = !missingTitle && !missingMedia;
-
-  let hintText = "Ready to publish.";
-  if (missingTitle && missingMedia)
-    hintText = "Add a title and at least one image or video.";
-  else if (missingTitle) hintText = "Add a title to publish.";
-  else if (missingMedia) hintText = "Attach at least one image or video.";
-
-  return {
-    title,
-    mediaCount: mediaFiles.length,
-    missingTitle,
-    missingMedia,
-    isComplete,
-    hintText,
-  };
-}
-
-function setPublishButtonVisualState(btn, isDisabled) {
-  if (!btn) return;
-  btn.classList.toggle("is-disabled", !!isDisabled);
-  btn.setAttribute("aria-disabled", isDisabled ? "true" : "false");
-}
-
-window.syncPostComposerState = function () {
-  const submitBtn = document.getElementById("publishPostBtn");
-  const submitBtnLabel = document.getElementById("publishPostBtnLabel");
-  const hintEl = document.getElementById("postValidationHint");
-  if (!submitBtn || !submitBtnLabel) return;
-
-  const state = getPostComposerState();
-  const shouldDisable = isSubmittingPost || !isOnline || !state.isComplete;
-
-  if (!isSubmittingPost) {
-    submitBtn.disabled = shouldDisable;
-    setPublishButtonVisualState(submitBtn, shouldDisable);
-    if (!isOnline) {
-      submitBtnLabel.textContent = "Waiting for connection...";
-    } else if (state.isComplete) {
-      submitBtnLabel.textContent = "Publish Instantly";
-    } else if (state.missingTitle && state.missingMedia) {
-      submitBtnLabel.textContent = "Add title + media";
-    } else if (state.missingTitle) {
-      submitBtnLabel.textContent = "Add a title";
-    } else {
-      submitBtnLabel.textContent = "Add media";
-    }
-  }
-
-  if (hintEl) {
-    hintEl.textContent = !isOnline
-      ? "You are offline — reconnect to publish."
-      : state.hintText;
-    hintEl.classList.toggle("is-ready", state.isComplete && isOnline);
-  }
-};
-
-function initPostComposerStateSync() {
-  const ids = [
-    "postTitle",
-    "postDescription",
-    "postPrice",
-    "postType",
-    "postFlashSaleToggle",
-    "postOriginalPrice",
-    "postSaleEndsAt",
-    "mediaInput",
-    "cameraInput",
-  ];
-  ids.forEach((id) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener("input", window.syncPostComposerState);
-    el.addEventListener("change", window.syncPostComposerState);
-  });
-  window.syncPostComposerState();
-}
-
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", initPostComposerStateSync);
-} else {
-  initPostComposerStateSync();
-}
 
 // ─── 9. DETAIL MODAL ──────────────────────────────────────────────────────────
 window.openDetail = async function (postId, fromBack = false) {
@@ -2870,7 +2764,7 @@ window.openDetail = async function (postId, fromBack = false) {
     );
     const cartText = isAddedToCart ? "✓ In Cart" : "Add to Cart";
     const cartColorClass = isAddedToCart
-      ? "bg-amber-400 text-black border border-amber-300 shadow-lg shadow-amber-400/15"
+      ? "bg-slate-800 border border-slate-700 text-slate-400"
       : "bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
 
     const ctaLabel = d.type === "skill" ? "Contact" : "Contact Seller";
@@ -2965,7 +2859,7 @@ window.openDetail = async function (postId, fromBack = false) {
                         ${!isOwn && viewer ? `<button onclick="window.openRateSellerSheet('${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-[10px] text-amber-400 hover:text-amber-300 transition uppercase tracking-widest font-bold">Rate seller</button>` : ""}
                     </div>
                 </div>
-                <p class="listing-description">${esc(d.description) || "No description provided."}</p>
+                <p class="text-slate-400 leading-relaxed font-light">${esc(d.description) || "No description provided."}</p>
                 ${detailActionsBlock}
                 <div id="comment-preview-${escAttr(d.id)}" class="space-y-2">
                     <p class="text-[10px] text-slate-600 animate-pulse">Loading comments...</p>
@@ -4093,7 +3987,6 @@ window._removeStagedMedia = function (i) {
     const countEl = document.getElementById("mediaFileCount");
     if (countEl) countEl.textContent = "";
   }
-  window.syncPostComposerState?.();
 };
 
 window.closeEditMediaModal = function (fromPop = false) {
@@ -4168,7 +4061,6 @@ window.confirmEditedMedia = async function () {
     countEl.textContent = `${processed.length} file${processed.length > 1 ? "s" : ""} ready — tap Publish to upload`;
   }
 
-  window.syncPostComposerState?.();
   window.closeEditMediaModal();
   showToast("Media ready ✓");
 };
@@ -6525,7 +6417,6 @@ function renderFeedMasonryCard(id, d, options = {}) {
               !isSold
                 ? `
             <button
-                id="masonry-cart-icon-${escAttr(id)}"
                 onclick="event.stopPropagation(); window.toggleCartItem('${escAttr(id)}')"
                 class="absolute top-2.5 right-2.5 w-7 h-7 flex items-center justify-center bg-black/50 rounded-full active:scale-90 transition">
                 <i class="${bookmarkClass} text-xs"></i>
@@ -6606,7 +6497,6 @@ function renderProductGridCard(id, d) {
             ${isSolid ? `<div class="absolute inset-0 flex items-center justify-center"><span class="bg-black/80 text-white text-[10px] font-black uppercase tracking-[0.2em] px-3 py-1 rounded-full border border-white/20">Sold</span></div>` : ""}
             ${!isSolid && saleActive ? `<div class="sale-countdown-badge absolute top-2 left-2 bg-rose-500/90 text-white text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</div>` : ""}
             <button
-                id="grid-cart-icon-${escAttr(id)}"
                 onclick="event.stopPropagation(); window.toggleCartItem('${escAttr(id)}')"
                 class="absolute top-2 right-2 w-7 h-7 flex items-center justify-center bg-black/50 rounded-full active:scale-90 transition">
                 <i class="${bookmarkClass} text-xs"></i>
@@ -7306,48 +7196,6 @@ function renderReelsFeed() {
 }
 
 // ─── 12b. CHART / CART LIST LOGIC (NOW BACKEND POWERED!) ──────────────────────
-function syncCartVisualState(postId, isSaved) {
-  const savedClass = isSaved
-    ? "fas fa-bookmark text-amber-400"
-    : "far fa-bookmark text-slate-300";
-  const cardSavedClass = isSaved
-    ? "fas fa-bookmark text-amber-400 text-xs"
-    : "far fa-bookmark text-white/80 text-xs";
-  const reelSavedClass = isSaved
-    ? "fas fa-bookmark text-amber-400 text-2xl"
-    : "far fa-bookmark text-white text-2xl";
-
-  const feedIcon = document.querySelector(
-    `#feed-cart-icon-${CSS.escape(String(postId))} i`,
-  );
-  if (feedIcon) feedIcon.className = savedClass;
-
-  const masonryIcon = document.querySelector(
-    `#masonry-cart-icon-${CSS.escape(String(postId))} i`,
-  );
-  if (masonryIcon) masonryIcon.className = cardSavedClass;
-
-  const gridIcon = document.querySelector(
-    `#grid-cart-icon-${CSS.escape(String(postId))} i`,
-  );
-  if (gridIcon) gridIcon.className = cardSavedClass;
-
-  const reelIcon = document.querySelector(
-    `#reel-cart-icon-${CSS.escape(String(postId))} i`,
-  );
-  if (reelIcon) reelIcon.className = reelSavedClass;
-
-  const detailBtn = document.getElementById(`detail-cart-btn-${postId}`);
-  if (detailBtn) {
-    const labelText = detailBtn.querySelector(".cart-btn-label");
-    if (labelText)
-      labelText.textContent = isSaved ? "✓ In Cart" : "Add to Cart";
-    detailBtn.className = isSaved
-      ? "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-amber-400 text-black border border-amber-300 shadow-lg shadow-amber-400/15"
-      : "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
-  }
-}
-
 window.toggleCartItem = async function (postId) {
   if (!currentUserData) {
     showToast("Please sign in to save items.");
@@ -7453,7 +7301,47 @@ window.toggleCartItem = async function (postId) {
   localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
 
   // Instantly update icons/buttons on current cards
-  syncCartVisualState(postId, !isRemoving);
+  const feedIcon = document
+    .getElementById(`feed-cart-icon-${postId}`)
+    ?.querySelector("i");
+  if (feedIcon) {
+    feedIcon.className = !isRemoving
+      ? "fas fa-bookmark text-amber-400"
+      : "far fa-bookmark text-slate-300";
+  }
+
+  const gridBtn = document
+    .getElementById(`grid-card-${postId}`)
+    ?.querySelector("button i");
+  if (gridBtn) {
+    gridBtn.className = !isRemoving
+      ? "fas fa-bookmark text-amber-400 text-xs"
+      : "far fa-bookmark text-white/80 text-xs";
+  }
+
+  // Fix: the reel card's bookmark button had no id at all, so tapping
+  // it on the Reels tab correctly saved the item (toast showed, data
+  // persisted) but the icon on screen never visually flipped between
+  // outline/filled — it silently "worked" with zero visible feedback,
+  // which read as the feature not doing anything.
+  const reelIcon = document
+    .getElementById(`reel-cart-icon-${postId}`)
+    ?.querySelector("i");
+  if (reelIcon) {
+    reelIcon.className = !isRemoving
+      ? "fas fa-bookmark text-amber-400 text-2xl"
+      : "far fa-bookmark text-white text-2xl";
+  }
+
+  const detailBtn = document.getElementById(`detail-cart-btn-${postId}`);
+  if (detailBtn) {
+    const labelText = detailBtn.querySelector(".cart-btn-label");
+    if (labelText)
+      labelText.textContent = !isRemoving ? "✓ In Cart" : "Add to Cart";
+    detailBtn.className = !isRemoving
+      ? "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-800 border border-slate-700 text-slate-400"
+      : "w-full font-black py-4 rounded-2xl active:scale-95 transition-all uppercase tracking-wider text-xs bg-slate-900 border border-slate-700 text-white hover:border-amber-400";
+  }
 
   if (
     !document.getElementById("cart-container")?.classList.contains("hidden")
@@ -7513,7 +7401,23 @@ window.toggleCartItem = async function (postId) {
     localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
 
     const revertedIsSaved = isRemoving; // if we were removing, it's back to saved; if we were adding, it's back to unsaved
-    syncCartVisualState(postId, revertedIsSaved);
+    if (feedIcon)
+      feedIcon.className = revertedIsSaved
+        ? "fas fa-bookmark text-amber-400"
+        : "far fa-bookmark text-slate-300";
+    if (gridBtn)
+      gridBtn.className = revertedIsSaved
+        ? "fas fa-bookmark text-amber-400 text-xs"
+        : "far fa-bookmark text-white/80 text-xs";
+    if (reelIcon)
+      reelIcon.className = revertedIsSaved
+        ? "fas fa-bookmark text-amber-400 text-2xl"
+        : "far fa-bookmark text-white text-2xl";
+    if (detailBtn) {
+      const labelText = detailBtn.querySelector(".cart-btn-label");
+      if (labelText)
+        labelText.textContent = revertedIsSaved ? "✓ In Cart" : "Add to Cart";
+    }
     if (
       !document.getElementById("cart-container")?.classList.contains("hidden")
     ) {
@@ -8615,7 +8519,7 @@ window.filterFeed = function (type, clickedBtn = null) {
   // Remember the active tab so a refresh lands back where the person
   // actually was (Reels, Products, Services, Following...) instead of
   // always resetting to "All".
-  sessionStorage.setItem(FEED_TAB_STORAGE_KEY, type);
+  sessionStorage.setItem("campus_market_feed_tab", type);
 
   // Leaving Reels: stop any playing video audio immediately.
   if (previousType === "reels" && type !== "reels") {
@@ -9120,14 +9024,8 @@ window.handlePostSubmission = async function () {
   const submitBtnLabel = document.getElementById("publishPostBtnLabel");
   const attachBtn = document.getElementById("attachMediaBtn");
 
-  if (!title && (!mediaFiles || mediaFiles.length === 0)) {
-    showToast("Add a title and at least one image or video.");
-    window.syncPostComposerState?.();
-    return;
-  }
   if (!title) {
     showToast("Please enter a title.");
-    window.syncPostComposerState?.();
     return;
   }
   if (title.length > 100) {
@@ -9151,7 +9049,6 @@ window.handlePostSubmission = async function () {
 
   if (!mediaFiles || mediaFiles.length === 0) {
     showToast("Please attach at least one image or video.");
-    window.syncPostComposerState?.();
     return;
   }
 
@@ -9345,7 +9242,6 @@ window.handlePostSubmission = async function () {
     document.getElementById("postDescription").value = "";
     document.getElementById("postPrice").value = "";
     document.getElementById("mediaInput").value = "";
-    document.getElementById("cameraInput").value = "";
     document.getElementById("mediaFileCount").textContent = "";
     const flashToggleEl = document.getElementById("postFlashSaleToggle");
     if (flashToggleEl) flashToggleEl.checked = false;
@@ -9365,7 +9261,6 @@ window.handlePostSubmission = async function () {
     stagedMediaFiles = [];
     finalMediaFiles = [];
 
-    window.syncPostComposerState?.();
     window.togglePostModal();
     showToast(
       `Post published with ${publicUrls.length} file${publicUrls.length > 1 ? "s" : ""}! 🎉`,
@@ -11748,18 +11643,22 @@ window.addEventListener("offline", () => {
     submitBtn.dataset.originalText = submitBtnLabel
       ? submitBtnLabel.textContent
       : "";
+    if (submitBtnLabel)
+      submitBtnLabel.textContent = "Waiting for connection...";
+    submitBtn.disabled = true;
   }
-  window.syncPostComposerState?.();
 });
 
 window.addEventListener("online", () => {
   isOnline = true;
   showToast("Back online");
   const submitBtn = document.getElementById("publishPostBtn");
+  const submitBtnLabel = document.getElementById("publishPostBtnLabel");
   if (submitBtn && submitBtn.dataset.originalText && !isSubmittingPost) {
-    delete submitBtn.dataset.originalText;
+    if (submitBtnLabel)
+      submitBtnLabel.textContent = submitBtn.dataset.originalText;
+    submitBtn.disabled = false;
   }
-  window.syncPostComposerState?.();
   // Fix: this previously called subscribeFeed() with no filter at all,
   // which silently dropped campus scoping (and any type filter) the
   // moment connectivity returned — someone browsing "My Campus" would

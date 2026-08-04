@@ -125,7 +125,7 @@
         type="file"
         id="cameraInput"
         class="hidden"
-        accept="image/*"
+        accept="image/*,video/*"
         capture="environment"
       />
 
@@ -279,9 +279,7 @@
                     "skill",
                     "deals",
                   ];
-                  const saved = sessionStorage.getItem(
-                    "campus_market_feed_tab",
-                  );
+                  const saved = localStorage.getItem("campus_market_feed_tab");
                   const activeTab = validTabs.includes(saved) ? saved : "all";
                   document
                     .querySelectorAll("#feed-tabs .feed-tab-btn")
@@ -1402,7 +1400,7 @@
                 name="postTitle"
                 placeholder="e.g., Mini Fridge or Graphic Design"
                 maxlength="100"
-                class="post-composer-field w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs font-medium"
+                class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs font-medium"
               />
             </div>
             <div class="grid grid-cols-2 gap-2">
@@ -1415,7 +1413,7 @@
                 <select
                   id="postType"
                   name="postType"
-                  class="post-composer-field w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
+                  class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
                 >
                   <option value="product">Product</option>
                   <option value="skill">Service / Gig</option>
@@ -1434,7 +1432,7 @@
                   name="postPrice"
                   placeholder="0.00"
                   oninput="window._formatPriceInput(this)"
-                  class="post-composer-field w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
+                  class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
                 />
               </div>
             </div>
@@ -1479,7 +1477,7 @@
                     id="postOriginalPrice"
                     oninput="window._formatPriceInput(this)"
                     placeholder="e.g. higher than your listing price above"
-                    class="post-composer-field w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
+                    class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
                   />
                 </div>
                 <div>
@@ -1491,7 +1489,7 @@
                   <input
                     type="datetime-local"
                     id="postSaleEndsAt"
-                    class="post-composer-field w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
+                    class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
                   />
                 </div>
               </div>
@@ -1508,7 +1506,7 @@
                 rows="2"
                 maxlength="2000"
                 placeholder="Describe your item or skill..."
-                class="post-composer-field w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs resize-none"
+                class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs resize-none"
               ></textarea>
             </div>
             <div>
@@ -1538,12 +1536,6 @@
                 id="mediaFileCount"
                 class="text-[10px] text-slate-500 mt-1.5 text-center"
               ></p>
-              <p
-                id="postValidationHint"
-                class="text-[10px] text-amber-300/90 mt-1 text-center min-h-[1.1rem]"
-              >
-                Add a title and at least one image or video.
-              </p>
             </div>
             <button
               id="publishPostBtn"
@@ -2219,13 +2211,6 @@
         });
       }
     </script>
-    <script
-      type="module"
-      src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
-      integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ=="
-      data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}'
-      crossorigin="anonymous"
-    ></script>
     <script
       type="module"
       src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
