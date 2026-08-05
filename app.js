@@ -817,7 +817,6 @@ if (_savedThemeMode === "system" && window.matchMedia) {
 }
 
 let userCartList = safeStorageJsonParse("campus_market_cart", []);
-
 // Fix: the header bookmark icon's badge (header-cart-badge) had zero code
 // updating it anywhere — toggleCartItem() carefully updated four separate
 // bookmark ICONS (feed card, grid, reel, detail view) but never this
@@ -1786,17 +1785,15 @@ window._submitSellerRating = async function (sellerId) {
   // per rater per seller" intent the table's own design already
   // reflects (seller_ratings_update_own policy exists specifically to
   // support this).
-  const { error } = await supabase
-    .from("seller_ratings")
-    .upsert(
-      {
-        seller_id: sellerId,
-        rater_id: currentUserData.id,
-        stars,
-        comment: comment || null,
-      },
-      { onConflict: "seller_id,rater_id" },
-    );
+  const { error } = await supabase.from("seller_ratings").upsert(
+    {
+      seller_id: sellerId,
+      rater_id: currentUserData.id,
+      stars,
+      comment: comment || null,
+    },
+    { onConflict: "seller_id,rater_id" },
+  );
 
   if (error) {
     console.error("Rating submit error:", error);
@@ -7317,7 +7314,6 @@ window.toggleCartItem = async function (postId) {
   }
 
   localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
-  syncHeaderCartBadge();
 
   // Instantly update icons/buttons on current cards
   const feedIcon = document
