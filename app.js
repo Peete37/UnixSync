@@ -818,6 +818,24 @@ if (_savedThemeMode === "system" && window.matchMedia) {
 
 let userCartList = safeStorageJsonParse("campus_market_cart", []);
 
+// Fix: the header bookmark icon's badge (header-cart-badge) had zero code
+// updating it anywhere — toggleCartItem() carefully updated four separate
+// bookmark ICONS (feed card, grid, reel, detail view) but never this
+// badge, so it stayed permanently stuck at its static "0 hidden" default
+// no matter how many items were actually saved. Synced once here at
+// boot (from whatever's already in userCartList), and called again
+// inside toggleCartItem() below so it updates live on every save/unsave
+// instead of only reflecting reality after a page reload happened to
+// re-run this same boot-time line.
+function syncHeaderCartBadge() {
+  const badge = document.getElementById("header-cart-badge");
+  if (!badge) return;
+  const count = userCartList.length;
+  badge.textContent = count > 9 ? "9+" : String(count);
+  badge.classList.toggle("hidden", count === 0);
+}
+syncHeaderCartBadge();
+
 Object.defineProperty(window, "_currentUser", { get: () => currentUserData });
 Object.defineProperty(window, "_userCartList", { get: () => userCartList });
 // Debug helper: likedPostIds is a module-scoped const, so it's private
@@ -7299,6 +7317,7 @@ window.toggleCartItem = async function (postId) {
   }
 
   localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
+  syncHeaderCartBadge();
 
   // Instantly update icons/buttons on current cards
   const feedIcon = document
