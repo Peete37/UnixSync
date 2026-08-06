@@ -2605,3 +2605,46 @@ main {
   padding: 4px;
   flex-shrink: 0;
 }
+
+
+/* ─── CREATE LISTING / DETAIL READABILITY TWEAKS ───────────────────────────── */
+.post-composer-field::placeholder {
+  color: #94a3b8;
+  opacity: 0.88;
+}
+
+#publishPostBtn.is-disabled {
+  background: #1e293b !important;
+  color: #94a3b8 !important;
+  box-shadow: none !important;
+  cursor: not-allowed;
+}
+
+#publishPostBtn.is-disabled:hover {
+  background: #1e293b !important;
+}
+
+#postValidationHint.is-ready {
+  color: #86efac;
+}
+
+.listing-description {
+  color: #e2e8f0;
+  line-height: 1.7;
+  font-weight: 400;
+}
+
+/* ─── LIKE BUTTON POP ANIMATION ───────────────────────────────────────────── */
+/* Fired by likePost() the moment a heart goes from unliked -> liked, so
+   the tap has real, visible feedback beyond just the color swap. */
+@keyframes heartPop {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(1.4); }
+  65%  { transform: scale(0.9); }
+  100% { transform: scale(1); }
+}
+
+.like-pop-anim {
+  display: inline-block;
+  animation: heartPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}

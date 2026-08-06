@@ -85,7 +85,9 @@ function isCdnShellAsset(url) {
     url.hostname === "cdn.jsdelivr.net" ||
     url.hostname === "cdnjs.cloudflare.com" ||
     url.hostname === "fonts.googleapis.com" ||
-    url.hostname === "fonts.gstatic.com"
+    url.hostname === "fonts.gstatic.com" ||
+    url.hostname === "challenges.cloudflare.com" ||
+    url.hostname === "js.sentry-cdn.com"
   );
 }
 
