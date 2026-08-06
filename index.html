@@ -17,7 +17,7 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
     />
     <title>Unix-Sync</title>
-    <!-- CampusMarket is intentionally always-dark — it never offered a
+    <!-- Unix-sync is intentionally always-dark — it never offered a
          light theme. Without this, the browser doesn't know that and
          assumes the page can adapt: Android's WebView/Chrome "Force Dark"
          feature (and Safari's own light/dark form-control + scrollbar
@@ -34,7 +34,7 @@
       name="apple-mobile-web-app-status-bar-style"
       content="black-translucent"
     />
-    <meta name="apple-mobile-web-app-title" content="CampusMarket" />
+    <meta name="apple-mobile-web-app-title" content="Unix-Sync" />
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <!-- Error tracking (Sentry). Replace YOUR_LOADER_KEY below with the
          real one from your Sentry project settings -> Client Keys (DSN)
@@ -46,7 +46,7 @@
          person a toast ALSO gets reported here — nothing needs to be
          duplicated or called twice. -->
     <script
-      src="https://js-de.sentry-cdn.com/4a29a22478b8b4f2ed3bb7062e132b8a.min.js"
+      src="https://js.sentry-cdn.com/4a29a22478b8b4f2ed3bb7062e132b8a.min.js"
       crossorigin="anonymous"
     ></script>
     <!-- Bot protection on signup (Cloudflare Turnstile). See
@@ -153,8 +153,8 @@
        mirrors those same updates onto this nav's elements. -->
       <nav class="sidebar-nav" aria-label="Primary">
         <div class="sidebar-nav-brand">
-          <div class="sidebar-nav-logo">CM</div>
-          <span class="sidebar-nav-wordmark">CampusMarket</span>
+          <div class="sidebar-nav-logo">US</div>
+          <span class="sidebar-nav-wordmark">Unix-Sync</span>
         </div>
         <button
           id="nav-btn-feed-desktop"
@@ -633,7 +633,7 @@
                 <button
                   id="profile-tab-posts"
                   onclick="window.switchProfileTab('posts', this)"
-                  class="profile-subtab-btn is-active flex-1 py-3 text-center text-amber-400 font-bold border-b-2 border-amber-400 uppercase tracking-wider text-xs focus:outline-none"
+                  class="profile-subtab-btn is-active flex-1 py-3 text-center text-slate-500 font-bold border-b-2 border-transparent uppercase tracking-wider text-xs focus:outline-none hover:text-slate-300"
                   type="button"
                 >
                   My Gigs & Posts
