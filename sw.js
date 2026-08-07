@@ -30,7 +30,7 @@
 //     never meant to be intercepted and just generate noisy console
 //     errors if handled.
 
-const SHELL_CACHE = "campusmarket-shell-v3";
+const SHELL_CACHE = "campusmarket-shell-v4";
 
 // Same-origin files that make up the app shell. Add to this list if new
 // static assets are introduced (e.g. a manifest icon set). Keep this in
