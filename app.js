@@ -1786,15 +1786,17 @@ window._submitSellerRating = async function (sellerId) {
   // per rater per seller" intent the table's own design already
   // reflects (seller_ratings_update_own policy exists specifically to
   // support this).
-  const { error } = await supabase.from("seller_ratings").upsert(
-    {
-      seller_id: sellerId,
-      rater_id: currentUserData.id,
-      stars,
-      comment: comment || null,
-    },
-    { onConflict: "seller_id,rater_id" },
-  );
+  const { error } = await supabase
+    .from("seller_ratings")
+    .upsert(
+      {
+        seller_id: sellerId,
+        rater_id: currentUserData.id,
+        stars,
+        comment: comment || null,
+      },
+      { onConflict: "seller_id,rater_id" },
+    );
 
   if (error) {
     console.error("Rating submit error:", error);
@@ -5097,6 +5099,18 @@ window.toggleComments = async function (postId) {
 
 // Shared close routine for both inline and bottom-sheet comment views.
 window._closeCommentSheet = function (postId, fromPop = false) {
+  // TEMP DEBUG — remove once the "closes right after Send" bug is
+  // found. Prints exactly what called this, since static reading of
+  // the code hasn't turned up the culprit and the bug reproduces
+  // deterministically on desktop with a mouse click (not a mobile/
+  // keyboard timing issue).
+  console.trace(
+    "[DEBUG] _closeCommentSheet called for",
+    postId,
+    "fromPop=",
+    fromPop,
+  );
+
   const commentSection = document.getElementById(`comments-${postId}`);
   const backdrop = document.getElementById("comments-global-backdrop");
   if (!commentSection) return;
@@ -5262,6 +5276,17 @@ document.addEventListener("DOMContentLoaded", () => {
     backdrop.id = "comments-global-backdrop";
     backdrop.className = "comments-backdrop";
     backdrop.addEventListener("click", () => {
+      // Fix: on many mobile browsers, tapping Send collapses the
+      // on-screen keyboard immediately after, which reflows the
+      // page — if that reflow lands between touchstart and
+      // touchend, the tap can register on whatever is now
+      // underneath the finger instead of the button that was
+      // actually there, which was this backdrop. That closed the
+      // sheet the instant someone sent a comment. Ignoring
+      // backdrop clicks for a brief window right after a send
+      // absorbs that mistimed tap without weakening the backdrop
+      // as a real, intentional way to dismiss the sheet otherwise.
+      if (Date.now() - lastCommentPostedAt < 500) return;
       const openSheet = document.querySelector(".reel-comments.comments-open");
       if (openSheet) {
         const postId = openSheet.id.replace("comments-", "");
