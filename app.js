@@ -4658,6 +4658,8 @@ let lastCommentPostedAt = 0;
 const COMMENT_COOLDOWN_MS = 2000;
 
 window.postComment = async function (postId, inputEl, parentCommentId = null) {
+  // TEMP DEBUG — remove alongside the trace in _closeCommentSheet.
+  console.log("[DEBUG] postComment START for", postId, "at", Date.now());
   const key = idKey(postId);
   const text = inputEl.value.trim();
   if (!text || !currentUserData) return;
@@ -5223,6 +5225,20 @@ window.toggleComments = async function (postId, triggerEl = null) {
 
 // Shared close routine for both inline and bottom-sheet comment views.
 window._closeCommentSheet = function (postId, fromPop = false) {
+  // TEMP DEBUG — remove once the "closes right after Send" bug is
+  // found. Shows the exact call stack for every single closure of a
+  // comment sheet, so we can see definitively which of the several
+  // legitimate call sites (backdrop click, X button, popstate,
+  // leaving the feed view, the auto-close-when-scrolled-past
+  // observer, or the newer duplicate-section-aware helpers) is
+  // actually firing right after a comment is sent.
+  console.trace(
+    "[DEBUG] _closeCommentSheet called for",
+    postId,
+    "fromPop=",
+    fromPop,
+  );
+
   const key = idKey(postId);
   const commentSection = getPreferredCommentSection(key);
   const backdrop = document.getElementById("comments-global-backdrop");
