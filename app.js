@@ -5140,10 +5140,14 @@ window.toggleComments = async function (postId, triggerEl = null) {
       mutations.forEach((m) => {
         if (m.type === "attributes") {
           console.trace(
-            "[DEBUG-MUTATION] class changed on sheet for",
+            "[DEBUG-MUTATION]",
+            m.attributeName,
+            "changed on sheet for",
             key,
-            "-> now:",
+            "-> class:",
             commentSection.className,
+            "style:",
+            commentSection.getAttribute("style"),
             "at",
             Date.now(),
           );
@@ -5164,12 +5168,16 @@ window.toggleComments = async function (postId, triggerEl = null) {
     });
     _debugObserver.observe(commentSection, {
       attributes: true,
-      attributeFilter: ["class"],
+      attributeFilter: ["class", "style"],
     });
     if (commentSection.parentElement) {
       _debugObserver.observe(commentSection.parentElement, { childList: true });
     }
-    setTimeout(() => _debugObserver.disconnect(), 30000);
+    // No auto-disconnect this time — the 30s window expired before
+    // the close happened on the last attempt. Runs until manually
+    // stopped via window._stopDebugObserver() in the console, or
+    // page reload.
+    window._stopDebugObserver = () => _debugObserver.disconnect();
   } else {
     commentSection.classList.remove("hidden");
     pushUiState(`comments-${key}`, () => window._closeCommentSheet(key, true));
