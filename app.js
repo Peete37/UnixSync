@@ -5102,6 +5102,17 @@ window.toggleComments = async function (postId, triggerEl = null) {
     : !commentSection.classList.contains("hidden");
 
   if (isOpen) {
+    // TEMP DEBUG — remove once found. toggleComments() itself
+    // toggles closed if called while already open — this proves
+    // whether something is calling toggleComments a second time on
+    // an already-open sheet (which would close it) versus
+    // something calling _closeCommentSheet directly.
+    console.trace(
+      "[DEBUG] toggleComments found isOpen=true, closing",
+      postId,
+      "triggerEl=",
+      triggerEl,
+    );
     window._closeCommentSheet(postId, true);
     return;
   }
@@ -5235,6 +5246,17 @@ window.toggleComments = async function (postId, triggerEl = null) {
 
 // Shared close routine for both inline and bottom-sheet comment views.
 window._closeCommentSheet = function (postId, fromPop = false) {
+  // TEMP DEBUG — remove once found. Catches every closure regardless
+  // of path (direct call, toggle-while-open, backdrop, X button,
+  // popstate, or leaving the feed view).
+  console.trace(
+    "[DEBUG] _closeCommentSheet called for",
+    postId,
+    "fromPop=",
+    fromPop,
+    "at",
+    Date.now(),
+  );
   const key = idKey(postId);
   const commentSection = getPreferredCommentSection(key);
   const backdrop = document.getElementById("comments-global-backdrop");
@@ -8320,6 +8342,16 @@ async function loadNextFollowingPage() {
 }
 
 function renderFeedFromCache() {
+  // TEMP DEBUG — remove once found. Shows every time a realtime-
+  // triggered (or any other) full feed rebuild fires, and how long
+  // it's been since the last one — helps confirm/rule out a rebuild
+  // racing with a comment sheet that was just opened.
+  console.log(
+    "[DEBUG] renderFeedFromCache called, currentFeedType=",
+    currentFeedType,
+    "at",
+    Date.now(),
+  );
   const feed = document.getElementById("posts-feed");
   if (!feed) return;
 
