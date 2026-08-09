@@ -5129,6 +5129,47 @@ window.toggleComments = async function (postId, triggerEl = null) {
     requestAnimationFrame(() => commentSection.classList.add("comments-open"));
     backdrop?.classList.add("backdrop-open");
     pushUiState(`comments-${key}`, () => window._closeCommentSheet(key, true));
+
+    // TEMP DEBUG — remove once found. Watches this exact sheet element
+    // for ANY class change or removal from the DOM, regardless of
+    // which function causes it — catches paths the other traces
+    // (toggleComments/_closeCommentSheet/renderFeedFromCache) aren't
+    // covering, since evidence shows the sheet disappears without any
+    // of those three ever firing.
+    const _debugObserver = new MutationObserver((mutations) => {
+      mutations.forEach((m) => {
+        if (m.type === "attributes") {
+          console.trace(
+            "[DEBUG-MUTATION] class changed on sheet for",
+            key,
+            "-> now:",
+            commentSection.className,
+            "at",
+            Date.now(),
+          );
+        }
+        if (m.type === "childList") {
+          m.removedNodes.forEach((n) => {
+            if (n === commentSection) {
+              console.trace(
+                "[DEBUG-MUTATION] sheet REMOVED from DOM for",
+                key,
+                "at",
+                Date.now(),
+              );
+            }
+          });
+        }
+      });
+    });
+    _debugObserver.observe(commentSection, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    if (commentSection.parentElement) {
+      _debugObserver.observe(commentSection.parentElement, { childList: true });
+    }
+    setTimeout(() => _debugObserver.disconnect(), 30000);
   } else {
     commentSection.classList.remove("hidden");
     pushUiState(`comments-${key}`, () => window._closeCommentSheet(key, true));
