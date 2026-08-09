@@ -7356,34 +7356,33 @@ function renderReelsFeed() {
   feed.classList.remove("grid-mode");
   feed.classList.add("reels-mode");
 
-  // Fix: remember which reel comment sheet(s) were actively open
-  // before tearing everything down below, so they can be restored
-  // afterward instead of just being lost. This function runs on every
-  // tab switch back to Reels, every pagination load, AND every
-  // realtime posts refresh — including the refresh triggered by the
-  // very comment/like the person just posted (via the comments_count/
-  // likes_count trigger on posts). Without this, commenting on a reel
-  // would silently kick you out of the sheet moments after you opened
-  // it, with no way back in short of a refresh or tab switch.
-  const idsToReopen = [...openCommentIds];
+  // Fix: this used to always tear down every relocated comment sheet
+  // — including whichever one the person currently has open — and
+  // rebuild it from scratch via toggleComments() afterward. That
+  // correctly restored it, but visibly flashed closed-then-open on
+  // every realtime refresh, including the refresh triggered by the
+  // very comment someone just posted (via the comments_count trigger
+  // on posts). The currently-open sheet's content and realtime
+  // subscription are still perfectly valid at this point — it never
+  // actually needed to be destroyed at all. It's now left completely
+  // untouched (not removed, not re-subscribed, not toggled), and only
+  // OTHER, already-closed/stale relocated sheets get cleaned up.
+  const openSheetEl = document.querySelector(
+    "body > .reel-comments.comments-open",
+  );
+  const openKey = openSheetEl
+    ? idKey(openSheetEl.id.replace("comments-", ""))
+    : null;
 
-  // Comment sheets get relocated to document.body when opened (see
-  // toggleComments) to escape a mobile WebKit clipping bug. Before
-  // regenerating the reel cards below, remove any such relocated
-  // sheets from body — otherwise the fresh markup would create new
-  // elements with the same #comments-{id}, leaving stale duplicates
-  // behind with the same ID. Also tear down the realtime comments
-  // channel here — this function runs on every tab switch back to
-  // Reels, every refresh, and every pagination load, so leaving the
-  // channel running against a node that's about to be deleted was the
-  // most frequently-hit path behind comments looking frozen/stuck on
-  // stale content: the subscription kept firing in the background,
-  // updating a DOM node nobody could see or that no longer existed.
-  document
-    .querySelectorAll("body > .reel-comments")
-    .forEach((el) => el.remove());
+  document.querySelectorAll("body > .reel-comments").forEach((el) => {
+    if (el !== openSheetEl) el.remove();
+  });
   openCommentIds.clear();
-  if (currentCommentsChan) {
+  if (openKey) {
+    openCommentIds.add(openKey);
+  } else if (currentCommentsChan) {
+    // Nothing is open anymore, so the realtime channel (which was
+    // bound to whatever was previously open) is genuinely stale now.
     supabase.removeChannel(currentCommentsChan);
     currentCommentsChan = null;
   }
@@ -7420,18 +7419,10 @@ function renderReelsFeed() {
     .join("");
   setupReelsIntersectionObserver();
 
-  // Restore whatever comment sheet(s) were open before this rebuild,
-  // as long as the post they belong to is still part of the reel list.
-  // toggleComments() itself handles re-adding to openCommentIds,
-  // re-subscribing the realtime channel, and re-fetching the current
-  // comments, so calling it against the freshly-rendered (hidden)
-  // sheet is enough to fully restore it.
-  const reelIdKeys = new Set(reels.map(({ id }) => idKey(id)));
-  idsToReopen.forEach((postId) => {
-    if (reelIdKeys.has(idKey(postId)) && getPreferredCommentSection(postId)) {
-      window.toggleComments(postId);
-    }
-  });
+  // No reopening pass needed anymore — the one sheet that could have
+  // still been open was deliberately left alone above (still in body,
+  // still subscribed), and feed.innerHTML only replaces children of
+  // #posts-feed, never touching body-level nodes.
 }
 
 // ─── 12b. CHART / CART LIST LOGIC (NOW BACKEND POWERED!) ──────────────────────
