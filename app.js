@@ -769,6 +769,12 @@ const likedPostIds = new Set(
 );
 const openCommentIds = new Set(); // tracks which comment sections are open
 
+// Per-post comment sort preference (Reels comment sheet) — 'top' sorts by
+// likes_count desc, 'newest' by created_at desc. Keyed by idKey(postId) so
+// it's remembered per-post if someone reopens the same reel's comments
+// later in the same session; defaults to 'newest' for any post not in here.
+const commentSortMode = new Map();
+
 // Theme mode — persisted 'dark' | 'light' | 'system' (default 'dark' for
 // new users; 'system' means follow prefers-color-scheme; otherwise forced
 // dark or light). The actual data-theme attribute on <html> is set by
@@ -5073,6 +5079,28 @@ async function loadCommentPreview(postId) {
 // TikTok-style comment sheet: works for both the inline feed card comment
 // panel and the fixed bottom-sheet used on Reels (markup differs slightly
 // but both use #comments-{id}, #comment-list-{id}).
+// Switches a post's comment sort between 'top' (highest likes_count
+// first) and 'newest' (most recent first), matching TikTok's comment
+// sheet. Re-runs the same fetchAndRender the sheet already set up rather
+// than duplicating the query/render logic here.
+window.setCommentSortMode = function (postId, mode, btnGroup) {
+  const key = idKey(postId);
+  if ((commentSortMode.get(key) || "top") === mode) return;
+  commentSortMode.set(key, mode);
+
+  if (btnGroup) {
+    btnGroup.querySelectorAll("[data-sort-mode]").forEach((btn) => {
+      const active = btn.dataset.sortMode === mode;
+      btn.classList.toggle("text-amber-400", active);
+      btn.classList.toggle("text-white/50", !active);
+    });
+  }
+
+  const fetcher = window._commentFetchers?.[key];
+  if (fetcher)
+    fetcher().catch((err) => console.error("Failed to re-sort comments:", err));
+};
+
 window.toggleComments = async function (postId, triggerEl = null) {
   const key = idKey(postId);
   const commentSection = getPreferredCommentSection(key, triggerEl);
@@ -5128,15 +5156,24 @@ window.toggleComments = async function (postId, triggerEl = null) {
   list.innerHTML = `<p class="text-[10px] text-slate-500 animate-pulse py-2 pl-1">Loading comments...</p>`;
 
   const fetchAndRender = async () => {
-    const {
-      data: comments,
-      error,
-      count,
-    } = await supabase
+    // 'top' sorts by likes_count desc (ties broken by newest first,
+    // matching TikTok's behavior); 'newest' by created_at desc.
+    // Defaults to 'top' to match the reference behavior requested —
+    // previously this always showed strict oldest-first chronological
+    // order with no way to change it.
+    const sortMode = commentSortMode.get(key) || "top";
+    let query = supabase
       .from("comments")
       .select("*", { count: "exact" })
-      .eq("post_id", postId)
-      .order("created_at", { ascending: true });
+      .eq("post_id", postId);
+    query =
+      sortMode === "top"
+        ? query
+            .order("likes_count", { ascending: false })
+            .order("created_at", { ascending: false })
+        : query.order("created_at", { ascending: false });
+
+    const { data: comments, error, count } = await query;
 
     if (error) throw error;
     list.innerHTML = "";
@@ -5153,12 +5190,18 @@ window.toggleComments = async function (postId, triggerEl = null) {
       return;
     }
 
-    // Top-level comments first, replies immediately after their parent.
+    // Top-level comments in whatever order the query above produced;
+    // replies always shown oldest-first within their own thread
+    // regardless of the top-level sort mode, since a reply thread's
+    // natural reading order doesn't change just because the parent
+    // list is sorted by popularity instead of time.
     // idKey() here matters for the same reason it does everywhere else
     // in the app — comment ids are bigints from the DB, and comparing
     // them without normalizing types silently drops replies from view.
     const topLevel = comments.filter((c) => !c.parent_comment_id);
-    const replies = comments.filter((c) => c.parent_comment_id);
+    const replies = comments
+      .filter((c) => c.parent_comment_id)
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     const REPLY_PREVIEW_COUNT = 2;
 
     topLevel.forEach((c) => {
@@ -5199,6 +5242,12 @@ window.toggleComments = async function (postId, triggerEl = null) {
                 </div>`;
     });
   };
+
+  // Exposes this post's fetchAndRender so the Top/Newest sort buttons
+  // (which live outside this closure) can trigger a re-fetch when
+  // tapped. Cleared on close in _closeCommentSheet.
+  window._commentFetchers = window._commentFetchers || {};
+  window._commentFetchers[key] = fetchAndRender;
 
   try {
     await fetchAndRender();
@@ -5258,6 +5307,7 @@ window._closeCommentSheet = function (postId, fromPop = false) {
     supabase.removeChannel(currentCommentsChan);
     currentCommentsChan = null;
   }
+  if (window._commentFetchers) delete window._commentFetchers[key];
 
   if (!fromPop) popUiState(`comments-${key}`);
 };
@@ -7310,6 +7360,10 @@ function renderReelCard(id, d, lazy = false) {
                     <span class="comment-count-${escAttr(id)}">${displayComments}</span> Comments
                 </p>
                 <button class="comments-close-btn" onclick="window._closeCommentSheet('${escAttr(id)}')"><i class="fas fa-times text-xs"></i></button>
+                <div class="flex items-center justify-center gap-3 px-1 pt-2 pb-1" id="sort-group-${escAttr(id)}">
+                    <button data-sort-mode="top" onclick="window.setCommentSortMode('${escAttr(id)}', 'top', this.parentElement)" class="text-[10px] font-bold uppercase tracking-wide text-amber-400 transition">Top</button>
+                    <button data-sort-mode="newest" onclick="window.setCommentSortMode('${escAttr(id)}', 'newest', this.parentElement)" class="text-[10px] font-bold uppercase tracking-wide text-white/50 transition">Newest</button>
+                </div>
             </div>
             <div id="comment-list-${escAttr(id)}" class="comments-scroll-area"></div>
             <div class="comments-input-row flex items-center gap-1.5">
