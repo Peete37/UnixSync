@@ -5102,17 +5102,6 @@ window.toggleComments = async function (postId, triggerEl = null) {
     : !commentSection.classList.contains("hidden");
 
   if (isOpen) {
-    // TEMP DEBUG — remove once found. toggleComments() itself
-    // toggles closed if called while already open — this proves
-    // whether something is calling toggleComments a second time on
-    // an already-open sheet (which would close it) versus
-    // something calling _closeCommentSheet directly.
-    console.trace(
-      "[DEBUG] toggleComments found isOpen=true, closing",
-      postId,
-      "triggerEl=",
-      triggerEl,
-    );
     window._closeCommentSheet(postId, true);
     return;
   }
@@ -5129,55 +5118,6 @@ window.toggleComments = async function (postId, triggerEl = null) {
     requestAnimationFrame(() => commentSection.classList.add("comments-open"));
     backdrop?.classList.add("backdrop-open");
     pushUiState(`comments-${key}`, () => window._closeCommentSheet(key, true));
-
-    // TEMP DEBUG — remove once found. Watches this exact sheet element
-    // for ANY class change or removal from the DOM, regardless of
-    // which function causes it — catches paths the other traces
-    // (toggleComments/_closeCommentSheet/renderFeedFromCache) aren't
-    // covering, since evidence shows the sheet disappears without any
-    // of those three ever firing.
-    const _debugObserver = new MutationObserver((mutations) => {
-      mutations.forEach((m) => {
-        if (m.type === "attributes") {
-          console.trace(
-            "[DEBUG-MUTATION]",
-            m.attributeName,
-            "changed on sheet for",
-            key,
-            "-> class:",
-            commentSection.className,
-            "style:",
-            commentSection.getAttribute("style"),
-            "at",
-            Date.now(),
-          );
-        }
-        if (m.type === "childList") {
-          m.removedNodes.forEach((n) => {
-            if (n === commentSection) {
-              console.trace(
-                "[DEBUG-MUTATION] sheet REMOVED from DOM for",
-                key,
-                "at",
-                Date.now(),
-              );
-            }
-          });
-        }
-      });
-    });
-    _debugObserver.observe(commentSection, {
-      attributes: true,
-      attributeFilter: ["class", "style"],
-    });
-    if (commentSection.parentElement) {
-      _debugObserver.observe(commentSection.parentElement, { childList: true });
-    }
-    // No auto-disconnect this time — the 30s window expired before
-    // the close happened on the last attempt. Runs until manually
-    // stopped via window._stopDebugObserver() in the console, or
-    // page reload.
-    window._stopDebugObserver = () => _debugObserver.disconnect();
   } else {
     commentSection.classList.remove("hidden");
     pushUiState(`comments-${key}`, () => window._closeCommentSheet(key, true));
@@ -5295,17 +5235,6 @@ window.toggleComments = async function (postId, triggerEl = null) {
 
 // Shared close routine for both inline and bottom-sheet comment views.
 window._closeCommentSheet = function (postId, fromPop = false) {
-  // TEMP DEBUG — remove once found. Catches every closure regardless
-  // of path (direct call, toggle-while-open, backdrop, X button,
-  // popstate, or leaving the feed view).
-  console.trace(
-    "[DEBUG] _closeCommentSheet called for",
-    postId,
-    "fromPop=",
-    fromPop,
-    "at",
-    Date.now(),
-  );
   const key = idKey(postId);
   const commentSection = getPreferredCommentSection(key);
   const backdrop = document.getElementById("comments-global-backdrop");
@@ -7095,16 +7024,33 @@ function pauseAllReelVideos() {
   // document.body (see toggleComments) — leaving them around after
   // navigating away from Reels would keep a dangling, invisible
   // full-width fixed element sitting in the DOM.
-  document
-    .querySelectorAll("body > .reel-comments")
-    .forEach((el) => el.remove());
-  document
-    .getElementById("comments-global-backdrop")
-    ?.classList.remove("backdrop-open");
-  openCommentIds.clear();
-  if (currentCommentsChan) {
-    supabase.removeChannel(currentCommentsChan);
-    currentCommentsChan = null;
+  // Fix: this used to unconditionally remove EVERY relocated reel
+  // comment sheet from body, including whichever one the person
+  // currently has open. pauseAllReelVideos() runs on every single
+  // non-Reels feed render — not just when genuinely navigating away
+  // from Reels, but also on every realtime refresh, including the
+  // one triggered by the very comment someone just posted from a
+  // post's detail view. That silently deleted their open comment
+  // sheet via a direct .remove() call, completely bypassing
+  // toggleComments/_closeCommentSheet — which is why it never showed
+  // up in either function's debug trace. The currently-open sheet is
+  // now left alone; only already-closed/stale relocated sheets get
+  // cleaned up here.
+  const openSheet = document.querySelector(
+    "body > .reel-comments.comments-open",
+  );
+  document.querySelectorAll("body > .reel-comments").forEach((el) => {
+    if (el !== openSheet) el.remove();
+  });
+  if (!openSheet) {
+    document
+      .getElementById("comments-global-backdrop")
+      ?.classList.remove("backdrop-open");
+    openCommentIds.clear();
+    if (currentCommentsChan) {
+      supabase.removeChannel(currentCommentsChan);
+      currentCommentsChan = null;
+    }
   }
 }
 
@@ -8382,16 +8328,6 @@ async function loadNextFollowingPage() {
 }
 
 function renderFeedFromCache() {
-  // TEMP DEBUG — remove once found. Shows every time a realtime-
-  // triggered (or any other) full feed rebuild fires, and how long
-  // it's been since the last one — helps confirm/rule out a rebuild
-  // racing with a comment sheet that was just opened.
-  console.log(
-    "[DEBUG] renderFeedFromCache called, currentFeedType=",
-    currentFeedType,
-    "at",
-    Date.now(),
-  );
   const feed = document.getElementById("posts-feed");
   if (!feed) return;
 
