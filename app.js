@@ -2883,7 +2883,7 @@ window.openDetail = async function (postId, fromBack = false) {
                         ${!isOwn && viewer ? `<button onclick="window.openRateSellerSheet('${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-[10px] text-amber-400 hover:text-amber-300 transition uppercase tracking-widest font-bold">Rate seller</button>` : ""}
                     </div>
                 </div>
-                <p class="text-slate-300 leading-relaxed font-light">${esc(d.description) || "No description provided."}</p>
+                <p class="selectable-text text-slate-300 leading-relaxed font-light">${esc(d.description) || "No description provided."}</p>
                 ${detailActionsBlock}
                 <div id="comment-preview-${escAttr(d.id)}" class="space-y-2">
                     <p class="text-[10px] text-slate-600 animate-pulse">Loading comments...</p>
@@ -3480,6 +3480,29 @@ window.handleAvatarUpload = async function (inputEl) {
 
 // ─── 11b. AVATAR LONG-PRESS MODAL ────────────────────────────────────────────
 let _avatarPressTimer = null;
+// Blocks the phone browser's own long-press menus app-wide — Android
+// Chrome's "Copy image / Download image / Share image / Open in Chrome
+// browser" sheet on images, and the text-selection "Copy / Share /
+// Select all" toolbar + Google-search bubble on labels — which only the
+// profile avatar's long-press had ever explicitly handled elsewhere.
+// The CSS user-select/touch-callout rules above cover most of this, but
+// Android Chrome's image context menu specifically is tied to the
+// contextmenu event itself and isn't reliably suppressed by CSS alone —
+// this is the same technique _initAvatarLongPress() already uses for
+// the avatar, just applied globally instead of to one element.
+// Genuinely typed content (inputs/textareas) and the avatar preview
+// modal (which has its own real Copy/Download buttons and wants its
+// own long-press handling) are explicitly excluded.
+document.addEventListener(
+  "contextmenu",
+  (e) => {
+    if (e.target.closest("#avatarModal")) return;
+    if (e.target.matches('input, textarea, [contenteditable="true"]')) return;
+    e.preventDefault();
+  },
+  { passive: false },
+);
+
 function _initAvatarLongPress() {
   const profileAvatar = document.getElementById("profile-ui-avatar");
   const avatarModal = document.getElementById("avatarModal");
@@ -5008,7 +5031,7 @@ function renderCommentItem(c, postId, options = {}) {
                             <i class="fas fa-ellipsis-vertical text-[11px]"></i>
                         </button>
                     </div>
-                    <p class="text-xs text-slate-200 mt-0.5 break-words">${esc(c.text)}</p>
+                    <p class="selectable-text text-xs text-slate-200 mt-0.5 break-words">${esc(c.text)}</p>
                     <div class="flex items-center gap-3 mt-1.5">
                         <button onclick="event.stopPropagation(); window.likeComment('${escAttr(c.id)}', this)" class="flex items-center gap-1 active:scale-90 transition">
                             <i class="${heartClass} text-[11px]"></i>

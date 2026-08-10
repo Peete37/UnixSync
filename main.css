@@ -2606,7 +2606,6 @@ main {
   flex-shrink: 0;
 }
 
-
 /* ─── CREATE LISTING / DETAIL READABILITY TWEAKS ───────────────────────────── */
 .post-composer-field::placeholder {
   color: #94a3b8;
@@ -2638,13 +2637,66 @@ main {
 /* Fired by likePost() the moment a heart goes from unliked -> liked, so
    the tap has real, visible feedback beyond just the color swap. */
 @keyframes heartPop {
-  0%   { transform: scale(1); }
-  35%  { transform: scale(1.4); }
-  65%  { transform: scale(0.9); }
-  100% { transform: scale(1); }
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.4);
+  }
+  65% {
+    transform: scale(0.9);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 .like-pop-anim {
   display: inline-block;
   animation: heartPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ─── DISABLE NATIVE LONG-PRESS MENUS APP-WIDE ─────────────────────────────── */
+/* Every image and text label in the app was falling back to the phone
+   browser's own long-press behavior — Android Chrome's "Copy image /
+   Download image / Share image / Open in Chrome browser" sheet on
+   images, and its "Copy / Share / Select all" + Google-search bubble on
+   text — since only the profile avatar's long-press had ever been
+   explicitly handled. That made ordinary card taps feel like browsing a
+   website instead of using an app. Disabled broadly here; re-enabled
+   selectively below for content people genuinely might want to select
+   and copy (comment text, post descriptions), and left untouched inside
+   the avatar preview modal, which already has its own proper Copy/
+   Download buttons and still wants its image's native behavior style
+   long-press disabled but is handled by its own dedicated JS.
+*/
+img {
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Actual typed content always needs native copy/paste/select-all to work
+   normally while editing. */
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* Content someone would plausibly want to long-press and copy — comment
+   bodies and post descriptions — stays genuinely selectable. */
+.selectable-text {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
