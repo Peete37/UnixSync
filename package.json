@@ -5,14 +5,16 @@
   "main": "app.js",
   "type": "module",
   "scripts": {
-    "dev": "@tailwindcss/cli -i main.css -o dist.css --watch",
-    "build": "@tailwindcss/cli -i main.css -o dist.css"
+    "dev": "npx tailwindcss -i main.css -o dist.css --watch",
+    "build": "npx tailwindcss -i main.css -o dist.css"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.0",
+    "tailwindcss": "^4.3.0"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.111.0",
-    "@tailwindcss/cli": "^4.3.0",
     "@upstash/ratelimit": "^2.0.8",
-    "@upstash/redis": "^1.38.1",
-    "tailwindcss": "^4.3.0"
+    "@upstash/redis": "^1.38.1"
   }
 }
