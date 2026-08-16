@@ -912,6 +912,18 @@
                      Kept as its own container so openCampusSettings() can
                      always reset back to this view on re-entry. -->
                   <div id="settings-list-screen" class="settings-list-screen">
+                    <button
+                      type="button"
+                      onclick="window.closeCampusSettingsPanel()"
+                      class="settings-back-btn mb-2"
+                      aria-label="Back to profile"
+                    >
+                      <i class="fas fa-arrow-left"></i
+                      ><span
+                        class="ml-2 text-[11px] font-black uppercase tracking-wider"
+                        >Profile</span
+                      >
+                    </button>
                     <div class="settings-hero" aria-hidden="true">
                       <div class="settings-hero-glow"></div>
                       <div class="settings-hero-content">
@@ -1887,6 +1899,7 @@
                   <i class="fas fa-images text-amber-400"></i> Gallery
                 </button>
               </div>
+              <div id="mediaPreviewStrip" aria-live="polite"></div>
               <p
                 id="mediaFileCount"
                 class="text-[10px] text-slate-500 mt-1.5 text-center"
@@ -1935,6 +1948,7 @@
             </button>
           </div>
           <div class="edit-main-preview" id="editMainPreview"></div>
+          <div id="videoTrimControls" aria-live="polite"></div>
           <div class="edit-thumb-strip no-scrollbar" id="editThumbStrip"></div>
           <div id="editMainFooter" class="edit-main-footer">
             <button

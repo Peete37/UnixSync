@@ -869,6 +869,8 @@ Object.defineProperty(window, "_likedPostIds", { get: () => likedPostIds });
 let stagedMediaFiles = [];
 let activeStagedIndex = 0;
 let finalMediaFiles = []; // the files the user actually confirmed via "Use These Files"
+let finalMediaPreviewUrls = [];
+const MAX_VIDEO_DURATION_SECONDS = 30;
 
 // ─── 3c. HISTORY / BACK-BUTTON STATE ──────────────────────────────────────────
 // Tracks which overlays (modals, comment sheets, DM threads) are open so the
@@ -2676,6 +2678,9 @@ window.switchProfileTab = function (tabType, selectedBtn = null) {
 
 window.openCampusSettings = function () {
   window.switchProfileTab("settings");
+  document
+    .getElementById("profile-subview-settings")
+    ?.classList.add("settings-panel-open");
   // Instagram-style drill-down: always land on the flat category list
   // first, even if a sub-screen was left open the last time Settings
   // was visited. Reset is silent (no ui-stack pop) since there's
@@ -2710,6 +2715,16 @@ window.closeSettingsSubScreen = function (fromPop = false) {
     .forEach((el) => el.classList.add("hidden"));
   document.getElementById("settings-list-screen")?.classList.remove("hidden");
   if (!fromPop) popUiState("settings-subscreen");
+};
+
+window.closeCampusSettingsPanel = function () {
+  document
+    .getElementById("profile-subview-settings")
+    ?.classList.remove("settings-panel-open");
+  window.switchProfileTab(
+    "posts",
+    document.getElementById("profile-tab-posts"),
+  );
 };
 
 window.openUserDashboard = function (userId) {
@@ -3845,6 +3860,9 @@ window.openEditMediaModal = function (fileList) {
     url: URL.createObjectURL(file),
     rotation: 0,
     type: file.type.startsWith("video") ? "video" : "image",
+    trimStart: 0,
+    trimEnd: null,
+    duration: null,
   }));
   activeStagedIndex = 0;
 
@@ -3883,12 +3901,14 @@ function renderEditMediaModal() {
         </div>`;
   mainPreview.innerHTML =
     active.type === "video"
-      ? `<video src="${active.url}" style="${rotationStyle}" controls muted></video>
+      ? `<video src="${active.url}" style="${rotationStyle}" controls muted playsinline onloadedmetadata="window._syncVideoTrimForPreview(this)"></video>
            <button class="rotate-btn" onclick="window._rotateStagedMedia()"><i class="fas fa-rotate-right text-sm"></i></button>`
       : `<img id="editPreviewImg" src="${active.url}" style="${rotationStyle}" alt="Preview">
            <button class="crop-btn" onclick="window._toggleCropMode()" aria-label="Crop"><i class="fas fa-crop-simple text-sm"></i></button>
            <button class="rotate-btn" onclick="window._rotateStagedMedia()"><i class="fas fa-rotate-right text-sm"></i></button>
            ${cropOverlayHtml}`;
+
+  renderVideoTrimControls(active);
 
   thumbStrip.innerHTML = stagedMediaFiles
     .map(
@@ -3970,20 +3990,91 @@ window._cancelCrop = function () {
   document.getElementById("cropFooter")?.classList.remove("crop-active");
 };
 
-window._applyCrop = function () {
+window._applyCrop = async function () {
   const item = stagedMediaFiles[activeStagedIndex];
   const box = document.getElementById("cropBox");
   const overlay = document.getElementById("cropOverlay");
-  if (item && box && overlay) {
-    const rect = _readCropBoxRect(box, overlay);
-    // Ignore a crop that's barely different from "no crop" (e.g. a
-    // tiny accidental drag) so we don't force a needless re-encode.
-    const isNoOp =
-      rect.x < 0.01 && rect.y < 0.01 && rect.width > 0.98 && rect.height > 0.98;
-    item.cropRect = isNoOp ? null : rect;
-  }
+  if (!item || !box || !overlay) return;
+
+  const rect = _readCropBoxRect(box, overlay);
+  const isNoOp =
+    rect.x < 0.01 && rect.y < 0.01 && rect.width > 0.98 && rect.height > 0.98;
   window._cancelCrop();
-  renderEditMediaModal();
+  if (isNoOp) {
+    item.cropRect = null;
+    renderEditMediaModal();
+    return;
+  }
+
+  showToast("Applying crop…");
+  try {
+    // Apply rotation first, then replace the staged source immediately. This
+    // makes the crop visible in the editor now, not only after publishing.
+    let workingFile = item.file;
+    if (item.rotation !== 0)
+      workingFile = await rotateImageFile(workingFile, item.rotation);
+    const croppedFile = await cropImageFile(workingFile, rect);
+    URL.revokeObjectURL(item.url);
+    item.file = croppedFile;
+    item.url = URL.createObjectURL(croppedFile);
+    item.rotation = 0;
+    item.cropRect = null;
+    renderEditMediaModal();
+  } catch (err) {
+    console.warn("Crop preview failed:", err);
+    showToast("Couldn't apply crop — try again.");
+    renderEditMediaModal();
+  }
+};
+
+function renderVideoTrimControls(active) {
+  const controls = document.getElementById("videoTrimControls");
+  if (
+    !controls ||
+    active?.type !== "video" ||
+    !active.duration ||
+    active.duration <= MAX_VIDEO_DURATION_SECONDS
+  ) {
+    controls?.classList.remove("is-visible");
+    return;
+  }
+  const max = Math.min(active.duration, MAX_VIDEO_DURATION_SECONDS);
+  const start = Math.max(0, Math.min(active.trimStart || 0, max - 0.1));
+  const end = Math.max(start + 0.1, Math.min(active.trimEnd ?? max, max));
+  active.trimStart = start;
+  active.trimEnd = end;
+  controls.innerHTML = `
+    <div class="text-[10px] text-slate-300 font-bold">Trim video <span class="text-amber-400">30s max</span></div>
+    <div class="trim-row"><span class="trim-label">Start</span><input type="range" min="0" max="${max}" step="0.1" value="${start}" oninput="window._setVideoTrim('start', this.value)"><span class="trim-value" id="videoTrimStartValue">${start.toFixed(1)}s</span></div>
+    <div class="trim-row"><span class="trim-label">End</span><input type="range" min="0.1" max="${max}" step="0.1" value="${end}" oninput="window._setVideoTrim('end', this.value)"><span class="trim-value" id="videoTrimEndValue">${end.toFixed(1)}s</span></div>`;
+  controls.classList.add("is-visible");
+}
+
+window._syncVideoTrimForPreview = function (video) {
+  const active = stagedMediaFiles[activeStagedIndex];
+  if (!active || active.type !== "video" || !Number.isFinite(video.duration))
+    return;
+  active.duration = video.duration;
+  if (video.duration <= MAX_VIDEO_DURATION_SECONDS) active.trimEnd = null;
+  renderVideoTrimControls(active);
+};
+
+window._setVideoTrim = function (which, rawValue) {
+  const active = stagedMediaFiles[activeStagedIndex];
+  if (!active) return;
+  const max = Math.min(
+    active.duration || MAX_VIDEO_DURATION_SECONDS,
+    MAX_VIDEO_DURATION_SECONDS,
+  );
+  const value = Math.max(0, Math.min(Number(rawValue) || 0, max));
+  if (which === "start")
+    active.trimStart = Math.min(value, (active.trimEnd ?? max) - 0.1);
+  else active.trimEnd = Math.max(value, (active.trimStart || 0) + 0.1);
+  const end = active.trimEnd ?? max;
+  const startEl = document.getElementById("videoTrimStartValue");
+  const endEl = document.getElementById("videoTrimEndValue");
+  if (startEl) startEl.textContent = `${(active.trimStart || 0).toFixed(1)}s`;
+  if (endEl) endEl.textContent = `${end.toFixed(1)}s`;
 };
 
 // Fix: #editMainPreview is a fixed 1:1 square with object-fit: contain,
@@ -4281,11 +4372,32 @@ window.confirmEditedMedia = async function () {
         processed.push(item.file);
       }
     } else {
-      processed.push(item.file);
+      try {
+        const needsTrim =
+          item.duration > MAX_VIDEO_DURATION_SECONDS ||
+          item.trimStart > 0 ||
+          item.trimEnd != null;
+        processed.push(
+          await compressVideoFile(item.file, {
+            trimStart: item.trimStart || 0,
+            trimEnd: needsTrim
+              ? Math.min(
+                  item.trimEnd ?? item.duration ?? MAX_VIDEO_DURATION_SECONDS,
+                  MAX_VIDEO_DURATION_SECONDS,
+                )
+              : null,
+          }),
+        );
+      } catch (_) {
+        processed.push(item.file);
+      }
     }
   }
 
   finalMediaFiles = processed;
+  finalMediaPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+  finalMediaPreviewUrls = processed.map((file) => URL.createObjectURL(file));
+  renderFinalMediaPreviewStrip();
 
   const countEl = document.getElementById("mediaFileCount");
   if (countEl) {
@@ -4444,7 +4556,12 @@ function compressImageFile(file, { maxDimension = 1280, quality = 0.75 } = {}) {
 // video is by far the most expensive media type per post.
 function compressVideoFile(
   file,
-  { maxDimension = 720, videoBitsPerSecond = 1_500_000 } = {},
+  {
+    maxDimension = 720,
+    videoBitsPerSecond = 1_500_000,
+    trimStart = 0,
+    trimEnd = null,
+  } = {},
 ) {
   return new Promise((resolve) => {
     if (
@@ -4472,6 +4589,14 @@ function compressVideoFile(
 
     video.onloadedmetadata = () => {
       const { videoWidth, videoHeight, duration } = video;
+      const safeStart = Math.max(0, Math.min(trimStart || 0, duration));
+      const safeEnd = Math.max(
+        safeStart + 0.1,
+        Math.min(
+          trimEnd ?? duration,
+          Math.min(duration, MAX_VIDEO_DURATION_SECONDS),
+        ),
+      );
       if (!videoWidth || !videoHeight || !Number.isFinite(duration)) {
         finish(file);
         return;
@@ -4480,6 +4605,8 @@ function compressVideoFile(
       // Nothing worth gaining on an already-small/short clip — same
       // "don't penalize small inputs" philosophy as compressImageFile.
       if (
+        safeStart === 0 &&
+        safeEnd >= duration - 0.05 &&
         Math.max(videoWidth, videoHeight) <= maxDimension &&
         file.size < 6 * 1024 * 1024
       ) {
@@ -4567,8 +4694,16 @@ function compressVideoFile(
         drawing = false;
         if (recorder.state === "recording") recorder.stop();
       };
+      video.ontimeupdate = () => {
+        if (video.currentTime >= safeEnd && recorder.state === "recording") {
+          drawing = false;
+          recorder.stop();
+          video.pause();
+        }
+      };
 
       recorder.start();
+      video.currentTime = safeStart;
       video
         .play()
         .then(drawFrame)
@@ -4627,6 +4762,41 @@ async function withUploadRetry(
     }
   }
   throw lastErr;
+}
+
+function renderFinalMediaPreviewStrip() {
+  const strip = document.getElementById("mediaPreviewStrip");
+  if (!strip) return;
+  strip.innerHTML = finalMediaFiles
+    .map((file, index) => {
+      const url = finalMediaPreviewUrls[index];
+      return `<div class="attached-preview">${file.type?.startsWith("video/") ? `<video src="${url}" muted playsinline></video><span class="attached-preview-badge">Video</span>` : `<img src="${url}" alt="Attached file ${index + 1}"><span class="attached-preview-badge">Photo</span>`}</div>`;
+    })
+    .join("");
+}
+
+function findOverlongVideo(files) {
+  const videos = files.filter((file) => file.type?.startsWith("video/"));
+  return Promise.all(
+    videos.map(
+      (file) =>
+        new Promise((resolve) => {
+          const video = document.createElement("video");
+          const url = URL.createObjectURL(file);
+          video.preload = "metadata";
+          video.onloadedmetadata = () => {
+            const tooLong = video.duration > MAX_VIDEO_DURATION_SECONDS + 0.05;
+            URL.revokeObjectURL(url);
+            resolve(tooLong ? file : null);
+          };
+          video.onerror = () => {
+            URL.revokeObjectURL(url);
+            resolve(null);
+          };
+          video.src = url;
+        }),
+    ),
+  ).then((results) => results.find(Boolean) || null);
 }
 
 function sleep(ms) {
@@ -10266,6 +10436,14 @@ window.handlePostSubmission = async function () {
     return;
   }
 
+  const overlongVideo = await findOverlongVideo(mediaFiles);
+  if (overlongVideo) {
+    showToast(
+      "Videos must be 30 seconds or shorter. Trim this video before publishing.",
+    );
+    return;
+  }
+
   // Lock the UI immediately: disable Publish AND the attach button, add a
   // spinner, so there is a clear, visible sign the upload is in progress
   // and it's impossible to trigger a second submission of the same files.
@@ -10494,6 +10672,9 @@ window.handlePostSubmission = async function () {
     });
     stagedMediaFiles = [];
     finalMediaFiles = [];
+    finalMediaPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+    finalMediaPreviewUrls = [];
+    document.getElementById("mediaPreviewStrip")?.replaceChildren();
 
     window.togglePostModal();
     showToast(
@@ -10763,15 +10944,20 @@ document
       });
       if (authError) throw authError;
 
-      const { error } = await supabase
-        .from("profiles")
-        .update({
+      const { error } = await supabase.from("profiles").upsert(
+        {
+          id: currentUserData.id,
           name: newName,
+          email: currentUserData.email || "",
+          avatar: currentUserData.user_metadata?.avatar_url || "",
+          institution: currentUserData.institution || "",
+          region: currentUserData.region || "",
           bio: newBio,
           major: newMajor,
           interests: newInterests,
-        })
-        .eq("id", currentUserData.id);
+        },
+        { onConflict: "id" },
+      );
       if (error) throw error;
 
       // Same staleness problem as avatars: posts store a denormalized
@@ -10843,7 +11029,11 @@ document
       showToast("Profile updated everywhere! ✓");
     } catch (err) {
       console.error("Save name error:", err);
-      showToast("Failed to update name. Please try again.");
+      showToast(
+        err?.message?.toLowerCase().includes("row-level security")
+          ? "Your profile cannot be updated yet. Check Supabase profile policies."
+          : "Failed to update account. Please try again.",
+      );
     }
   });
 
@@ -11805,9 +11995,8 @@ window.togglePushNotifications = async function (wantsEnabled) {
 
   if (!VAPID_PUBLIC_KEY) {
     if (toggle) toggle.checked = false;
-    showToast(
-      "Push isn't set up yet — see the VAPID_PUBLIC_KEY note in app.js",
-    );
+    if (status) status.textContent = "Push service is not configured yet";
+    showToast("Push notifications need a VAPID key and server setup first.");
     return;
   }
   if (!currentUserData) {
