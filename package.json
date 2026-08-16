@@ -5,8 +5,8 @@
   "main": "app.js",
   "type": "module",
   "scripts": {
-    "dev": "tailwindcss -i main.css -o dist.css --watch",
-    "build": "tailwindcss -i main.css -o dist.css"
+    "dev": "@tailwindcss/cli -i main.css -o dist.css --watch",
+    "build": "@tailwindcss/cli -i main.css -o dist.css"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.111.0",
