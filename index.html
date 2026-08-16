@@ -82,6 +82,27 @@
   </head>
 
   <body class="bg-[#020617] text-slate-100 min-h-screen antialiased">
+    <!-- Shown when sw.js reports a new version took over while this tab
+         was already open (see the SW_UPDATED listener below) — reload is
+         the only way to actually pick up the new version's rendered
+         content, so this is a deliberate manual prompt rather than an
+         auto-reload, which could interrupt someone mid-typing a
+         message or post. -->
+    <div
+      id="update-available-banner"
+      class="hidden fixed top-0 left-0 right-0 z-[999] bg-amber-400 text-black text-xs font-black uppercase tracking-wider px-4 py-2.5 flex items-center justify-center gap-3"
+    >
+      <span
+        ><i class="fas fa-arrows-rotate mr-1.5"></i>A new version is
+        available</span
+      >
+      <button
+        onclick="location.reload()"
+        class="bg-black text-amber-300 px-3 py-1 rounded-full text-[11px]"
+      >
+        Refresh
+      </button>
+    </div>
     <!-- Wraps the entire visual app in a fixed-width column that gets
        centered on anything wider than a phone (see the @media rule near
        the top of this file). The transform on #app-shell there is what
@@ -2591,6 +2612,19 @@
             // dev setups) — the app works fine without it, just without
             // the data savings, so this is intentionally silent.
           });
+        });
+
+        // A new service worker taking over doesn't automatically refresh
+        // a tab that's already open — sw.js's activate handler
+        // (SW_UPDATED message) tells this page a new version just
+        // became active, so a person doesn't sit on stale content with
+        // no idea a fix/update shipped while they had the app open.
+        navigator.serviceWorker.addEventListener("message", (event) => {
+          if (event.data?.type === "SW_UPDATED") {
+            document
+              .getElementById("update-available-banner")
+              ?.classList.remove("hidden");
+          }
         });
       }
     </script>

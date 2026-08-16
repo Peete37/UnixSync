@@ -69,9 +69,24 @@ self.addEventListener("activate", (event) => {
             .filter((key) => key !== SHELL_CACHE)
             .map((key) => caches.delete(key)),
         ),
+      )
+      .then(() => self.clients.claim())
+      .then(() =>
+        // skipWaiting()+clients.claim() only change which service worker
+        // handles requests GOING FORWARD — an already-open tab keeps
+        // rendering whatever it already rendered until something tells
+        // it to reload. Without this, someone with the app open during
+        // a deploy could sit on stale content indefinitely with no
+        // indication anything changed. This tells every open tab a new
+        // version just took over, so the page can show a "new version
+        // available" prompt instead of silently doing nothing.
+        self.clients.matchAll({ type: "window" }).then((clients) => {
+          clients.forEach((client) =>
+            client.postMessage({ type: "SW_UPDATED" }),
+          );
+        }),
       ),
   );
-  self.clients.claim();
 });
 
 function isSupabaseRequest(url) {
