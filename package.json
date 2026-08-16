@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "npx tailwindcss -i main.css -o dist.css --watch",
-    "build": "npx tailwindcss -i main.css -o dist.css"
+    "build": "npx tailwindcss -i main.css -o dist.css",
+    "postinstall": "chmod +x node_modules/.bin/* || true"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.0",
