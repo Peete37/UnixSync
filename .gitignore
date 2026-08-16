@@ -1,2 +1,3 @@
-node_modules/"compress-existing-photos.js" 
-"load-test.js" 
+node_modules/
+compress-existing-photos.js
+load-test.js

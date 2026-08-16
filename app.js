@@ -276,6 +276,16 @@ let currentConversationsChan = null;
 let currentMessagesChan = null;
 let activeConversationId = null;
 let activeConversationPeer = null; // { id, name, avatar }
+// Full message objects for the currently-open thread, keyed by id (string).
+// Lets the message action sheet (react/forward/delete) look up a message's
+// real data from just the id stored in its bubble's data-message-id
+// attribute, instead of re-fetching or re-parsing the DOM.
+let _activeThreadMessagesById = new Map();
+// Offer state for the currently-open thread, keyed by offers.id (string).
+// Separate from messages because an offer's status changes over time
+// (pending -> accepted/declined) while the message that announced it
+// never does — see renderOfferBubble.
+let _activeThreadOffersById = new Map();
 let conversationsCache = [];
 
 // ─── SESSION MANAGEMENT ────────────────────────────────────────────────────
@@ -1125,6 +1135,9 @@ function registerPostContext(id, d, firstMediaUrl) {
     price: d.price || 0,
     image: firstMediaUrl || "",
     type: d.type || "product",
+    userId: d.user_id || null,
+    userName: d.user_name || "Seller",
+    userAvatar: d.user_avatar || "",
   };
 }
 
@@ -1628,6 +1641,15 @@ function formatClockTime(dateStr) {
   });
 }
 
+// "On campus since <Month Year>" for the "Active Since" bio field — coarse
+// month/year granularity is deliberate (builds trust/shows history
+// without exposing the exact signup day).
+function formatMonthYear(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
 // Renders a flash-sale end time as a countdown string. Days-out sales
 // still show a coarse "Nd left" (a live second-by-second tick wouldn't
 // mean much a week out), but once under 24h it renders H:MM:SS so the
@@ -1792,17 +1814,15 @@ window._submitSellerRating = async function (sellerId) {
   // per rater per seller" intent the table's own design already
   // reflects (seller_ratings_update_own policy exists specifically to
   // support this).
-  const { error } = await supabase
-    .from("seller_ratings")
-    .upsert(
-      {
-        seller_id: sellerId,
-        rater_id: currentUserData.id,
-        stars,
-        comment: comment || null,
-      },
-      { onConflict: "seller_id,rater_id" },
-    );
+  const { error } = await supabase.from("seller_ratings").upsert(
+    {
+      seller_id: sellerId,
+      rater_id: currentUserData.id,
+      stars,
+      comment: comment || null,
+    },
+    { onConflict: "seller_id,rater_id" },
+  );
 
   if (error) {
     console.error("Rating submit error:", error);
@@ -2023,6 +2043,11 @@ function defaultFeedQuery() {
       // exists on posts now (see the SQL migration), so this filter
       // actually takes effect rather than being a no-op.
       .eq("is_archived", false)
+      // Scheduled-for-later posts (see the Post Scheduling feature)
+      // stay out of the public feed until their publish time arrives —
+      // scheduled_for is either null (an ordinary, already-live post)
+      // or a future timestamp that hasn't passed yet.
+      .or(`scheduled_for.is.null,scheduled_for.lte.${new Date().toISOString()}`)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
       .limit(FEED_PAGE_SIZE)
@@ -2036,7 +2061,8 @@ function buildFeedQuery(baseFilter, cursor = null, limit = FEED_PAGE_SIZE) {
   let q = supabase
     .from("posts")
     .select(FEED_SELECT_COLUMNS)
-    .eq("is_archived", false);
+    .eq("is_archived", false)
+    .or(`scheduled_for.is.null,scheduled_for.lte.${new Date().toISOString()}`);
   if (baseFilter) q = baseFilter(q);
   q = q
     .order("created_at", { ascending: false })
@@ -2058,6 +2084,11 @@ async function subscribeFeed(baseFilter = null) {
   feedLoadedCount = 0;
   feedHasMore = true;
   feedCursor = null;
+  // A prefetched page belongs to whatever tab/filter was active when it
+  // was fetched — starting a new subscription (tab switch, refresh)
+  // means any in-flight or cached prefetch is for the WRONG feed now,
+  // so it must not get spliced into this one.
+  _prefetchedFeedPage = null;
   resetSuggestedReelsInterleaveState();
   const myGeneration = _feedLoadGeneration;
 
@@ -2286,14 +2317,23 @@ async function loadNextFeedPage() {
   isFeedLoadingMore = true;
 
   const sentinel = document.getElementById("feed-load-more-sentinel");
-  if (sentinel) {
-    sentinel.innerHTML = `<div class="py-6 text-center text-slate-500 text-[10px] uppercase tracking-widest animate-pulse">Loading more...</div>`;
-  }
 
   try {
-    const data = await fetchFeedSnapshot(() =>
-      buildFeedQuery(currentFeedBaseFilter, feedCursor, FEED_PAGE_SIZE),
-    );
+    let data;
+    if (_prefetchedFeedPage && _prefetchedFeedPage.cursorUsed === feedCursor) {
+      // Already fetched ahead of time (see prefetchNextFeedPage) — skip
+      // the network wait and the "Loading more..." flash entirely.
+      data = _prefetchedFeedPage.data;
+      _prefetchedFeedPage = null;
+    } else {
+      _prefetchedFeedPage = null; // stale/wrong-cursor prefetch, discard
+      if (sentinel) {
+        sentinel.innerHTML = `<div class="py-6 text-center text-slate-500 text-[10px] uppercase tracking-widest animate-pulse">Loading more...</div>`;
+      }
+      data = await fetchFeedSnapshot(() =>
+        buildFeedQuery(currentFeedBaseFilter, feedCursor, FEED_PAGE_SIZE),
+      );
+    }
 
     const existingIds = new Set(allCachedPosts.map((p) => p.id));
     const newItems = data
@@ -2307,11 +2347,56 @@ async function loadNextFeedPage() {
     applyFeedRankingToCache();
 
     appendFeedCards(newItems);
+
+    // Immediately start fetching the page after THIS one, so it's
+    // likely ready the next time the person scrolls this far.
+    prefetchNextFeedPage();
   } catch (err) {
     console.error("Load more posts error:", err);
     showToast("Couldn't load more posts. Try scrolling again.");
   } finally {
     isFeedLoadingMore = false;
+  }
+}
+
+// Prefetch cache: holds the NEXT page's data, fetched in the background
+// as soon as the current page finishes rendering, so by the time the
+// person actually scrolls the sentinel into range (see the 400px
+// rootMargin below), the data is usually already sitting in memory
+// instead of still needing a network round trip — a real prefetch, not
+// just an early-triggering observer.
+let _prefetchedFeedPage = null; // { cursorUsed, data } | null
+
+async function prefetchNextFeedPage() {
+  // Only the main type-based feed uses this (currentFeedBaseFilter) —
+  // Following/Trending/Reels have their own separate load paths and
+  // aren't wired to this cache, so this intentionally no-ops for them
+  // rather than guessing at an equivalent.
+  if (
+    currentFeedType === "following" ||
+    currentFeedType === "trending" ||
+    !feedHasMore ||
+    isFeedLoadingMore ||
+    _prefetchedFeedPage
+  )
+    return;
+
+  const cursorUsed = feedCursor;
+  try {
+    const data = await fetchFeedSnapshot(() =>
+      buildFeedQuery(currentFeedBaseFilter, cursorUsed, FEED_PAGE_SIZE),
+    );
+    // Only keep this if the cursor hasn't moved since — otherwise a
+    // real loadNextFeedPage (or a tab switch) already changed what
+    // "next page" even means, and using this stale result would
+    // duplicate or skip posts.
+    if (cursorUsed === feedCursor) {
+      _prefetchedFeedPage = { cursorUsed, data };
+    }
+  } catch (_) {
+    // Silent by design — this is purely a perf optimization.
+    // loadNextFeedPage's normal fetch path is the real mechanism and
+    // already has its own error handling/toast.
   }
 }
 
@@ -2342,6 +2427,11 @@ function setupFeedLoadMoreObserver() {
   );
 
   feedLoadMoreObserver.observe(sentinel);
+
+  // Kick off fetching one page AHEAD right away, in the background —
+  // by the time the person actually scrolls this far, it's often
+  // already sitting in memory (see prefetchNextFeedPage above).
+  prefetchNextFeedPage();
 }
 
 // ─── 8. NAVIGATION CONTROL ────────────────────────────────────────────────────
@@ -2654,6 +2744,9 @@ window.togglePostModal = function () {
     pushUiState("post-modal", () => {
       document.getElementById("post-modal")?.classList.add("hidden");
     });
+    if (typeof window._checkForSavedDraft === "function") {
+      window._checkForSavedDraft();
+    }
   } else {
     popUiState("post-modal");
   }
@@ -2719,10 +2812,35 @@ window.openDetail = async function (postId, fromBack = false) {
       return;
     }
 
+    // Fix: a direct link to a specific post (from a notification, an
+    // old share, browser history) could still open the full detail
+    // view for a listing from someone you've blocked, even though the
+    // feed itself already filters them out. Same placeholder treatment
+    // as blocked comments/profiles.
+    if (blockedUserIds.has(idKey(d.user_id))) {
+      content.innerHTML = `
+            <div class="p-10 text-center space-y-3">
+                <i class="fas fa-user-slash text-2xl text-slate-600"></i>
+                <p class="text-slate-500 text-xs">You've blocked this user, so their listing is hidden.</p>
+                <button onclick="window.unblockUser('${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-amber-300 text-[11px] font-black uppercase tracking-wider">Unblock ${esc(d.user_name || "this student")}</button>
+            </div>`;
+      return;
+    }
+
     const viewer = currentUserData;
     const isOwn = viewer && d.user_id === viewer.id;
     const isFollowing =
       !isOwn && viewer ? await checkFollowing(d.user_id) : false;
+
+    // Post view analytics (doc: "Analytics for Your Posts — show views and
+    // unique visitors"). Only counts real signed-in visitors other than
+    // the poster themselves — trackEvent silently no-ops for logged-out
+    // visitors (see trackEvent's userId guard), which is an honest,
+    // known gap rather than a bug: view counts here are a floor, not a
+    // complete count of anonymous traffic.
+    if (!isOwn && !fromBack) {
+      trackEvent("post_viewed", { post_id: idKey(postId) });
+    }
 
     // Tags the modal with the post's own type (product/skill/etc) so
     // desktop CSS can give Products its own layout — same width as
@@ -2822,7 +2940,14 @@ window.openDetail = async function (postId, fromBack = false) {
                     <button onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}', '${escAttr(d.id)}')" class="w-full bg-amber-400 text-black font-black py-4 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
                         ${esc(ctaLabel)}
                     </button>
-                </div>`;
+                </div>
+                ${
+                  d.type !== "skill"
+                    ? `<button onclick="window.openMakeOfferModal('${escAttr(d.id)}')" class="w-full mt-2 bg-transparent border border-amber-400/40 text-amber-300 font-black py-3 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-[11px]">
+                        <i class="fas fa-hand-holding-dollar mr-1.5"></i>Make an Offer
+                    </button>`
+                    : ""
+                }`;
 
     const isLikedDetail = likedPostIds.has(idKey(d.id));
     const heartClassDetail = isLikedDetail
@@ -3024,6 +3149,30 @@ window.openManageListingSheet = async function (postId) {
     return;
   }
 
+  // Post analytics (doc: "show views and unique visitors"). Reads from
+  // the existing user_events table (already used for signup/signin
+  // tracking) rather than a dedicated counter column — post_viewed
+  // events are fired from openDetail. This is best-effort by design:
+  // logged-out visitors don't produce a user_events row at all, so
+  // these numbers are a floor on real traffic, not a complete count.
+  // Failing to load them is non-fatal — the rest of the sheet still
+  // renders normally.
+  let viewCount = 0;
+  let uniqueVisitorCount = 0;
+  try {
+    const { data: viewEvents } = await supabase
+      .from("user_events")
+      .select("user_id")
+      .eq("event_name", "post_viewed")
+      .eq("detail->>post_id", idKey(postId));
+    if (viewEvents) {
+      viewCount = viewEvents.length;
+      uniqueVisitorCount = new Set(viewEvents.map((e) => e.user_id)).size;
+    }
+  } catch (analyticsErr) {
+    console.warn("Post analytics load error (non-fatal):", analyticsErr);
+  }
+
   const isSold = !!post.sold_at;
   // datetime-local inputs need "YYYY-MM-DDTHH:mm" with no timezone
   // suffix — slicing an ISO string to 16 chars gives exactly that.
@@ -3035,6 +3184,18 @@ window.openManageListingSheet = async function (postId) {
         <div class="p-6 space-y-5">
             <h2 class="text-lg font-bold text-white">Manage Listing</h2>
             <p class="text-xs text-slate-500 -mt-3">${esc(post.title)}</p>
+
+            <div class="flex items-center gap-4 p-3 bg-slate-900 rounded-xl border border-slate-800">
+                <div>
+                    <p class="text-white font-black text-lg leading-none">${viewCount}</p>
+                    <p class="text-[9px] text-slate-500 uppercase font-bold tracking-widest mt-1">Views</p>
+                </div>
+                <div class="w-px h-8 bg-slate-800"></div>
+                <div>
+                    <p class="text-white font-black text-lg leading-none">${uniqueVisitorCount}</p>
+                    <p class="text-[9px] text-slate-500 uppercase font-bold tracking-widest mt-1">Unique visitors</p>
+                </div>
+            </div>
 
             <div>
                 <label for="managePrice" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Listing price (GH₵)</label>
@@ -3262,6 +3423,29 @@ window.signInWithEmailPassword = async function (email, password) {
     supabase.functions
       .invoke("login-guard", { body: { action: "success", email } })
       .catch(() => {});
+
+    // Two-Factor Authentication check. signInWithPassword above already
+    // succeeded (correct email+password), but Supabase Auth's own MFA
+    // system (supabase.auth.mfa — TOTP factors, not custom-built) tracks
+    // whether the SESSION has actually satisfied a second factor yet via
+    // "AAL" (Authenticator Assurance Level). If the person has 2FA
+    // enrolled, currentLevel stays at aal1 until they enter a code, even
+    // though the password step already passed — so sign-in isn't
+    // actually complete until that gap closes.
+    const { data: aalData } =
+      await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (
+      aalData &&
+      aalData.nextLevel === "aal2" &&
+      aalData.currentLevel !== aalData.nextLevel
+    ) {
+      if (btn) {
+        btn.textContent = "Sign In";
+        btn.disabled = false;
+      }
+      window._open2faChallengeModal();
+      return;
+    }
 
     startNewDeviceSession();
     // currentUserData isn't populated until the auth-state observer
@@ -4245,6 +4429,160 @@ function compressImageFile(file, { maxDimension = 1280, quality = 0.75 } = {}) {
   });
 }
 
+// Video compression — downscales resolution and re-encodes at a capped
+// bitrate via canvas + MediaRecorder, using the browser/device's own
+// (often hardware-accelerated) encoder. Deliberately NOT using a WASM
+// transcoder library like ffmpeg.wasm: that's a 25MB+ download, which
+// would undercut the exact "don't make every visitor's device do
+// avoidable heavy work" fix already done for Tailwind elsewhere in this
+// app. Trade-off for staying lightweight: re-encoding takes roughly as
+// long as the clip's own duration (it plays through once in the
+// background), and output format/codec depends on what the device's
+// MediaRecorder supports — both real compromises versus a proper
+// transcoder, but zero added download weight and no new CDN dependency.
+// Matters most while the app is on free-tier Supabase storage/egress —
+// video is by far the most expensive media type per post.
+function compressVideoFile(
+  file,
+  { maxDimension = 720, videoBitsPerSecond = 1_500_000 } = {},
+) {
+  return new Promise((resolve) => {
+    if (
+      typeof MediaRecorder === "undefined" ||
+      !HTMLCanvasElement.prototype.captureStream
+    ) {
+      // Older Safari/Android WebViews may lack one or both — fail open
+      // to the original file rather than blocking the post entirely.
+      resolve(file);
+      return;
+    }
+
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    const objUrl = URL.createObjectURL(file);
+    video.src = objUrl;
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(objUrl);
+      resolve(result);
+    };
+
+    video.onloadedmetadata = () => {
+      const { videoWidth, videoHeight, duration } = video;
+      if (!videoWidth || !videoHeight || !Number.isFinite(duration)) {
+        finish(file);
+        return;
+      }
+
+      // Nothing worth gaining on an already-small/short clip — same
+      // "don't penalize small inputs" philosophy as compressImageFile.
+      if (
+        Math.max(videoWidth, videoHeight) <= maxDimension &&
+        file.size < 6 * 1024 * 1024
+      ) {
+        finish(file);
+        return;
+      }
+
+      const scale = Math.min(
+        1,
+        maxDimension / Math.max(videoWidth, videoHeight),
+      );
+      // Even dimensions — some encoders reject odd widths/heights.
+      const targetW = Math.round((videoWidth * scale) / 2) * 2;
+      const targetH = Math.round((videoHeight * scale) / 2) * 2;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = targetW;
+      canvas.height = targetH;
+      const ctx = canvas.getContext("2d");
+      const stream = canvas.captureStream(30);
+
+      // Carries the original audio track through untouched — only the
+      // video track gets re-encoded/downscaled here.
+      try {
+        if (typeof video.captureStream === "function") {
+          video
+            .captureStream()
+            .getAudioTracks()
+            .forEach((t) => stream.addTrack(t));
+        }
+      } catch (_) {
+        // Some browsers don't support capturing audio this way — the
+        // compressed clip just ends up silent rather than failing.
+      }
+
+      const mimeCandidates = [
+        "video/webm;codecs=vp9",
+        "video/webm;codecs=vp8",
+        "video/webm",
+        "video/mp4",
+      ];
+      const mimeType =
+        mimeCandidates.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+      if (!mimeType) {
+        finish(file);
+        return;
+      }
+
+      let recorder;
+      try {
+        recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond });
+      } catch (_) {
+        finish(file);
+        return;
+      }
+
+      const chunks = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onerror = () => finish(file);
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: mimeType });
+        if (!blob.size || blob.size >= file.size) {
+          finish(file);
+          return;
+        }
+        const ext = mimeType.includes("mp4") ? "mp4" : "webm";
+        const newName = file.name.replace(/\.[^.]+$/, "") + "." + ext;
+        finish(new File([blob], newName, { type: mimeType.split(";")[0] }));
+      };
+
+      let drawing = true;
+      function drawFrame() {
+        if (!drawing) return;
+        ctx.drawImage(video, 0, 0, targetW, targetH);
+        if (video.requestVideoFrameCallback) {
+          video.requestVideoFrameCallback(drawFrame);
+        } else {
+          requestAnimationFrame(drawFrame);
+        }
+      }
+
+      video.onended = () => {
+        drawing = false;
+        if (recorder.state === "recording") recorder.stop();
+      };
+
+      recorder.start();
+      video
+        .play()
+        .then(drawFrame)
+        .catch(() => {
+          drawing = false;
+          if (recorder.state === "recording") recorder.stop();
+          else finish(file);
+        });
+    };
+
+    video.onerror = () => finish(file);
+  });
+}
+
 // ─── UPLOAD RETRY HELPER ──────────────────────────────────────────────────────
 // Wraps a network operation (storage upload, DB write) with a short wait
 // and a few retries before truly giving up. Without this, a brief
@@ -5005,6 +5343,22 @@ window._expandReplies = function (groupId) {
 
 function renderCommentItem(c, postId, options = {}) {
   const isPreview = !!options.preview;
+
+  // Fix: blocking someone only ever hid their POSTS from the feed —
+  // their comments on posts you can still see kept rendering in full,
+  // which defeats the point of blocking. A blocked user's comment now
+  // collapses to the same kind of placeholder used elsewhere for
+  // blocked content, with no like/reply/options affordances at all.
+  if (blockedUserIds.has(idKey(c.user_id))) {
+    const indentClassBlocked = c.parent_comment_id ? "ml-7" : "";
+    return `
+        <div class="flex gap-2 items-start text-left mt-2.5 ${indentClassBlocked}" id="comment-item-${escAttr(c.id)}">
+            <div class="flex-1 min-w-0 bg-slate-900/60 border border-slate-800/60 rounded-2xl px-3 py-2.5">
+                <p class="text-[11px] text-slate-600 italic"><i class="fas fa-ban mr-1.5"></i>You've blocked this user</p>
+            </div>
+        </div>`;
+  }
+
   const isLiked = likedCommentIds.has(idKey(c.id));
   const heartClass = isLiked
     ? "fas fa-heart text-rose-500"
@@ -5617,22 +5971,29 @@ function ensureOptionsMenuDom() {
   document.body.appendChild(sheet);
 }
 
-function openOptionsMenu(items) {
+function openOptionsMenu(items, headerHtml = "") {
   ensureOptionsMenuDom();
   const backdrop = document.getElementById("options-menu-backdrop");
   const sheet = document.getElementById("options-menu-sheet");
   const itemsEl = document.getElementById("options-menu-items");
   if (!backdrop || !sheet || !itemsEl) return;
 
-  itemsEl.innerHTML = items
-    .map((item, i) => {
-      if (item.divider) return `<div class="options-menu-divider"></div>`;
-      return `
+  // Optional raw HTML block rendered above the generated item buttons —
+  // used by the message action sheet to show a row of quick-react emoji
+  // buttons without needing a second, parallel bottom-sheet component.
+  // Every existing call site passes only one argument, so headerHtml
+  // defaults to nothing and behaves exactly as before.
+  itemsEl.innerHTML =
+    headerHtml +
+    items
+      .map((item, i) => {
+        if (item.divider) return `<div class="options-menu-divider"></div>`;
+        return `
             <button onclick="window._runOptionsMenuAction(${i})" class="${item.danger ? "danger" : ""}">
                 <i class="${item.icon}"></i> ${esc(item.label)}
             </button>`;
-    })
-    .join("");
+      })
+      .join("");
 
   window._optionsMenuActions = items.map((item) => item.action || null);
 
@@ -8287,8 +8648,7 @@ async function loadFollowingFeed() {
 
   feed.classList.remove("grid-mode", "reels-mode");
   pauseAllReelVideos();
-  feed.innerHTML =
-    '<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Loading following feed...</div>';
+  feed.innerHTML = renderSkeletonCards(4, false);
 
   feedLoadedCount = 0;
   feedHasMore = true;
@@ -8318,6 +8678,7 @@ async function loadFollowingFeed() {
       .from("posts")
       .select(FEED_SELECT_COLUMNS)
       .eq("is_archived", false)
+      .or(`scheduled_for.is.null,scheduled_for.lte.${new Date().toISOString()}`)
       .in("user_id", followingFeedIds)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
@@ -8356,6 +8717,79 @@ async function loadFollowingFeed() {
   }
 }
 
+// Trending/Popular tab (doc: "a feed component that shows the most
+// liked/commented posts from the last 24-48 hours, independent of a
+// user's For You feed"). Deliberately a single fetch, not paginated like
+// the main feed — a fixed top-N snapshot is exactly what "trending right
+// now" means, and re-paginating deeper would just be scrolling into
+// steadily-less-trending territory. Reuses getFeedScore (the same
+// recency+engagement weighting the main feed's ranking already uses)
+// rather than inventing a second scoring formula, just over a tighter
+// 48h window instead of the whole feed's age range.
+const TRENDING_WINDOW_HOURS = 48;
+const TRENDING_POST_LIMIT = 30;
+
+async function loadTrendingFeed() {
+  const myGeneration = _feedLoadGeneration;
+  const feed = document.getElementById("posts-feed");
+  if (!feed) return;
+
+  feed.classList.remove("grid-mode", "reels-mode");
+  pauseAllReelVideos();
+  feed.innerHTML = renderSkeletonCards(4, false);
+
+  try {
+    const cutoff = new Date(
+      Date.now() - TRENDING_WINDOW_HOURS * 3600 * 1000,
+    ).toISOString();
+
+    const { data: posts, error } = await supabase
+      .from("posts")
+      .select(FEED_SELECT_COLUMNS)
+      .eq("is_archived", false)
+      .or(`scheduled_for.is.null,scheduled_for.lte.${new Date().toISOString()}`)
+      .gte("created_at", cutoff)
+      .order("created_at", { ascending: false })
+      .limit(200); // fetch a generous window, then rank client-side by engagement — see getFeedScore
+
+    if (error) throw error;
+    if (myGeneration !== _feedLoadGeneration) return; // superseded by a newer tab switch
+
+    let ranked = (posts || []).filter(
+      ({ user_id }) => !blockedUserIds.has(idKey(user_id)),
+    );
+    ranked.sort((a, b) => getFeedScore(b) - getFeedScore(a));
+    ranked = ranked.slice(0, TRENDING_POST_LIMIT);
+
+    if (!ranked.length) {
+      feed.innerHTML = `
+                <div class="text-center py-16 space-y-3">
+                    <p class="text-4xl">🔥</p>
+                    <p class="font-bold text-white">Nothing trending yet</p>
+                    <p class="text-slate-500 text-xs">Check back once today's listings pick up some likes and comments.</p>
+                </div>`;
+      return;
+    }
+
+    allCachedPosts = ranked.map((item) => ({ id: item.id, data: item }));
+    feedHasMore = false;
+
+    feed.innerHTML = `<div class="masonry-columns-feed py-2">${ranked.map((d) => renderFeedMasonryCard(d.id, d)).join("")}</div>
+            <p class="text-center text-slate-600 text-[10px] uppercase tracking-widest py-6">Trending over the last ${TRENDING_WINDOW_HOURS}h ✓</p>`;
+    ranked.forEach((d) => {
+      wireCarouselCounters(d.id);
+      fetchAndCacheCommentCount(d.id);
+    });
+
+    setupFeedVideoObserver();
+    setupFeedCommentAutoClose();
+    refreshFollowButtonStates();
+  } catch (err) {
+    console.error("Trending feed error:", err);
+    feed.innerHTML = `<div class="text-center py-12 text-slate-500 text-sm">Couldn't load trending posts. Try again.</div>`;
+  }
+}
+
 // Following tab's own "load more", since it filters by followingFeedIds
 // rather than the type-based baseFilter used everywhere else.
 async function loadNextFollowingPage() {
@@ -8373,6 +8807,7 @@ async function loadNextFollowingPage() {
       .from("posts")
       .select(FEED_SELECT_COLUMNS)
       .eq("is_archived", false)
+      .or(`scheduled_for.is.null,scheduled_for.lte.${new Date().toISOString()}`)
       .in("user_id", followingFeedIds)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false });
@@ -8402,6 +8837,41 @@ async function loadNextFollowingPage() {
   } finally {
     isFeedLoadingMore = false;
   }
+}
+
+// Skeleton screens (doc: "the current loading state is a spinner...a gray
+// outline of the content that's about to load is a much better UX").
+// Mimics the actual card/grid-tile shapes so there's no layout jump when
+// real content replaces these — count defaults to a typical first-screen
+// page size. grid=true renders square tiles (Explore/profile grids);
+// grid=false renders full feed-card-shaped rows (main feed).
+function renderSkeletonCards(count = 6, grid = false) {
+  if (grid) {
+    return `<div class="grid grid-cols-3 gap-2">${Array(count)
+      .fill(
+        `<div class="aspect-square rounded-xl bg-slate-800/60 skeleton-pulse"></div>`,
+      )
+      .join("")}</div>`;
+  }
+  return Array(count)
+    .fill(
+      `
+        <div class="rounded-2xl bg-slate-900 border border-slate-800/60 overflow-hidden mb-4">
+            <div class="flex items-center gap-2 p-3">
+                <div class="w-8 h-8 rounded-full bg-slate-800 skeleton-pulse shrink-0"></div>
+                <div class="flex-1 space-y-1.5">
+                    <div class="h-2.5 w-24 rounded bg-slate-800 skeleton-pulse"></div>
+                    <div class="h-2 w-16 rounded bg-slate-800/70 skeleton-pulse"></div>
+                </div>
+            </div>
+            <div class="aspect-square bg-slate-800/60 skeleton-pulse"></div>
+            <div class="p-3 space-y-2">
+                <div class="h-2.5 w-3/4 rounded bg-slate-800 skeleton-pulse"></div>
+                <div class="h-2.5 w-1/3 rounded bg-slate-800/70 skeleton-pulse"></div>
+            </div>
+        </div>`,
+    )
+    .join("");
 }
 
 function renderFeedFromCache() {
@@ -8809,7 +9279,8 @@ function syncFeedTabBodyClasses(type) {
     type === "product" ||
     type === "skill" ||
     type === "deals" ||
-    type === "following";
+    type === "following" ||
+    type === "trending";
   document.body.classList.toggle("feed-tab-all", type === "all");
   document.body.classList.toggle("feed-tab-grid", isGridTab);
   document.body.classList.toggle("feed-tab-deals", type === "deals");
@@ -8822,6 +9293,7 @@ window.filterFeed = function (type, clickedBtn = null) {
   const previousType = currentFeedType;
   currentFeedType = type;
   _feedLoadGeneration++;
+  _prefetchedFeedPage = null; // belonged to whichever tab was active before this switch
 
   syncFeedTabBodyClasses(type);
 
@@ -8867,10 +9339,17 @@ window.filterFeed = function (type, clickedBtn = null) {
     return;
   }
 
+  if (type === "trending") {
+    unsubscribeFeed();
+    loadTrendingFeed();
+    return;
+  }
+
   const feed = document.getElementById("posts-feed");
   if (feed) {
-    feed.innerHTML =
-      '<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Loading...</div>';
+    const usesGridLayout =
+      type === "product" || type === "skill" || type === "deals";
+    feed.innerHTML = renderSkeletonCards(6, usesGridLayout);
   }
 
   // Product tab still fetches ALL posts (so grid + other tabs share cache)
@@ -9068,6 +9547,185 @@ window.runSearch = function (term) {
   _searchDebounceTimer = setTimeout(() => {
     _runSearchImmediate(term);
   }, 300);
+
+  _updateSearchAutocomplete(term);
+};
+
+// ─── 16a. SEARCH FILTERS (price, date posted, location) ───────────────────
+// One state object, read at query time, so the filter panel UI and the
+// query builder below never drift out of sync with each other.
+const searchFilters = {
+  minPrice: null,
+  maxPrice: null,
+  datePosted: "any", // 'any' | 'today' | 'week' | 'month'
+  location: "", // institution name, blank = no location filter (Everywhere)
+};
+
+function _hasActiveSearchFilters() {
+  return (
+    searchFilters.minPrice !== null ||
+    searchFilters.maxPrice !== null ||
+    searchFilters.datePosted !== "any" ||
+    !!searchFilters.location
+  );
+}
+
+// Converts a datePosted choice into an ISO cutoff timestamp for a
+// .gte('created_at', ...) filter. Returns null for 'any' (no cutoff).
+function _datePostedCutoffISO(datePosted) {
+  const now = new Date();
+  if (datePosted === "today") {
+    now.setHours(0, 0, 0, 0);
+  } else if (datePosted === "week") {
+    now.setDate(now.getDate() - 7);
+  } else if (datePosted === "month") {
+    now.setMonth(now.getMonth() - 1);
+  } else {
+    return null;
+  }
+  return now.toISOString();
+}
+
+// Populates the location filter <select> once with every known
+// institution — reuses ALL_INSTITUTIONS (already built from GHANA_DATA for
+// onboarding) instead of maintaining a second list.
+function populateSearchLocationFilter() {
+  const locEl = document.getElementById("search-filter-location");
+  if (!locEl || locEl.dataset.populated === "true") return;
+  locEl.innerHTML =
+    `<option value="">Everywhere</option>` +
+    ALL_INSTITUTIONS.map(
+      (i) => `<option value="${escAttr(i)}">${esc(i)}</option>`,
+    ).join("");
+  locEl.dataset.populated = "true";
+}
+
+window.applySearchFilters = function () {
+  const minEl = document.getElementById("search-filter-min-price");
+  const maxEl = document.getElementById("search-filter-max-price");
+  const dateEl = document.getElementById("search-filter-date");
+  const locEl = document.getElementById("search-filter-location");
+
+  const minVal = parseFloat((minEl?.value || "").replace(/,/g, ""));
+  const maxVal = parseFloat((maxEl?.value || "").replace(/,/g, ""));
+
+  searchFilters.minPrice = Number.isFinite(minVal) ? minVal : null;
+  searchFilters.maxPrice = Number.isFinite(maxVal) ? maxVal : null;
+  searchFilters.datePosted = dateEl?.value || "any";
+  searchFilters.location = locEl?.value || "";
+
+  const badge = document.getElementById("search-filter-badge");
+  if (badge) {
+    const activeCount = [
+      searchFilters.minPrice !== null,
+      searchFilters.maxPrice !== null,
+      searchFilters.datePosted !== "any",
+      !!searchFilters.location,
+    ].filter(Boolean).length;
+    badge.textContent = String(activeCount);
+    badge.classList.toggle("hidden", activeCount === 0);
+  }
+
+  const input = document.getElementById("campus-global-search");
+  _runSearchImmediate(input?.value || "");
+};
+
+window.clearSearchFilters = function () {
+  searchFilters.minPrice = null;
+  searchFilters.maxPrice = null;
+  searchFilters.datePosted = "any";
+  searchFilters.location = "";
+
+  const minEl = document.getElementById("search-filter-min-price");
+  const maxEl = document.getElementById("search-filter-max-price");
+  const dateEl = document.getElementById("search-filter-date");
+  const locEl = document.getElementById("search-filter-location");
+  if (minEl) minEl.value = "";
+  if (maxEl) maxEl.value = "";
+  if (dateEl) dateEl.value = "any";
+  if (locEl) locEl.value = "";
+
+  const badge = document.getElementById("search-filter-badge");
+  if (badge) badge.classList.add("hidden");
+
+  const input = document.getElementById("campus-global-search");
+  _runSearchImmediate(input?.value || "");
+};
+
+// ─── 16b. SEARCH AUTOCOMPLETE ──────────────────────────────────────────────
+// Lightweight, local-only suggestions (no extra DB round trip per
+// keystroke): matches against saved search alerts and titles already
+// sitting in allCachedPosts. Genuinely new/rare terms just won't suggest
+// anything, which is fine — the debounced real search below still covers
+// them.
+function _updateSearchAutocomplete(term) {
+  const box = document.getElementById("search-autocomplete");
+  if (!box) return;
+
+  const q = term.trim().toLowerCase();
+  if (!q) {
+    box.innerHTML = "";
+    box.classList.add("hidden");
+    return;
+  }
+
+  const suggestions = new Set();
+
+  savedSearchAlerts.forEach((alert) => {
+    if (alert.term && alert.term.toLowerCase().includes(q)) {
+      suggestions.add(alert.term);
+    }
+  });
+
+  for (const item of allCachedPosts || []) {
+    const d = item.data ? item.data : item;
+    const title = d?.title;
+    if (title && title.toLowerCase().includes(q)) {
+      suggestions.add(title);
+    }
+    if (suggestions.size >= 6) break;
+  }
+
+  const list = [...suggestions].slice(0, 6);
+  if (!list.length) {
+    box.innerHTML = "";
+    box.classList.add("hidden");
+    return;
+  }
+
+  box.innerHTML = list
+    .map(
+      (s) =>
+        `<button type="button" class="search-autocomplete-item" onclick="window._pickAutocompleteSuggestion('${escAttr(s)}')"><i class="fas fa-search text-slate-600 text-[10px] mr-2"></i>${esc(s)}</button>`,
+    )
+    .join("");
+  box.classList.remove("hidden");
+}
+
+window._pickAutocompleteSuggestion = function (term) {
+  const input = document.getElementById("campus-global-search");
+  if (input) input.value = term;
+  const box = document.getElementById("search-autocomplete");
+  if (box) {
+    box.innerHTML = "";
+    box.classList.add("hidden");
+  }
+  window.runSearch(term);
+};
+
+// Location filter <select> just needs its options built once, whenever
+// the DOM is ready — ALL_INSTITUTIONS is already available at module load
+// time (built from the static GHANA_DATA object), no auth/network wait
+// needed.
+document.addEventListener("DOMContentLoaded", populateSearchLocationFilter);
+
+// Toggles the filter panel open/closed under the search bar. Kept as a
+// simple show/hide (not built fresh each time) so typed-but-not-yet-
+// applied filter values survive opening/closing the panel.
+window.toggleSearchFilterPanel = function () {
+  const panel = document.getElementById("search-filter-panel");
+  if (!panel) return;
+  panel.classList.toggle("hidden");
 };
 
 async function _runSearchImmediate(term) {
@@ -9075,7 +9733,11 @@ async function _runSearchImmediate(term) {
   if (!resultsEl) return;
 
   const trimmedTerm = term.trim();
-  if (!trimmedTerm) {
+  // A blank search box used to always bounce back to the main feed. Now it
+  // only does that when no filters are active either — with a price/date/
+  // location filter set, an empty box means "browse everything matching
+  // these filters" rather than "there's nothing to search for".
+  if (!trimmedTerm && !_hasActiveSearchFilters()) {
     window._searchNavInProgress = true;
     window.navigateTo("feed");
     window._searchNavInProgress = false;
@@ -9105,30 +9767,96 @@ async function _runSearchImmediate(term) {
   // safe inside an ilike %...% wildcard.
   const safeTerm = trimmedTerm.replace(/[,()]/g, "").trim();
   let searchResults = [];
+  let usedFuzzyFallback = false;
 
-  if (safeTerm) {
+  // Applies the price/date/location filter state client-side — used for
+  // the error fallback path (allCachedPosts) so a transient DB error
+  // doesn't silently ignore filters the person explicitly set.
+  function _applyClientSideFilters(items) {
+    const cutoff = _datePostedCutoffISO(searchFilters.datePosted);
+    return items.filter((item) => {
+      const d = item.data ? item.data : item;
+      if (!d) return false;
+      const price = Number(d.price);
+      if (searchFilters.minPrice !== null && !(price >= searchFilters.minPrice))
+        return false;
+      if (searchFilters.maxPrice !== null && !(price <= searchFilters.maxPrice))
+        return false;
+      if (cutoff && !(d.created_at && d.created_at >= cutoff)) return false;
+      if (searchFilters.location && d.institution !== searchFilters.location)
+        return false;
+      return true;
+    });
+  }
+
+  if (safeTerm || _hasActiveSearchFilters()) {
     try {
-      const orFilter = [
-        "title",
-        "description",
-        "user_name",
-        "institution",
-        "region",
-        "type",
-      ]
-        .map((col) => `${col}.ilike.%${safeTerm}%`)
-        .join(",");
-
-      const { data, error } = await supabase
+      let query = supabase
         .from("posts")
         .select(FEED_SELECT_COLUMNS)
         .eq("is_archived", false)
-        .or(orFilter)
+        .or(
+          `scheduled_for.is.null,scheduled_for.lte.${new Date().toISOString()}`,
+        );
+
+      // Keyword condition is optional now — filters alone (price/date/
+      // location) can carry a query with no typed term at all.
+      if (safeTerm) {
+        const orFilter = [
+          "title",
+          "description",
+          "user_name",
+          "institution",
+          "region",
+          "type",
+        ]
+          .map((col) => `${col}.ilike.%${safeTerm}%`)
+          .join(",");
+        query = query.or(orFilter);
+      }
+
+      if (searchFilters.minPrice !== null)
+        query = query.gte("price", searchFilters.minPrice);
+      if (searchFilters.maxPrice !== null)
+        query = query.lte("price", searchFilters.maxPrice);
+      const dateCutoff = _datePostedCutoffISO(searchFilters.datePosted);
+      if (dateCutoff) query = query.gte("created_at", dateCutoff);
+      if (searchFilters.location)
+        query = query.eq("institution", searchFilters.location);
+
+      const { data, error } = await query
         .order("created_at", { ascending: false })
         .limit(SEARCH_LIMIT);
 
       if (error) throw error;
       searchResults = (data || []).map((item) => ({ id: item.id, data: item }));
+
+      // Typo-tolerance fallback: only kicks in when there's an actual typed
+      // term, the exact/substring (ilike) search above came back empty, and
+      // no filters are narrowing things further (a fuzzy match combined
+      // with unrelated filters would be confusing). Calls the
+      // search_posts_fuzzy Postgres function (pg_trgm-backed — see
+      // supabase_migration_fuzzy_search.sql). If that migration hasn't been
+      // run yet, the RPC call fails harmlessly and search just stays
+      // "no results" like before, so this is safe to ship ahead of running
+      // the migration.
+      if (
+        safeTerm &&
+        searchResults.length === 0 &&
+        !_hasActiveSearchFilters()
+      ) {
+        const { data: fuzzyData, error: fuzzyError } = await supabase.rpc(
+          "search_posts_fuzzy",
+          { search_term: safeTerm, match_limit: SEARCH_LIMIT },
+        );
+        if (!fuzzyError && fuzzyData && fuzzyData.length > 0) {
+          searchResults = fuzzyData.map((item) => ({
+            id: item.id,
+            data: item,
+          }));
+          usedFuzzyFallback = true;
+        }
+      }
     } catch (e) {
       console.error("Search query error:", e);
       // Fix: previously any DB error here was silently swallowed and
@@ -9138,7 +9866,7 @@ async function _runSearchImmediate(term) {
       // Fall back to searching the local cache so a transient error
       // doesn't leave the person with a dead search box, but tell
       // them results may be incomplete rather than staying silent.
-      searchResults = allCachedPosts || [];
+      searchResults = _applyClientSideFilters(allCachedPosts || []);
       showToast(
         "Couldn't reach the server — showing recently loaded posts only.",
       );
@@ -9166,49 +9894,64 @@ async function _runSearchImmediate(term) {
   // match now correctly outranks a match buried in a long description,
   // and recency acts as a tiebreaker so identical-relevance results
   // don't feel randomly ordered.
-  const scored = [];
-  for (const item of searchResults) {
-    const d = item.data ? item.data : item;
-    if (!d) continue;
+  // Fuzzy-fallback results are already ranked by trigram similarity
+  // server-side (search_posts_fuzzy's ORDER BY) — none of them contain the
+  // typed term as an exact substring (that's precisely why the plain
+  // ilike search above found nothing), so re-scoring them by substring
+  // match here would score every single one at 0 and wipe out the very
+  // results we just fetched. Keep the DB's similarity order instead.
+  let matches;
+  if (usedFuzzyFallback) {
+    matches = searchResults;
+  } else {
+    const scored = [];
+    for (const item of searchResults) {
+      const d = item.data ? item.data : item;
+      if (!d) continue;
 
-    const title = (d.title || "").toLowerCase();
-    const description = (d.description || "").toLowerCase();
-    const userName = (d.user_name || "").toLowerCase();
-    const institution = (d.institution || "").toLowerCase();
-    const type = (d.type || "").toLowerCase();
-    const region = (d.region || "").toLowerCase();
+      const title = (d.title || "").toLowerCase();
+      const description = (d.description || "").toLowerCase();
+      const userName = (d.user_name || "").toLowerCase();
+      const institution = (d.institution || "").toLowerCase();
+      const type = (d.type || "").toLowerCase();
+      const region = (d.region || "").toLowerCase();
 
-    let score = 0;
-    if (title === lower)
-      score += 100; // exact title match
-    else if (title.startsWith(lower))
-      score += 60; // title starts with query
-    else if (title.includes(lower)) score += 40; // query appears in title
-    if (description.includes(lower)) score += 15;
-    if (userName.includes(lower)) score += 10;
-    if (type.includes(lower)) score += 8;
-    if (institution.includes(lower)) score += 5;
-    if (region.includes(lower)) score += 5;
+      let score = 0;
+      if (title === lower)
+        score += 100; // exact title match
+      else if (title.startsWith(lower))
+        score += 60; // title starts with query
+      else if (title.includes(lower)) score += 40; // query appears in title
+      if (description.includes(lower)) score += 15;
+      if (userName.includes(lower)) score += 10;
+      if (type.includes(lower)) score += 8;
+      if (institution.includes(lower)) score += 5;
+      if (region.includes(lower)) score += 5;
 
-    if (score > 0) scored.push({ item, score, createdAt: d.created_at || "" });
+      if (score > 0)
+        scored.push({ item, score, createdAt: d.created_at || "" });
+    }
+
+    // Ties broken by recency (newest first) so fresh listings surface
+    // ahead of stale ones with identical text relevance — same intent as
+    // the blueprint's "feed decay" idea, applied to search instead of the
+    // main feed, which already has its own decay ranking.
+    scored.sort(
+      (a, b) => b.score - a.score || (b.createdAt > a.createdAt ? 1 : -1),
+    );
+    matches = scored.map((s) => s.item);
   }
 
-  // Ties broken by recency (newest first) so fresh listings surface
-  // ahead of stale ones with identical text relevance — same intent as
-  // the blueprint's "feed decay" idea, applied to search instead of the
-  // main feed, which already has its own decay ranking.
-  scored.sort(
-    (a, b) => b.score - a.score || (b.createdAt > a.createdAt ? 1 : -1),
-  );
-  const matches = scored.map((s) => s.item);
-
   if (matches.length === 0) {
+    const noResultsLabel = trimmedTerm
+      ? `No results for "${esc(trimmedTerm)}"`
+      : "No listings match these filters";
     resultsEl.innerHTML = `
             <div class="text-center py-14 space-y-3">
                 <p class="text-4xl">🔍</p>
-                <p class="text-slate-400 font-bold text-sm">No results for "${esc(trimmedTerm)}"</p>
-                <p class="text-slate-600 text-xs">Try searching for alternative keys, items, or skills</p>
-                <button onclick="window.saveSearchAlert('${escAttr(trimmedTerm)}')" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-400 text-black text-[11px] font-black uppercase tracking-wider active:scale-95 transition"><i class="fas fa-bell"></i> Notify me when posted</button>
+                <p class="text-slate-400 font-bold text-sm">${noResultsLabel}</p>
+                <p class="text-slate-600 text-xs">Try searching for alternative keys, items, or skills${_hasActiveSearchFilters() ? ", or clear a filter" : ""}</p>
+                ${trimmedTerm ? `<button onclick="window.saveSearchAlert('${escAttr(trimmedTerm)}')" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-400 text-black text-[11px] font-black uppercase tracking-wider active:scale-95 transition"><i class="fas fa-bell"></i> Notify me when posted</button>` : ""}
                 ${renderSavedAlertPills(trimmedTerm)}
             </div>`;
     return;
@@ -9217,9 +9960,9 @@ async function _runSearchImmediate(term) {
   resultsEl.innerHTML = `
         <div class="flex items-center justify-between gap-3 mb-3">
             <p class="text-[10px] text-slate-500 uppercase font-bold tracking-widest">
-                ${matches.length} campus result${matches.length !== 1 ? "s" : ""} found
+                ${matches.length} campus result${matches.length !== 1 ? "s" : ""} found${usedFuzzyFallback ? " · showing close matches" : ""}
             </p>
-            <button onclick="window.saveSearchAlert('${escAttr(trimmedTerm)}')" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-amber-400/40 text-amber-300 text-[10px] font-black uppercase tracking-wider active:scale-95 transition"><i class="fas fa-bell mr-1"></i>Save alert</button>
+            ${trimmedTerm ? `<button onclick="window.saveSearchAlert('${escAttr(trimmedTerm)}')" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-amber-400/40 text-amber-300 text-[10px] font-black uppercase tracking-wider active:scale-95 transition"><i class="fas fa-bell mr-1"></i>Save alert</button>` : ""}
         </div>
         ${renderSavedAlertPills(trimmedTerm)}`;
 
@@ -9235,6 +9978,98 @@ async function _runSearchImmediate(term) {
   setupFeedCommentAutoClose();
   refreshFollowButtonStates();
 }
+
+// ─── 16d. POST DRAFTS ───────────────────────────────────────────────────────
+// Text fields only (title/description/price/type/flash-sale/schedule
+// settings) — attached photos/videos are File objects that can't be
+// serialized into localStorage, so a resumed draft always needs media
+// re-attached. That's flagged in the UI copy rather than hidden, so it
+// doesn't look like a bug when photos don't come back.
+const POST_DRAFT_KEY = "campus_market_post_draft";
+
+function _readPostDraftFields() {
+  return {
+    title: document.getElementById("postTitle")?.value || "",
+    description: document.getElementById("postDescription")?.value || "",
+    price: document.getElementById("postPrice")?.value || "",
+    type: document.getElementById("postType")?.value || "product",
+    flashSaleEnabled: !!document.getElementById("postFlashSaleToggle")?.checked,
+    originalPrice: document.getElementById("postOriginalPrice")?.value || "",
+    saleEndsAt: document.getElementById("postSaleEndsAt")?.value || "",
+    scheduleEnabled: !!document.getElementById("postScheduleToggle")?.checked,
+    scheduledFor: document.getElementById("postScheduledFor")?.value || "",
+  };
+}
+
+window._savePostDraft = function () {
+  const fields = _readPostDraftFields();
+  if (!fields.title && !fields.description) {
+    showToast("Nothing to save yet — add a title or description first.");
+    return;
+  }
+  try {
+    localStorage.setItem(POST_DRAFT_KEY, JSON.stringify(fields));
+    showToast("Draft saved (text only — you'll need to re-attach photos).");
+  } catch (_) {
+    showToast("Couldn't save draft.");
+  }
+};
+
+window._checkForSavedDraft = function () {
+  const banner = document.getElementById("postDraftBanner");
+  if (!banner) return;
+  let saved = null;
+  try {
+    saved = localStorage.getItem(POST_DRAFT_KEY);
+  } catch (_) {}
+  banner.classList.toggle("hidden", !saved);
+};
+
+window._discardPostDraft = function () {
+  try {
+    localStorage.removeItem(POST_DRAFT_KEY);
+  } catch (_) {}
+  document.getElementById("postDraftBanner")?.classList.add("hidden");
+  showToast("Draft discarded.");
+};
+
+window._resumePostDraft = function () {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(POST_DRAFT_KEY) || "null");
+  } catch (_) {}
+  if (!saved) return;
+
+  const setVal = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.value = val || "";
+  };
+  setVal("postTitle", saved.title);
+  setVal("postDescription", saved.description);
+  setVal("postPrice", saved.price);
+  setVal("postType", saved.type);
+  setVal("postOriginalPrice", saved.originalPrice);
+  setVal("postSaleEndsAt", saved.saleEndsAt);
+  setVal("postScheduledFor", saved.scheduledFor);
+
+  const flashToggle = document.getElementById("postFlashSaleToggle");
+  if (flashToggle) {
+    flashToggle.checked = !!saved.flashSaleEnabled;
+    document
+      .getElementById("postFlashSaleFields")
+      ?.classList.toggle("hidden", !saved.flashSaleEnabled);
+  }
+  const scheduleToggle = document.getElementById("postScheduleToggle");
+  if (scheduleToggle) {
+    scheduleToggle.checked = !!saved.scheduleEnabled;
+    document
+      .getElementById("postScheduleFields")
+      ?.classList.toggle("hidden", !saved.scheduleEnabled);
+  }
+
+  document.getElementById("postDraftBanner")?.classList.add("hidden");
+  showToast("Draft resumed — don't forget to re-attach your photos/video.");
+};
 
 // ─── 17. POST SUBMISSION ─────────────────────────────────────────────────────
 // Guard flag + visible button state so a double-tap (or slow network retry)
@@ -9306,6 +10141,29 @@ window.handlePostSubmission = async function () {
     return;
   }
 
+  // Post scheduling: publishing at a future time instead of immediately.
+  // No server-side cron needed — a scheduled post is inserted right away
+  // with scheduled_for set, and the main feed query simply excludes
+  // anything whose scheduled_for is still in the future. It becomes
+  // visible to everyone else the instant that time passes, without any
+  // extra publish step.
+  const scheduleEnabled =
+    !!document.getElementById("postScheduleToggle")?.checked;
+  const scheduledForRaw = scheduleEnabled
+    ? document.getElementById("postScheduledFor")?.value || ""
+    : "";
+  if (scheduleEnabled && !scheduledForRaw) {
+    showToast("Please set a publish time, or turn scheduling off.");
+    return;
+  }
+  const scheduledForIso = scheduledForRaw
+    ? new Date(scheduledForRaw).toISOString()
+    : null;
+  if (scheduledForIso && new Date(scheduledForIso).getTime() <= Date.now()) {
+    showToast("Scheduled publish time must be in the future.");
+    return;
+  }
+
   // Prefer the reviewed/edited (already-compressed) files from the
   // WhatsApp-style edit modal; fall back to the raw file input if the
   // user somehow skipped it — but still compress raw images here too,
@@ -9327,6 +10185,13 @@ window.handlePostSubmission = async function () {
               maxDimension: 1280,
               quality: 0.75,
             });
+          } catch (_) {
+            return f;
+          }
+        }
+        if (f.type && f.type.startsWith("video/")) {
+          try {
+            return await compressVideoFile(f);
           } catch (_) {
             return f;
           }
@@ -9421,8 +10286,6 @@ window.handlePostSubmission = async function () {
     // and detail-view carousel already render as a swipeable gallery.
     for (let i = 0; i < mediaFiles.length; i++) {
       let file = mediaFiles[i];
-      const ext = (file.name || "file").split(".").pop();
-      const storagePath = `${currentUserData.id}/${Date.now()}-${i}.${ext}`;
 
       if (submitBtnLabel)
         submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Uploading ${i + 1}/${mediaFiles.length}...`;
@@ -9435,9 +10298,12 @@ window.handlePostSubmission = async function () {
       // making them by far the largest driver of Supabase egress.
       // 1600px/0.8 keeps them sharp in the full-screen detail
       // carousel while cutting typical phone-camera file size by
-      // roughly 80-90%. Videos are left untouched (compression only
-      // handles raster images).
+      // roughly 80-90%. Videos now go through compressVideoFile the
+      // same way — see that function for why it's a native
+      // canvas/MediaRecorder re-encode rather than a WASM transcoder.
+      // Matters most while on free-tier Supabase storage/egress.
       const isImage = file.type && file.type.startsWith("image/");
+      const isVideoFile = file.type && file.type.startsWith("video/");
       if (isImage) {
         try {
           file = await compressImageFile(file, {
@@ -9450,7 +10316,35 @@ window.handlePostSubmission = async function () {
             compressErr,
           );
         }
+      } else if (isVideoFile) {
+        // Re-encoding plays the clip through once in the background, so
+        // this can take a few seconds — say so explicitly rather than
+        // leaving the same generic "Uploading..." label sitting there
+        // with no visible progress the whole time.
+        if (submitBtnLabel) {
+          submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Compressing video ${i + 1}/${mediaFiles.length}...`;
+        }
+        try {
+          file = await compressVideoFile(file);
+        } catch (compressErr) {
+          console.warn(
+            "Video compression failed, uploading original:",
+            compressErr,
+          );
+        }
+        if (submitBtnLabel) {
+          submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Uploading ${i + 1}/${mediaFiles.length}...`;
+        }
       }
+
+      // Computed AFTER compression, not before: compressVideoFile can
+      // change the file's extension (e.g. a .mov capture becomes
+      // .webm), so building storagePath from the ORIGINAL extension
+      // would leave the uploaded path's extension mismatched with what
+      // was actually uploaded, even though the correct contentType
+      // still gets set on the upload call below.
+      const ext = (file.name || "file").split(".").pop();
+      const storagePath = `${currentUserData.id}/${Date.now()}-${i}.${ext}`;
 
       await withUploadRetry(
         async () => {
@@ -9550,6 +10444,7 @@ window.handlePostSubmission = async function () {
       price: parsedPrice || 0,
       original_price: parsedOriginalPrice,
       sale_ends_at: saleEndsIso,
+      scheduled_for: scheduledForIso,
       media_url: JSON.stringify(publicUrls),
       thumbnail_url: thumbnailUrl || null,
       media_type: primaryMediaType,
@@ -9565,6 +10460,13 @@ window.handlePostSubmission = async function () {
     if (insertError) throw insertError;
     trackEvent("post_created", { type });
 
+    // A saved draft's job is done once its content actually gets
+    // published — clearing it here avoids a stale "Resume draft" banner
+    // reappearing next time the compose sheet opens.
+    try {
+      localStorage.removeItem(POST_DRAFT_KEY);
+    } catch (_) {}
+
     document.getElementById("postTitle").value = "";
     document.getElementById("postDescription").value = "";
     document.getElementById("postPrice").value = "";
@@ -9577,6 +10479,11 @@ window.handlePostSubmission = async function () {
     if (originalPriceEl) originalPriceEl.value = "";
     const saleEndsEl = document.getElementById("postSaleEndsAt");
     if (saleEndsEl) saleEndsEl.value = "";
+    const scheduleToggleEl = document.getElementById("postScheduleToggle");
+    if (scheduleToggleEl) scheduleToggleEl.checked = false;
+    document.getElementById("postScheduleFields")?.classList.add("hidden");
+    const scheduledForEl = document.getElementById("postScheduledFor");
+    if (scheduledForEl) scheduledForEl.value = "";
 
     // Clear staged/final media state so re-opening the modal never
     // silently reuses a previous upload's files.
@@ -9590,7 +10497,9 @@ window.handlePostSubmission = async function () {
 
     window.togglePostModal();
     showToast(
-      `Post published with ${publicUrls.length} file${publicUrls.length > 1 ? "s" : ""}! 🎉`,
+      scheduledForIso
+        ? `Scheduled — goes live ${formatMonthYear(scheduledForIso)} at ${formatClockTime(scheduledForIso)} 🕒`
+        : `Post published with ${publicUrls.length} file${publicUrls.length > 1 ? "s" : ""}! 🎉`,
     );
   } catch (err) {
     console.error("Post submission error:", err);
@@ -9628,18 +10537,22 @@ async function loadProfileStats() {
       // cosmetic.
       supabase
         .from("posts")
-        .select("id, title, media_url, thumbnail_url, media_type, price")
+        .select(
+          "id, title, media_url, thumbnail_url, media_type, price, scheduled_for, is_featured",
+        )
         .eq("user_id", currentUserData.id)
         .eq("is_archived", false)
         .order("created_at", { ascending: false }),
       supabase
         .from("profiles")
-        .select("bio")
+        .select("bio, major, interests, created_at")
         .eq("id", currentUserData.id)
         .maybeSingle(),
     ]);
 
     currentUserData.bio = bioRes.data?.bio || "";
+    currentUserData.major = bioRes.data?.major || "";
+    currentUserData.interests = bioRes.data?.interests || "";
     const bioEl = document.getElementById("profile-ui-bio");
     if (bioEl) {
       if (currentUserData.bio) {
@@ -9648,6 +10561,42 @@ async function loadProfileStats() {
       } else {
         bioEl.classList.add("hidden");
       }
+    }
+
+    const majorEl = document.getElementById("profile-ui-major");
+    if (majorEl) {
+      if (currentUserData.major) {
+        majorEl.innerHTML = `<i class="fas fa-graduation-cap mr-1 text-amber-400/70"></i>${esc(currentUserData.major)}`;
+        majorEl.classList.remove("hidden");
+      } else {
+        majorEl.classList.add("hidden");
+      }
+    }
+
+    const interestsEl = document.getElementById("profile-ui-interests");
+    if (interestsEl) {
+      const tags = currentUserData.interests
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      if (tags.length) {
+        interestsEl.innerHTML = tags
+          .map(
+            (t) =>
+              `<span class="bg-slate-800 border border-slate-700 text-slate-300 text-[10px] rounded-full px-2.5 py-0.5">${esc(t)}</span>`,
+          )
+          .join("");
+        interestsEl.classList.remove("hidden");
+      } else {
+        interestsEl.innerHTML = "";
+        interestsEl.classList.add("hidden");
+      }
+    }
+
+    const activeSinceEl = document.getElementById("profile-ui-active-since");
+    if (activeSinceEl && bioRes.data?.created_at) {
+      activeSinceEl.textContent = `On campus since ${formatMonthYear(bioRes.data.created_at)}`;
+      activeSinceEl.classList.remove("hidden");
     }
 
     const postsCount = postsRes.data ? postsRes.data.length : 0;
@@ -9734,6 +10683,8 @@ function populateAccountSettings() {
   const nameInput = document.getElementById("settingsDisplayName");
   const emailInput = document.getElementById("settingsEmail");
   const bioInput = document.getElementById("settingsBio");
+  const majorInput = document.getElementById("settingsMajor");
+  const interestsInput = document.getElementById("settingsInterests");
   const metadata = currentUserData.user_metadata || {};
 
   if (nameInput && !nameInput.dataset.userEdited) {
@@ -9746,6 +10697,12 @@ function populateAccountSettings() {
     bioInput.value = currentUserData.bio || "";
     const counter = document.getElementById("settingsBioCount");
     if (counter) counter.textContent = bioInput.value.length;
+  }
+  if (majorInput && !majorInput.dataset.userEdited) {
+    majorInput.value = currentUserData.major || "";
+  }
+  if (interestsInput && !interestsInput.dataset.userEdited) {
+    interestsInput.value = currentUserData.interests || "";
   }
 
   const stripName = document.getElementById("settingsCampusStripName");
@@ -9771,13 +10728,29 @@ document.getElementById("settingsBio")?.addEventListener("input", function () {
 });
 
 document
+  .getElementById("settingsMajor")
+  ?.addEventListener("input", function () {
+    this.dataset.userEdited = "true";
+  });
+
+document
+  .getElementById("settingsInterests")
+  ?.addEventListener("input", function () {
+    this.dataset.userEdited = "true";
+  });
+
+document
   .getElementById("saveAccountBtn")
   ?.addEventListener("click", async () => {
     if (!currentUserData) return;
     const nameInput = document.getElementById("settingsDisplayName");
     const bioInput = document.getElementById("settingsBio");
+    const majorInput = document.getElementById("settingsMajor");
+    const interestsInput = document.getElementById("settingsInterests");
     const newName = nameInput?.value.trim();
     const newBio = bioInput?.value.trim() || "";
+    const newMajor = majorInput?.value.trim() || "";
+    const newInterests = interestsInput?.value.trim() || "";
 
     if (!newName) {
       showToast("Please enter a display name.");
@@ -9792,7 +10765,12 @@ document
 
       const { error } = await supabase
         .from("profiles")
-        .update({ name: newName, bio: newBio })
+        .update({
+          name: newName,
+          bio: newBio,
+          major: newMajor,
+          interests: newInterests,
+        })
         .eq("id", currentUserData.id);
       if (error) throw error;
 
@@ -9808,6 +10786,8 @@ document
       if (!currentUserData.user_metadata) currentUserData.user_metadata = {};
       currentUserData.user_metadata.full_name = newName;
       currentUserData.bio = newBio;
+      currentUserData.major = newMajor;
+      currentUserData.interests = newInterests;
 
       allCachedPosts.forEach(({ data: d }) => {
         if (d.user_id === currentUserData.id) d.user_name = newName;
@@ -9826,8 +10806,40 @@ document
         }
       }
 
+      const majorEl = document.getElementById("profile-ui-major");
+      if (majorEl) {
+        if (newMajor) {
+          majorEl.innerHTML = `<i class="fas fa-graduation-cap mr-1 text-amber-400/70"></i>${esc(newMajor)}`;
+          majorEl.classList.remove("hidden");
+        } else {
+          majorEl.classList.add("hidden");
+        }
+      }
+
+      const interestsEl = document.getElementById("profile-ui-interests");
+      if (interestsEl) {
+        const tags = newInterests
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean);
+        if (tags.length) {
+          interestsEl.innerHTML = tags
+            .map(
+              (t) =>
+                `<span class="bg-slate-800 border border-slate-700 text-slate-300 text-[10px] rounded-full px-2.5 py-0.5">${esc(t)}</span>`,
+            )
+            .join("");
+          interestsEl.classList.remove("hidden");
+        } else {
+          interestsEl.innerHTML = "";
+          interestsEl.classList.add("hidden");
+        }
+      }
+
       if (nameInput) delete nameInput.dataset.userEdited;
       if (bioInput) delete bioInput.dataset.userEdited;
+      if (majorInput) delete majorInput.dataset.userEdited;
+      if (interestsInput) delete interestsInput.dataset.userEdited;
       showToast("Profile updated everywhere! ✓");
     } catch (err) {
       console.error("Save name error:", err);
@@ -9989,7 +11001,118 @@ const INFO_SHEET_CONTENT = {
                 </div>`;
     },
   },
+  reports: {
+    title: "Your Reports",
+    // Same async-loading pattern as "archived" above. Relies entirely
+    // on the reports table's existing reports_select_own RLS policy
+    // (a reporter can already read their own rows) — no new policy or
+    // function needed, just a UI that was never built for it.
+    render: () => {
+      if (!currentUserData) {
+        return `<div class="info-sheet-empty"><p class="text-xs">Please sign in first.</p></div>`;
+      }
+      setTimeout(loadMyReportsIntoSheet, 0);
+      return `
+                <div class="flex items-center justify-center py-12">
+                    <i class="fas fa-circle-notch fa-spin text-slate-600 text-xl"></i>
+                </div>`;
+    },
+  },
 };
+
+async function loadMyReportsIntoSheet() {
+  const bodyEl = document.getElementById("info-sheet-body");
+  if (
+    !bodyEl ||
+    !document
+      .getElementById("info-sheet-overlay")
+      ?.classList.contains("sheet-open")
+  )
+    return;
+
+  let reports = [];
+  try {
+    const { data, error } = await supabase
+      .from("reports")
+      .select("id, target_type, target_id, reason, status, created_at")
+      .eq("reporter_id", currentUserData.id)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    reports = data || [];
+  } catch (err) {
+    console.warn("My reports load error:", err);
+    bodyEl.innerHTML = `
+            <div class="info-sheet-empty">
+                <i class="fas fa-triangle-exclamation text-2xl mb-2 text-slate-600"></i>
+                <p class="text-xs">Couldn't load your reports — make sure supabase_migration_report_status.sql has been run.</p>
+            </div>`;
+    return;
+  }
+
+  if (!reports.length) {
+    bodyEl.innerHTML = `
+            <div class="info-sheet-empty">
+                <i class="fas fa-flag text-3xl mb-3 text-slate-600"></i>
+                <p class="text-slate-300 font-bold text-sm mb-1">No reports yet</p>
+                <p class="text-xs max-w-[240px] leading-relaxed">Anything you report from a listing, comment, or chat shows up here so you can track what happened with it.</p>
+            </div>`;
+    return;
+  }
+
+  // Best-effort title lookup for post reports only — a report on a
+  // comment, or on a post that's since been deleted entirely, just
+  // falls back to a generic label rather than blocking the whole list
+  // on a lookup that can't always succeed.
+  const postIds = reports
+    .filter((r) => r.target_type === "post")
+    .map((r) => r.target_id);
+  let postTitles = {};
+  if (postIds.length) {
+    try {
+      const { data: posts } = await supabase
+        .from("posts")
+        .select("id, title")
+        .in("id", postIds);
+      postTitles = Object.fromEntries(
+        (posts || []).map((p) => [idKey(p.id), p.title]),
+      );
+    } catch (_) {
+      // fine — falls back to the generic label below
+    }
+  }
+
+  const statusChip = (status) => {
+    if (status === "resolved")
+      return `<span class="text-emerald-400 text-[10px] font-black uppercase tracking-wider">Resolved</span>`;
+    if (status === "dismissed")
+      return `<span class="text-slate-500 text-[10px] font-black uppercase tracking-wider">Dismissed</span>`;
+    return `<span class="text-amber-400 text-[10px] font-black uppercase tracking-wider">Pending Review</span>`;
+  };
+  const reasonLabel = (r) =>
+    ({
+      spam_or_scam: "Spam / scam",
+      inappropriate: "Inappropriate content",
+      harassment: "Harassment or abuse",
+      unspecified: "Unspecified",
+    })[r] || r;
+
+  bodyEl.innerHTML = reports
+    .map((r) => {
+      const targetLabel =
+        r.target_type === "post"
+          ? postTitles[idKey(r.target_id)] || "A listing"
+          : "A comment";
+      return `
+            <div class="py-3 border-b border-slate-800 last:border-0">
+                <div class="flex items-start justify-between gap-2">
+                    <p class="text-white text-sm font-bold truncate">${esc(targetLabel)}</p>
+                    ${statusChip(r.status || "pending")}
+                </div>
+                <p class="text-slate-500 text-[11px] mt-0.5">${esc(reasonLabel(r.reason))} · ${timeAgo(r.created_at)}</p>
+            </div>`;
+    })
+    .join("");
+}
 
 async function loadArchivedPostsIntoSheet() {
   const bodyEl = document.getElementById("info-sheet-body");
@@ -10118,6 +11241,7 @@ window.openPublicProfile = async function (userId) {
       postsRes,
       isFollowingRes,
       profileRowRes,
+      completedSalesRes,
     ] = await Promise.all([
       supabase
         .from("follows")
@@ -10141,7 +11265,23 @@ window.openPublicProfile = async function (userId) {
             .eq("following_id", userId)
             .maybeSingle()
         : Promise.resolve({ data: null }),
-      supabase.from("profiles").select("bio").eq("id", userId).maybeSingle(),
+      supabase
+        .from("profiles")
+        .select("bio, major, interests, created_at")
+        .eq("id", userId)
+        .maybeSingle(),
+      // Seller trust metric (doc: "a count of successful sales... is a
+      // stronger trust metric" than ratings alone). Reuses the existing
+      // sold_at column (already set when an owner marks a listing sold
+      // via Manage Listing) rather than a new transactions table — this
+      // app has no formal buyer-side purchase confirmation step, so
+      // this is honestly a SELLER-side completed-sales count, not a
+      // two-sided transaction ledger.
+      supabase
+        .from("posts")
+        .select("", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .not("sold_at", "is", null),
     ]);
 
     // The name/institution/avatar aren't stored anywhere queryable by
@@ -10163,12 +11303,52 @@ window.openPublicProfile = async function (userId) {
 
     titleEl.textContent = displayName;
 
+    // Fix: blocking someone hid their POSTS from your feed, but visiting
+    // their profile directly (an old link, a search result, a shared
+    // conversation) still showed everything — full bio, grid, Follow/
+    // Message buttons. Now a blocked profile collapses to the same kind
+    // of placeholder used for blocked comments, with only Unblock
+    // available.
+    if (isBlocked) {
+      bodyEl.innerHTML = `
+            <div class="public-profile-header">
+                <img src="${esc(avatarUrl)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(displayName)}'" alt="" class="opacity-40 grayscale">
+                <h3 class="text-white font-black text-lg mt-3">${esc(displayName)}</h3>
+            </div>
+            <div class="info-sheet-empty !py-10">
+                <i class="fas fa-user-slash text-2xl mb-2 text-slate-600"></i>
+                <p class="text-xs">You've blocked this user</p>
+            </div>
+            <button
+                onclick="window.unblockUser('${escAttr(userId)}', '${escAttr(displayName)}'); window.closePublicProfile();"
+                class="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+            >
+                Unblock ${esc(displayName)}
+            </button>`;
+      return;
+    }
+
     bodyEl.innerHTML = `
             <div class="public-profile-header">
                 <img src="${esc(avatarUrl)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(displayName)}'" alt="">
                 <h3 class="text-white font-black text-lg mt-3">${esc(displayName)}${isVerified ? verifiedBadgeHtml() : ""}</h3>
                 ${institution ? `<p class="text-slate-500 text-xs mt-1">${esc(institution)}</p>` : ""}
                 ${profileRowRes.data?.bio ? `<p class="text-slate-300 text-xs mt-2 leading-snug px-4">${esc(profileRowRes.data.bio)}</p>` : ""}
+                ${profileRowRes.data?.major ? `<p class="text-slate-400 text-[11px] mt-1"><i class="fas fa-graduation-cap mr-1 text-amber-400/70"></i>${esc(profileRowRes.data.major)}</p>` : ""}
+                ${
+                  profileRowRes.data?.interests
+                    ? `<div class="flex flex-wrap gap-1.5 justify-center mt-2 px-4">${profileRowRes.data.interests
+                        .split(",")
+                        .map((t) => t.trim())
+                        .filter(Boolean)
+                        .map(
+                          (t) =>
+                            `<span class="bg-slate-800 border border-slate-700 text-slate-300 text-[10px] rounded-full px-2.5 py-0.5">${esc(t)}</span>`,
+                        )
+                        .join("")}</div>`
+                    : ""
+                }
+                ${profileRowRes.data?.created_at ? `<p class="text-slate-600 text-[10px] mt-1.5">On campus since ${esc(formatMonthYear(profileRowRes.data.created_at))}</p>` : ""}
                 <div id="public-profile-rating-block" class="flex flex-col items-center mt-2">
                     ${renderRatingBlockInner(userId, ratingSummary)}
                 </div>
@@ -10178,6 +11358,7 @@ window.openPublicProfile = async function (userId) {
                 <div><span class="stat-value">${postsRes.data?.length || 0}</span><span class="stat-label">Posts</span></div>
                 <div onclick="window.openFollowListModal('${escAttr(userId)}', 'followers')" class="cursor-pointer active:opacity-70 transition"><span class="stat-value">${followersRes.count || 0}</span><span class="stat-label">Followers</span></div>
                 <div onclick="window.openFollowListModal('${escAttr(userId)}', 'following')" class="cursor-pointer active:opacity-70 transition"><span class="stat-value">${followingRes.count || 0}</span><span class="stat-label">Following</span></div>
+                ${completedSalesRes.count ? `<div><span class="stat-value">${completedSalesRes.count}</span><span class="stat-label">Sold</span></div>` : ""}
             </div>
 
             <div class="flex gap-2 mb-5">
@@ -10536,7 +11717,140 @@ function initSettingsToggles() {
       );
     });
   }
+
+  reflectPushToggleState();
 }
+
+// ─── WEB PUSH NOTIFICATIONS ─────────────────────────────────────────────────
+// Requires:
+//  1. supabase_migration_push_notifications.sql run (push_subscriptions
+//     table + RLS)
+//  2. VAPID_PUBLIC_KEY below filled in with a real key (generate one with
+//     `npx web-push generate-vapid-keys`, or via the Supabase/web-push
+//     docs) — until then this stays a harmless no-op with a clear toast
+//     explaining why.
+//  3. The push + notificationclick listeners from
+//     push-sw-snippet.js merged into your existing sw.js (not done for
+//     you automatically — sw.js wasn't shared, so overwriting it here
+//     could easily clobber caching logic that's already working).
+//  4. The supabase/functions/send-push Edge Function deployed (sends the
+//     actual push using web-push + your VAPID keys) — this project
+//     currently has no server-side trigger wired to every notification
+//     type yet; the one concrete call site added in this pass is a new
+//     message arriving in a DM (see sendChatMessage below).
+const VAPID_PUBLIC_KEY = ""; // <-- fill in before this feature can actually subscribe anyone
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+}
+
+async function reflectPushToggleState() {
+  const toggle = document.getElementById("settingsNotifyPush");
+  const status = document.getElementById("settingsPushStatus");
+  if (!toggle) return;
+
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    toggle.disabled = true;
+    if (status) status.textContent = "Not supported on this browser";
+    return;
+  }
+  if (Notification.permission === "denied") {
+    toggle.checked = false;
+    toggle.disabled = true;
+    if (status)
+      status.textContent = "Blocked in browser settings — enable manually";
+    return;
+  }
+
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    toggle.checked = !!sub;
+    if (status)
+      status.textContent = sub
+        ? "Enabled on this device"
+        : "Get notified even when the app is closed";
+  } catch (_) {
+    // Service worker not ready yet — leave the toggle at its default
+    // (unchecked) rather than guessing.
+  }
+}
+
+window.togglePushNotifications = async function (wantsEnabled) {
+  const toggle = document.getElementById("settingsNotifyPush");
+  const status = document.getElementById("settingsPushStatus");
+
+  if (!wantsEnabled) {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await supabase
+          .from("push_subscriptions")
+          .delete()
+          .eq("endpoint", sub.endpoint);
+        await sub.unsubscribe();
+      }
+      if (status)
+        status.textContent = "Get notified even when the app is closed";
+      showToast("Push notifications turned off");
+    } catch (err) {
+      console.error("Push unsubscribe error:", err);
+    }
+    return;
+  }
+
+  if (!VAPID_PUBLIC_KEY) {
+    if (toggle) toggle.checked = false;
+    showToast(
+      "Push isn't set up yet — see the VAPID_PUBLIC_KEY note in app.js",
+    );
+    return;
+  }
+  if (!currentUserData) {
+    if (toggle) toggle.checked = false;
+    return;
+  }
+
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      if (toggle) toggle.checked = false;
+      showToast("Notification permission was not granted");
+      return;
+    }
+
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+    });
+
+    const subJson = sub.toJSON();
+    const { error } = await supabase.from("push_subscriptions").upsert(
+      {
+        user_id: currentUserData.id,
+        endpoint: subJson.endpoint,
+        p256dh: subJson.keys.p256dh,
+        auth: subJson.keys.auth,
+      },
+      { onConflict: "endpoint" },
+    );
+    if (error) throw error;
+
+    if (status) status.textContent = "Enabled on this device";
+    showToast("Push notifications turned on");
+  } catch (err) {
+    console.error("Push subscribe error:", err);
+    if (toggle) toggle.checked = false;
+    showToast(
+      "Couldn't enable push — make sure supabase_migration_push_notifications.sql has been run.",
+    );
+  }
+};
 
 // ─── ACCOUNT DELETION ─────────────────────────────────────────────────────────
 // Full account deletion (auth user + all data) generally needs a
@@ -11084,6 +12398,7 @@ async function sendPostSharePreview(postContext) {
     text,
     created_at: new Date().toISOString(),
   };
+  _activeThreadMessagesById.set(String(optimisticMsg.id), optimisticMsg);
 
   const container = document.getElementById("chat-messages");
   if (container) {
@@ -11098,6 +12413,7 @@ async function sendPostSharePreview(postContext) {
 
     container.innerHTML += renderChatBubble(optimisticMsg);
     container.scrollTop = container.scrollHeight;
+    wireChatBubbleTouchHandlers();
   }
 
   try {
@@ -11117,6 +12433,10 @@ async function sendPostSharePreview(postContext) {
 
     if (container && inserted?.id) {
       container.dataset.lastOptimisticId = String(inserted.id);
+      _activeThreadMessagesById.set(String(inserted.id), {
+        ...optimisticMsg,
+        id: inserted.id,
+      });
     }
 
     await supabase
@@ -11210,10 +12530,22 @@ function renderChatBubble(msg) {
   if (typeof msg.text === "string" && msg.text.startsWith("post_share:")) {
     try {
       const payload = JSON.parse(msg.text.slice("post_share:".length));
-      return renderPostSharePreviewBubble(payload, isMe, msg.created_at);
+      return renderPostSharePreviewBubble(payload, isMe, msg.created_at, msg);
     } catch (_) {
       // Malformed payload — fall through to plain text rendering
       // below rather than showing nothing.
+    }
+  }
+
+  // "Make an Offer" messages: a small amount card with Accept/Decline
+  // buttons, shown only to the seller and only while the offer is still
+  // pending — see window.openMakeOfferModal / window._respondToOffer.
+  if (typeof msg.text === "string" && msg.text.startsWith("offer:")) {
+    try {
+      const payload = JSON.parse(msg.text.slice("offer:".length));
+      return renderOfferBubble(payload, isMe, msg.created_at, msg);
+    } catch (_) {
+      // fall through to plain text rendering
     }
   }
 
@@ -11227,14 +12559,59 @@ function renderChatBubble(msg) {
     ? `<i class="fas ${msg.read ? "fa-check-double text-blue-400" : "fa-check text-black/40"} text-[10px] ml-1"></i>`
     : "";
 
+  const key = idKey(msg.id);
+  const isLocal = typeof msg.id === "string" && msg.id.startsWith("local-");
+
+  // A deleted-for-everyone message shows the same tombstone to both
+  // sides (matching WhatsApp) instead of disappearing — disappearing
+  // entirely would be confusing mid-conversation ("did they never
+  // reply?") and would shift every other message's read-receipt
+  // targeting. text is cleared server-side by
+  // delete_message_for_everyone, so there's nothing sensitive left in
+  // this bubble even if it's re-rendered from a stale cache.
+  if (msg.deleted) {
+    return `
+        <div class="flex ${isMe ? "justify-end" : "justify-start"}" data-message-id="${escAttr(key)}">
+            <div class="max-w-[75%] bg-slate-900 border border-slate-800 text-slate-500 rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} px-3.5 py-2 italic">
+                <p class="text-xs"><i class="fas fa-ban mr-1.5"></i>This message was deleted</p>
+            </div>
+        </div>`;
+  }
+
   return `
-        <div class="flex ${isMe ? "justify-end" : "justify-start"}" data-message-id="${escAttr(idKey(msg.id))}">
-            <div class="max-w-[75%] ${isMe ? "bg-amber-400 text-black" : "bg-slate-800 text-white"} rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} px-3.5 py-2">
+        <div class="flex ${isMe ? "justify-end" : "justify-start"}" data-message-id="${escAttr(key)}">
+            <div
+                class="max-w-[75%] ${isMe ? "bg-amber-400 text-black" : "bg-slate-800 text-white"} rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} px-3.5 py-2 relative"
+                ${isLocal ? "" : `onmousedown="window._startMessageHold('${escAttr(key)}')" onmouseup="window._cancelMessageHold()" onmouseleave="window._cancelMessageHold()" ontouchend="window._cancelMessageHold()"`}
+            >
                 <p class="text-sm break-words">${esc(msg.text)}</p>
                 <p class="text-[9px] ${isMe ? "text-black/50" : "text-slate-400"} mt-1 text-right flex items-center justify-end gap-0.5">
                     ${esc(formatClockTime(msg.created_at))}${receiptHtml}
                 </p>
+                ${renderMessageReactionPills(msg)}
             </div>
+        </div>`;
+}
+
+// Small pill row under a bubble showing which emoji(s) have reactions and
+// how many — only rendered when at least one exists, so ordinary messages
+// look exactly as they did before this feature existed.
+function renderMessageReactionPills(msg) {
+  const reactions = msg.reactions;
+  if (!reactions || typeof reactions !== "object") return "";
+  const entries = Object.entries(reactions).filter(
+    ([, users]) => Array.isArray(users) && users.length > 0,
+  );
+  if (!entries.length) return "";
+
+  return `
+        <div class="flex flex-wrap gap-1 mt-1.5 -mb-0.5">
+            ${entries
+              .map(
+                ([emoji, users]) =>
+                  `<span class="inline-flex items-center gap-0.5 bg-slate-950/60 border border-white/10 rounded-full px-1.5 py-0.5 text-[10px]">${emoji}${users.length > 1 ? ` ${users.length}` : ""}</span>`,
+              )
+              .join("")}
         </div>`;
 }
 
@@ -11284,11 +12661,14 @@ function renderMessageListWithDateSeparators(messages) {
   return html;
 }
 
-function renderPostSharePreviewBubble(payload, isMe, createdAt) {
+function renderPostSharePreviewBubble(payload, isMe, createdAt, msg) {
+  const key = idKey(msg?.id);
+  const isLocal = typeof msg?.id === "string" && msg.id.startsWith("local-");
   return `
-        <div class="flex ${isMe ? "justify-end" : "justify-start"}">
+        <div class="flex ${isMe ? "justify-end" : "justify-start"}" data-message-id="${escAttr(key)}">
             <div
                 onclick="window.closeDMThread(); setTimeout(() => openDetail('${escAttr(payload.id)}'), 50)"
+                ${isLocal ? "" : `onmousedown="window._startMessageHold('${escAttr(key)}')" onmouseup="window._cancelMessageHold()" onmouseleave="window._cancelMessageHold()" ontouchend="window._cancelMessageHold()"`}
                 class="max-w-[78%] ${isMe ? "bg-amber-400/10 border-amber-400/30" : "bg-slate-800 border-slate-700"} border rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} p-2 cursor-pointer active:scale-[0.98] transition">
                 <div class="flex items-center gap-2.5">
                     <div class="w-12 h-12 rounded-xl bg-slate-950 overflow-hidden shrink-0 border border-slate-700/50">
@@ -11307,6 +12687,55 @@ function renderPostSharePreviewBubble(payload, isMe, createdAt) {
                     </div>
                 </div>
                 <p class="text-[9px] ${isMe ? "text-black/40" : "text-slate-500"} mt-1.5 text-right">${esc(formatClockTime(createdAt))}</p>
+                ${msg ? renderMessageReactionPills(msg) : ""}
+            </div>
+        </div>`;
+}
+
+// "Make an Offer" bubble: shows the offered amount and, only to the
+// seller and only while still pending, Accept/Decline buttons. Status
+// lives in the `offers` table (not the message itself, which never
+// changes once sent) — see _activeThreadOffersById, populated when the
+// thread loads, and window._respondToOffer for the accept/decline flow.
+function renderOfferBubble(payload, isMe, createdAt, msg) {
+  const key = idKey(msg?.id);
+  const isLocal = typeof msg?.id === "string" && msg.id.startsWith("local-");
+  const offerState = _activeThreadOffersById.get(String(payload.offerId));
+  const status = offerState?.status || "pending";
+
+  const statusChip =
+    status === "accepted"
+      ? `<span class="inline-flex items-center gap-1 text-emerald-400 text-[10px] font-black uppercase tracking-wider mt-2"><i class="fas fa-circle-check"></i> Offer accepted</span>`
+      : status === "declined"
+        ? `<span class="inline-flex items-center gap-1 text-rose-400 text-[10px] font-black uppercase tracking-wider mt-2"><i class="fas fa-circle-xmark"></i> Offer declined</span>`
+        : "";
+
+  // Only the seller (the person who did NOT send this offer bubble) can
+  // respond, and only while it's still pending.
+  const actionButtons =
+    status === "pending" && !isMe
+      ? `
+            <div class="flex gap-2 mt-2.5">
+                <button onclick="event.stopPropagation(); window._respondToOffer('${escAttr(payload.offerId)}', 'declined')" class="flex-1 bg-slate-950 border border-slate-700 text-slate-300 text-[10px] font-black uppercase tracking-wider py-2 rounded-xl active:scale-95 transition">Decline</button>
+                <button onclick="event.stopPropagation(); window._respondToOffer('${escAttr(payload.offerId)}', 'accepted')" class="flex-1 bg-amber-400 text-black text-[10px] font-black uppercase tracking-wider py-2 rounded-xl active:scale-95 transition">Accept</button>
+            </div>`
+      : "";
+
+  return `
+        <div class="flex ${isMe ? "justify-end" : "justify-start"}" data-message-id="${escAttr(key)}" data-offer-id="${escAttr(payload.offerId)}">
+            <div
+                onclick="window.closeDMThread(); setTimeout(() => openDetail('${escAttr(payload.postId)}'), 50)"
+                ${isLocal ? "" : `onmousedown="window._startMessageHold('${escAttr(key)}')" onmouseup="window._cancelMessageHold()" onmouseleave="window._cancelMessageHold()" ontouchend="window._cancelMessageHold()"`}
+                class="max-w-[78%] ${isMe ? "bg-amber-400/10 border-amber-400/30" : "bg-slate-800 border-slate-700"} border rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} p-3 cursor-pointer active:scale-[0.98] transition">
+                <p class="text-[9px] uppercase tracking-widest font-bold ${isMe ? "text-amber-500" : "text-slate-500"}">
+                    <i class="fas fa-hand-holding-dollar mr-1"></i>Offer on ${esc(payload.title)}
+                </p>
+                <p class="text-white font-black text-lg mt-1">GH₵${esc(String(payload.amount))}</p>
+                ${payload.note ? `<p class="text-slate-300 text-xs mt-1">${esc(payload.note)}</p>` : ""}
+                ${statusChip}
+                ${actionButtons}
+                <p class="text-[9px] ${isMe ? "text-black/40" : "text-slate-500"} mt-1.5 text-right">${esc(formatClockTime(createdAt))}</p>
+                ${msg ? renderMessageReactionPills(msg) : ""}
             </div>
         </div>`;
 }
@@ -11326,6 +12755,24 @@ async function loadAndRenderMessages() {
 
     if (error) throw error;
 
+    // Fetched before rendering so any offer bubble's Accept/Decline
+    // buttons (or accepted/declined chip) reflect the real current
+    // status on first paint, not just "pending" until something
+    // triggers a re-render. Failure here is non-fatal — offer bubbles
+    // just fall back to "pending" display, which is wrong only in the
+    // rare case an offer was already resolved in a previous session.
+    try {
+      const { data: offers } = await supabase
+        .from("offers")
+        .select("id, status, amount")
+        .eq("conversation_id", activeConversationId);
+      _activeThreadOffersById = new Map(
+        (offers || []).map((o) => [String(o.id), o]),
+      );
+    } catch (_) {
+      _activeThreadOffersById = new Map();
+    }
+
     if (!messages || messages.length === 0) {
       container.innerHTML = `<p class="text-center text-[11px] text-slate-500 py-6">No messages yet. Say hello 👋</p>`;
     } else {
@@ -11335,6 +12782,11 @@ async function loadAndRenderMessages() {
       );
       container.scrollTop = container.scrollHeight;
     }
+
+    _activeThreadMessagesById = new Map(
+      (messages || []).map((m) => [String(m.id), m]),
+    );
+    wireChatBubbleTouchHandlers();
 
     // Mark incoming messages as read
     supabase
@@ -11404,6 +12856,7 @@ function subscribeActiveThreadMessages() {
         )
           return;
         renderedMessageIds.add(incomingId);
+        _activeThreadMessagesById.set(incomingId, payload.new);
 
         const emptyState = container.querySelector("p");
         if (emptyState && container.children.length === 1)
@@ -11423,6 +12876,7 @@ function subscribeActiveThreadMessages() {
 
         container.innerHTML += renderChatBubble(payload.new);
         container.scrollTop = container.scrollHeight;
+        wireChatBubbleTouchHandlers();
 
         // Any incoming message implicitly means the peer stopped
         // typing — clear the indicator right away instead of waiting
@@ -11446,6 +12900,28 @@ function subscribeActiveThreadMessages() {
         filter: `conversation_id=eq.${activeConversationId}`,
       },
       (payload) => {
+        _activeThreadMessagesById.set(String(payload.new.id), payload.new);
+
+        // Reactions or a delete-for-everyone change the bubble's actual
+        // content, so the safest fix is re-rendering that one bubble
+        // from the fresh row rather than trying to patch it in place —
+        // same idempotent-by-id approach the INSERT handler above uses.
+        const reactionsOrDeleteChanged =
+          JSON.stringify(payload.old?.reactions || {}) !==
+            JSON.stringify(payload.new?.reactions || {}) ||
+          !!payload.old?.deleted !== !!payload.new?.deleted;
+
+        if (reactionsOrDeleteChanged) {
+          const bubbleWrap = document.querySelector(
+            `[data-message-id="${CSS.escape(String(payload.new.id))}"]`,
+          );
+          if (bubbleWrap) {
+            bubbleWrap.outerHTML = renderChatBubble(payload.new);
+            wireChatBubbleTouchHandlers();
+          }
+          return;
+        }
+
         if (!payload.new.read) return;
         const bubble = document.querySelector(
           `[data-message-id="${CSS.escape(String(payload.new.id))}"] i.fa-check`,
@@ -11539,6 +13015,7 @@ window.sendChatMessage = async function () {
     text,
     created_at: new Date().toISOString(),
   };
+  _activeThreadMessagesById.set(String(optimisticMsg.id), optimisticMsg);
 
   const container = document.getElementById("chat-messages");
   if (container) {
@@ -11553,6 +13030,7 @@ window.sendChatMessage = async function () {
 
     container.innerHTML += renderChatBubble(optimisticMsg);
     container.scrollTop = container.scrollHeight;
+    wireChatBubbleTouchHandlers();
   }
 
   try {
@@ -11577,6 +13055,10 @@ window.sendChatMessage = async function () {
 
     if (container && inserted?.id) {
       container.dataset.lastOptimisticId = String(inserted.id);
+      _activeThreadMessagesById.set(String(inserted.id), {
+        ...optimisticMsg,
+        id: inserted.id,
+      });
     }
 
     await supabase
@@ -11587,6 +13069,24 @@ window.sendChatMessage = async function () {
         last_sender: currentUserData.id,
       })
       .eq("id", activeConversationId);
+
+    // Best-effort push notification to the recipient. Deliberately NOT
+    // awaited into the outer try's error handling — if this fails (Edge
+    // Function not deployed yet, recipient has no subscription, etc.)
+    // it must never affect "did my message actually send", which already
+    // succeeded above.
+    if (activeConversationPeer?.id) {
+      supabase.functions
+        .invoke("send-push", {
+          body: {
+            user_id: activeConversationPeer.id,
+            title: currentUserData.user_metadata?.full_name || "New message",
+            body: text.startsWith("post_share:") ? "Sent a listing" : text,
+            url: "/",
+          },
+        })
+        .catch(() => {}); // no Edge Function deployed yet is expected, not an error worth surfacing
+    }
   } catch (err) {
     console.error("Send message error:", err);
     // Same block-detection reasoning as postComment above — this is
@@ -11613,6 +13113,646 @@ window.openDM_legacy = function (targetUserId, targetName) {
   console.warn(
     `[DMs] openDM called with incomplete info for ${targetUserId} (${targetName}).`,
   );
+};
+
+// ─── 20b. MESSAGE REACTIONS, DELETE FOR EVERYONE & FORWARD ─────────────────
+// Long-press (or mouse-hold on desktop) any bubble to open a small action
+// sheet: a quick-react emoji row, Forward, Copy, and — for your own
+// messages — Delete for everyone. Same 600ms hold-timer technique already
+// used for the avatar preview (_initAvatarLongPress) and the profile grid
+// multi-select (_startGridTileHold), just applied to chat bubbles via
+// inline handlers since bubbles are rendered dynamically.
+const QUICK_REACT_EMOJIS = ["❤️", "😂", "👍", "😮", "😢", "🙏"];
+let _messageHoldTimer = null;
+let _messageJustHeld = false;
+
+// Wires touchstart/touchmove as real passive listeners on every bubble
+// with a data-message-id (mirrors wireGridTileTouchHandlers — inline
+// touch handlers can't be passive, which trips a console warning per
+// bubble). Call this after any innerHTML update that adds new bubbles.
+function wireChatBubbleTouchHandlers() {
+  document.querySelectorAll("[data-message-id]").forEach((wrap) => {
+    if (wrap.dataset.holdWired === "true") return;
+    wrap.dataset.holdWired = "true";
+    const key = wrap.getAttribute("data-message-id");
+    wrap.addEventListener("touchstart", () => window._startMessageHold(key), {
+      passive: true,
+    });
+    wrap.addEventListener("touchmove", () => window._cancelMessageHold(), {
+      passive: true,
+    });
+  });
+}
+
+window._startMessageHold = function (messageKey) {
+  clearTimeout(_messageHoldTimer);
+  _messageHoldTimer = setTimeout(() => {
+    _messageJustHeld = true;
+    window._openMessageActionSheet(messageKey);
+  }, 600);
+};
+
+window._cancelMessageHold = function () {
+  clearTimeout(_messageHoldTimer);
+};
+
+window._openMessageActionSheet = function (messageKey) {
+  const msg = _activeThreadMessagesById.get(String(messageKey));
+  if (!msg) return;
+
+  const isMe = msg.sender_id === currentUserData?.id;
+  const isShareCard =
+    typeof msg.text === "string" && msg.text.startsWith("post_share:");
+
+  const reactionRowHtml = `
+        <div class="flex items-center justify-around px-3 py-2.5 border-b border-slate-800/60">
+            ${QUICK_REACT_EMOJIS.map(
+              (emoji) =>
+                `<button onclick="window._reactToMessage('${escAttr(messageKey)}', '${emoji}')" class="text-2xl leading-none active:scale-125 transition" aria-label="React ${emoji}">${emoji}</button>`,
+            ).join("")}
+        </div>`;
+
+  const items = [
+    {
+      icon: "fas fa-share",
+      label: "Forward",
+      action: () => window._openForwardPicker(messageKey),
+    },
+  ];
+
+  if (!isShareCard && msg.text) {
+    items.push({
+      icon: "fas fa-copy",
+      label: "Copy text",
+      action: async () => {
+        try {
+          await navigator.clipboard.writeText(msg.text);
+          showToast("Copied.");
+        } catch (_) {
+          showToast("Couldn't copy.");
+        }
+      },
+    });
+  }
+
+  if (isMe) {
+    items.push({ divider: true });
+    items.push({
+      icon: "fas fa-trash",
+      label: "Delete for everyone",
+      danger: true,
+      action: () => window._confirmDeleteMessageForEveryone(messageKey),
+    });
+  }
+
+  openOptionsMenu(items, reactionRowHtml);
+};
+
+// Toggles the tapped emoji for the current user on this message — tapping
+// the same emoji again removes it, tapping a different one switches to it
+// (one reaction per person, matching WhatsApp/iMessage). Runs through the
+// toggle_message_reaction SECURITY DEFINER function (see
+// supabase_migration_messaging_features.sql) so this works correctly
+// under RLS without needing to know the exact shape of the messages
+// table's existing policies.
+window._reactToMessage = async function (messageKey, emoji) {
+  closeOptionsMenu();
+  if (!currentUserData) return;
+
+  const msg = _activeThreadMessagesById.get(String(messageKey));
+  const isRealId = !(
+    typeof messageKey === "string" && messageKey.startsWith("local-")
+  );
+  if (!isRealId) {
+    showToast("Still sending — try reacting in a moment.");
+    return;
+  }
+
+  try {
+    const { data: updatedReactions, error } = await supabase.rpc(
+      "toggle_message_reaction",
+      { p_message_id: msg?.id ?? messageKey, p_emoji: emoji },
+    );
+    if (error) throw error;
+
+    const updatedMsg = { ...msg, reactions: updatedReactions };
+    _activeThreadMessagesById.set(String(messageKey), updatedMsg);
+    const bubbleWrap = document.querySelector(
+      `[data-message-id="${CSS.escape(String(messageKey))}"]`,
+    );
+    if (bubbleWrap) bubbleWrap.outerHTML = renderChatBubble(updatedMsg);
+    wireChatBubbleTouchHandlers();
+  } catch (err) {
+    console.error("React to message error:", err);
+    showToast(
+      "Couldn't react — make sure supabase_migration_messaging_features.sql has been run.",
+    );
+  }
+};
+
+window._confirmDeleteMessageForEveryone = function (messageKey) {
+  showConfirmDialog({
+    title: "Delete for everyone?",
+    message: "This removes the message for both of you. This can't be undone.",
+    danger: true,
+    confirmLabel: "Delete",
+    onConfirm: async () => {
+      const msg = _activeThreadMessagesById.get(String(messageKey));
+      try {
+        const { error } = await supabase.rpc("delete_message_for_everyone", {
+          p_message_id: msg?.id ?? messageKey,
+        });
+        if (error) throw error;
+
+        const updatedMsg = { ...msg, deleted: true, text: "" };
+        _activeThreadMessagesById.set(String(messageKey), updatedMsg);
+        const bubbleWrap = document.querySelector(
+          `[data-message-id="${CSS.escape(String(messageKey))}"]`,
+        );
+        if (bubbleWrap) bubbleWrap.outerHTML = renderChatBubble(updatedMsg);
+        wireChatBubbleTouchHandlers();
+      } catch (err) {
+        console.error("Delete for everyone error:", err);
+        showToast(
+          "Couldn't delete — make sure supabase_migration_messaging_features.sql has been run.",
+        );
+      }
+    },
+  });
+};
+
+// Forwarding picks from the person's existing conversations (excluding the
+// one currently open) rather than a full user search, matching how
+// WhatsApp's forward picker defaults to recent chats. Inserts the same
+// text (a plain message, or the same post_share:{...} payload for a
+// shared-listing card) as a new message in the chosen conversation.
+window._openForwardPicker = function (messageKey) {
+  const msg = _activeThreadMessagesById.get(String(messageKey));
+  if (!msg) return;
+
+  const candidates = (conversationsCache || []).filter(
+    (c) => c.id !== activeConversationId,
+  );
+  if (!candidates.length) {
+    showToast("No other conversations to forward to yet.");
+    return;
+  }
+
+  const items = candidates.map((conv) => {
+    const peer = dmPeerInfo(conv);
+    return {
+      icon: "fas fa-paper-plane",
+      label: peer.name,
+      action: () => window._forwardMessageTo(msg, conv.id),
+    };
+  });
+
+  openOptionsMenu(items);
+};
+
+window._forwardMessageTo = async function (msg, targetConversationId) {
+  if (!currentUserData || msg.deleted) return;
+  try {
+    const { error: msgErr } = await supabase.from("messages").insert({
+      conversation_id: targetConversationId,
+      sender_id: currentUserData.id,
+      text: msg.text,
+    });
+    if (msgErr) throw msgErr;
+
+    const previewText = msg.text?.startsWith("post_share:")
+      ? "📎 Shared a listing"
+      : msg.text;
+    await supabase
+      .from("conversations")
+      .update({
+        last_message: previewText,
+        last_message_at: new Date().toISOString(),
+        last_sender: currentUserData.id,
+      })
+      .eq("id", targetConversationId);
+
+    showToast("Forwarded.");
+  } catch (err) {
+    console.error("Forward message error:", err);
+    showToast("Couldn't forward that message.");
+  }
+};
+
+// ─── 20c. MAKE AN OFFER ─────────────────────────────────────────────────────
+// Instead of a fixed take-it-or-leave-it price, a buyer can propose an
+// amount straight from the detail view. Opens/reuses the same DM thread
+// "Contact Seller" would, sends a small offer card (see renderOfferBubble
+// above), and records the offer in a new `offers` table so its status
+// (pending/accepted/declined) persists across sessions and both people
+// see the same outcome. Requires
+// supabase_migration_offers.sql to have been run.
+window.openMakeOfferModal = function (postId) {
+  if (!currentUserData) {
+    window.openLoginModal();
+    return;
+  }
+  const post = postContextRegistry[postId];
+  if (!post) return;
+  if (post.userId === currentUserData.id) return; // can't offer on your own listing
+
+  let modal = document.getElementById("make-offer-modal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "make-offer-modal";
+    modal.className =
+      "hidden fixed inset-0 z-[95] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4";
+    document.body.appendChild(modal);
+  }
+
+  modal.innerHTML = `
+        <div class="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-sm p-5 space-y-4">
+            <div>
+                <h3 class="text-white font-black text-sm uppercase tracking-wider">Make an Offer</h3>
+                <p class="text-slate-500 text-xs mt-1 truncate">${esc(post.title)} · Listed at GH₵${esc(String(post.price))}</p>
+            </div>
+            <div>
+                <label class="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1.5 block">Your offer (GH₵)</label>
+                <input type="number" inputmode="decimal" min="0" id="offerAmountInput" value="${escAttr(String(post.price))}" class="w-full bg-slate-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white" />
+            </div>
+            <div>
+                <label class="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1.5 block">Note (optional)</label>
+                <textarea id="offerNoteInput" rows="2" maxlength="200" placeholder="e.g. Can pick up today" class="w-full bg-slate-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white resize-none"></textarea>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="window._closeMakeOfferModal()" class="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-black uppercase tracking-wider active:scale-[0.98] transition">Cancel</button>
+                <button onclick="window._submitOffer('${escAttr(postId)}')" class="flex-1 py-2.5 rounded-xl bg-amber-400 text-black text-xs font-black uppercase tracking-wider active:scale-[0.98] transition">Send Offer</button>
+            </div>
+        </div>`;
+
+  modal.classList.remove("hidden");
+  pushUiState("make-offer-modal", () => window._closeMakeOfferModal(true));
+};
+
+window._closeMakeOfferModal = function (fromPop = false) {
+  document.getElementById("make-offer-modal")?.classList.add("hidden");
+  if (!fromPop) popUiState("make-offer-modal");
+};
+
+window._submitOffer = async function (postId) {
+  const post = postContextRegistry[postId];
+  if (!post || !currentUserData) return;
+
+  const amountInput = document.getElementById("offerAmountInput");
+  const noteInput = document.getElementById("offerNoteInput");
+  const amount = parseFloat(amountInput?.value || "");
+  if (!Number.isFinite(amount) || amount <= 0) {
+    showToast("Enter a valid offer amount.");
+    return;
+  }
+  if (amount > 1000000) {
+    showToast("That offer seems too high — please double-check it.");
+    return;
+  }
+  const note = (noteInput?.value || "").trim();
+
+  window._closeMakeOfferModal();
+  window.closeDetailModal?.(true);
+
+  try {
+    // Opens (or reuses) the DM thread with the seller, and — because
+    // postContext is passed — also sends the usual shared-listing
+    // preview card first, so the seller sees exactly which item the
+    // offer is for above the offer card itself.
+    await window.openDM(post.userId, post.userName, post.userAvatar, {
+      id: post.id,
+      title: post.title,
+      price: post.price,
+      image: post.image,
+      type: post.type,
+    });
+
+    const { data: offerRow, error: offerErr } = await supabase
+      .from("offers")
+      .insert({
+        post_id: postId,
+        conversation_id: activeConversationId,
+        buyer_id: currentUserData.id,
+        seller_id: post.userId,
+        amount,
+        message: note,
+      })
+      .select("id")
+      .single();
+    if (offerErr) throw offerErr;
+
+    _activeThreadOffersById.set(String(offerRow.id), {
+      id: offerRow.id,
+      status: "pending",
+      amount,
+    });
+
+    const offerPayload = {
+      offerId: offerRow.id,
+      postId,
+      title: post.title,
+      amount,
+      note,
+    };
+    const text = `offer:${JSON.stringify(offerPayload)}`;
+    const optimisticMsg = {
+      id: `local-${Date.now()}`,
+      sender_id: currentUserData.id,
+      text,
+      created_at: new Date().toISOString(),
+    };
+    _activeThreadMessagesById.set(String(optimisticMsg.id), optimisticMsg);
+
+    const container = document.getElementById("chat-messages");
+    if (container) {
+      container.innerHTML += renderChatBubble(optimisticMsg);
+      container.scrollTop = container.scrollHeight;
+      wireChatBubbleTouchHandlers();
+    }
+
+    const { data: inserted, error: msgErr } = await supabase
+      .from("messages")
+      .insert({
+        conversation_id: activeConversationId,
+        sender_id: currentUserData.id,
+        text,
+      })
+      .select("id")
+      .single();
+    if (msgErr) throw msgErr;
+
+    if (container && inserted?.id) {
+      container.dataset.lastOptimisticId = String(inserted.id);
+      _activeThreadMessagesById.set(String(inserted.id), {
+        ...optimisticMsg,
+        id: inserted.id,
+      });
+    }
+
+    await supabase
+      .from("conversations")
+      .update({
+        last_message: `💰 Offer: GH₵${amount}`,
+        last_message_at: new Date().toISOString(),
+        last_sender: currentUserData.id,
+      })
+      .eq("id", activeConversationId);
+
+    showToast("Offer sent.");
+  } catch (err) {
+    console.error("Submit offer error:", err);
+    showToast(
+      "Couldn't send that offer — make sure supabase_migration_offers.sql has been run.",
+    );
+  }
+};
+
+// Seller-only. Goes through the respond_to_offer SECURITY DEFINER
+// function (see supabase_migration_offers.sql) so a buyer can never
+// accept/decline their own offer, regardless of what the client sends.
+window._respondToOffer = async function (offerId, newStatus) {
+  try {
+    const { error } = await supabase.rpc("respond_to_offer", {
+      p_offer_id: offerId,
+      p_new_status: newStatus,
+    });
+    if (error) throw error;
+
+    _activeThreadOffersById.set(String(offerId), {
+      ..._activeThreadOffersById.get(String(offerId)),
+      status: newStatus,
+    });
+
+    const bubbleWrap = document.querySelector(
+      `[data-offer-id="${CSS.escape(String(offerId))}"]`,
+    );
+    if (bubbleWrap) {
+      const msgId = bubbleWrap.getAttribute("data-message-id");
+      const msg = _activeThreadMessagesById.get(String(msgId));
+      if (msg) {
+        bubbleWrap.outerHTML = renderChatBubble(msg);
+        wireChatBubbleTouchHandlers();
+      }
+    }
+
+    // A follow-up plain-text line makes the outcome visible in the
+    // ordinary chat scrollback too, not just as a state change on the
+    // original card (which could be scrolled out of view by the time
+    // either person looks back at the conversation later).
+    const outcomeText =
+      newStatus === "accepted" ? "✅ Offer accepted" : "❌ Offer declined";
+    await supabase.from("messages").insert({
+      conversation_id: activeConversationId,
+      sender_id: currentUserData.id,
+      text: outcomeText,
+    });
+    await supabase
+      .from("conversations")
+      .update({
+        last_message: outcomeText,
+        last_message_at: new Date().toISOString(),
+        last_sender: currentUserData.id,
+      })
+      .eq("id", activeConversationId);
+
+    showToast(newStatus === "accepted" ? "Offer accepted" : "Offer declined");
+  } catch (err) {
+    console.error("Respond to offer error:", err);
+    showToast("Couldn't update that offer.");
+  }
+};
+
+// ─── 20d. TWO-FACTOR AUTHENTICATION (TOTP) ─────────────────────────────────
+// Built entirely on Supabase Auth's native MFA support
+// (supabase.auth.mfa.*) rather than a custom-built second factor — same
+// reasoning as skipping a hollow SAML/SSO scaffold earlier: Supabase
+// already implements real TOTP enrollment/verification/challenge
+// correctly, so there's no good reason to duplicate that by hand.
+
+// Sign-in-time challenge — shown when signInWithEmailPassword detects the
+// session hasn't reached aal2 yet (see that function).
+window._open2faChallengeModal = function () {
+  let modal = document.getElementById("mfa-challenge-modal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "mfa-challenge-modal";
+    modal.className =
+      "fixed inset-0 z-[96] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4";
+    document.body.appendChild(modal);
+  }
+
+  modal.innerHTML = `
+        <div class="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-sm p-5 space-y-4">
+            <div>
+                <h3 class="text-white font-black text-sm uppercase tracking-wider"><i class="fas fa-shield-halved text-amber-400 mr-1.5"></i>Two-Factor Code</h3>
+                <p class="text-slate-500 text-xs mt-1.5">Enter the 6-digit code from your authenticator app.</p>
+            </div>
+            <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="mfaChallengeCodeInput" placeholder="123456" autocomplete="one-time-code" class="w-full bg-slate-800/70 border border-slate-700 rounded-xl px-3 py-3 text-center text-xl tracking-[0.4em] text-white" />
+            <button onclick="window._verify2faChallenge()" class="w-full py-2.5 rounded-xl bg-amber-400 text-black text-xs font-black uppercase tracking-wider active:scale-[0.98] transition">
+                Verify
+            </button>
+        </div>`;
+
+  modal.classList.remove("hidden");
+  document.getElementById("mfaChallengeCodeInput")?.focus();
+};
+
+window._verify2faChallenge = async function () {
+  const codeInput = document.getElementById("mfaChallengeCodeInput");
+  const code = (codeInput?.value || "").trim();
+  if (!/^\d{6}$/.test(code)) {
+    showToast("Enter the 6-digit code.");
+    return;
+  }
+
+  try {
+    const { data: factorsData, error: factorsError } =
+      await supabase.auth.mfa.listFactors();
+    if (factorsError) throw factorsError;
+    const totpFactor = factorsData?.totp?.[0];
+    if (!totpFactor) throw new Error("No 2FA factor found");
+
+    const { data: challengeData, error: challengeError } =
+      await supabase.auth.mfa.challenge({ factorId: totpFactor.id });
+    if (challengeError) throw challengeError;
+
+    const { error: verifyError } = await supabase.auth.mfa.verify({
+      factorId: totpFactor.id,
+      challengeId: challengeData.id,
+      code,
+    });
+    if (verifyError) throw verifyError;
+
+    document.getElementById("mfa-challenge-modal")?.classList.add("hidden");
+    startNewDeviceSession();
+    trackEvent("signed_in");
+    document.getElementById("login-modal")?.classList.add("hidden");
+    showToast("Welcome back! ✓");
+  } catch (err) {
+    console.error("2FA verify error:", err);
+    showToast("Incorrect or expired code — try again.");
+  }
+};
+
+// Settings-side enroll/manage flow.
+window.open2faSettingsSheet = async function () {
+  if (!currentUserData) return;
+  const modal = document.getElementById("mfa-manage-modal");
+  const body = document.getElementById("mfa-manage-body");
+  if (!modal || !body) return;
+
+  body.innerHTML = `<div class="p-8 text-center text-slate-500 text-sm"><i class="fas fa-circle-notch fa-spin"></i></div>`;
+  modal.classList.remove("hidden");
+  pushUiState("mfa-manage-modal", () => window.close2faSettingsSheet(true));
+
+  try {
+    const { data, error } = await supabase.auth.mfa.listFactors();
+    if (error) throw error;
+    const totpFactor = data?.totp?.[0];
+
+    if (totpFactor) {
+      body.innerHTML = `
+            <div class="p-6 space-y-4">
+                <h2 class="text-lg font-bold text-white">Two-Factor Authentication</h2>
+                <div class="flex items-center gap-2 text-emerald-400 text-xs font-bold">
+                    <i class="fas fa-circle-check"></i> Enabled on this account
+                </div>
+                <p class="text-slate-500 text-xs leading-relaxed">You'll be asked for a code from your authenticator app every time you sign in.</p>
+                <button onclick="window._disable2fa('${escAttr(totpFactor.id)}')" class="w-full bg-slate-800 border border-slate-700 text-red-300 font-black py-3 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
+                    Turn Off Two-Factor Authentication
+                </button>
+            </div>`;
+    } else {
+      window._begin2faEnrollment();
+    }
+  } catch (err) {
+    console.error("2FA status load error:", err);
+    body.innerHTML = `<div class="p-8 text-center text-slate-500 text-sm">Couldn't load 2FA status.</div>`;
+  }
+};
+
+window._begin2faEnrollment = async function () {
+  const body = document.getElementById("mfa-manage-body");
+  if (!body) return;
+  body.innerHTML = `<div class="p-8 text-center text-slate-500 text-sm"><i class="fas fa-circle-notch fa-spin"></i></div>`;
+
+  try {
+    const { data, error } = await supabase.auth.mfa.enroll({
+      factorType: "totp",
+    });
+    if (error) throw error;
+
+    body.innerHTML = `
+            <div class="p-6 space-y-4">
+                <h2 class="text-lg font-bold text-white">Set Up Two-Factor Authentication</h2>
+                <p class="text-slate-500 text-xs leading-relaxed">Scan this QR code with an authenticator app (Google Authenticator, Authy, etc.), then enter the 6-digit code it shows.</p>
+                <div class="bg-white p-3 rounded-2xl w-fit mx-auto">${data.totp.qr_code}</div>
+                <p class="text-slate-600 text-[10px] text-center break-all">Can't scan? Enter manually: ${esc(data.totp.secret)}</p>
+                <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="mfaEnrollCodeInput" placeholder="123456" class="w-full bg-slate-800/70 border border-slate-700 rounded-xl px-3 py-3 text-center text-xl tracking-[0.4em] text-white" />
+                <button onclick="window._confirm2faEnrollment('${escAttr(data.id)}')" class="w-full py-2.5 rounded-xl bg-amber-400 text-black text-xs font-black uppercase tracking-wider active:scale-[0.98] transition">
+                    Confirm & Enable
+                </button>
+                <button onclick="window.close2faSettingsSheet()" class="w-full text-slate-500 text-[11px] uppercase font-bold tracking-wider py-1">
+                    Cancel
+                </button>
+            </div>`;
+  } catch (err) {
+    console.error("2FA enroll error:", err);
+    body.innerHTML = `<div class="p-8 text-center text-slate-500 text-sm">Couldn't start 2FA setup. Try again.</div>`;
+  }
+};
+
+window._confirm2faEnrollment = async function (factorId) {
+  const codeInput = document.getElementById("mfaEnrollCodeInput");
+  const code = (codeInput?.value || "").trim();
+  if (!/^\d{6}$/.test(code)) {
+    showToast("Enter the 6-digit code from your app.");
+    return;
+  }
+
+  try {
+    const { data: challengeData, error: challengeError } =
+      await supabase.auth.mfa.challenge({ factorId });
+    if (challengeError) throw challengeError;
+
+    const { error: verifyError } = await supabase.auth.mfa.verify({
+      factorId,
+      challengeId: challengeData.id,
+      code,
+    });
+    if (verifyError) throw verifyError;
+
+    showToast("Two-factor authentication enabled ✓");
+    window.open2faSettingsSheet();
+  } catch (err) {
+    console.error("2FA enrollment confirm error:", err);
+    showToast("That code didn't match — check your app and try again.");
+  }
+};
+
+window._disable2fa = function (factorId) {
+  showConfirmDialog({
+    title: "Turn off two-factor authentication?",
+    message: "Your account will only need your password to sign in.",
+    danger: true,
+    confirmLabel: "Turn Off",
+    onConfirm: async () => {
+      try {
+        const { error } = await supabase.auth.mfa.unenroll({ factorId });
+        if (error) throw error;
+        showToast("Two-factor authentication turned off.");
+        window.open2faSettingsSheet();
+      } catch (err) {
+        console.error("2FA unenroll error:", err);
+        showToast("Couldn't turn off 2FA — try again.");
+      }
+    },
+  });
+};
+
+window.close2faSettingsSheet = function (fromPop = false) {
+  document.getElementById("mfa-manage-modal")?.classList.add("hidden");
+  if (!fromPop) popUiState("mfa-manage-modal");
 };
 
 // ─── 21. AUTH OBSERVER ───────────────────────────────────────────────────────
@@ -11677,7 +13817,7 @@ if (activeAuthChange) {
       try {
         const { data: savedUserRow } = await supabase
           .from("profiles")
-          .select("avatar, institution, region")
+          .select("avatar, institution, region, is_verified")
           .eq("id", user.id)
           .maybeSingle();
         const savedAvatar =
@@ -11692,6 +13832,43 @@ if (activeAuthChange) {
         if (nameEl) nameEl.textContent = metadata.full_name || "Campus Student";
 
         window.initProfileSelects();
+
+        // Automated .edu verification (doc: "Automatically verify a
+        // user by checking if their registered email is confirmed and
+        // belongs to a known .edu domain" — a more scalable approach
+        // than the fully-manual review this app previously relied on
+        // exclusively). Supabase Auth already confirms the account's
+        // primary email itself (user.email_confirmed_at); this just
+        // checks that confirmed address against the same domain
+        // pattern submitVerificationRequest uses, and flips
+        // profiles.is_verified with no manual step at all when it
+        // matches. This runs on every sign-in, not just once, so it
+        // also catches someone who was created before this check
+        // existed. Doesn't touch or replace the manual
+        // verification_requests flow above (for a .edu email that
+        // ISN'T the account's primary sign-in address).
+        if (
+          user.email_confirmed_at &&
+          !savedUserRow?.is_verified &&
+          /^[^\s@]+@[^\s@]+\.(edu(\.[a-z]{2})?|ac\.[a-z]{2})$/i.test(
+            user.email || "",
+          )
+        ) {
+          supabase
+            .from("profiles")
+            .update({ is_verified: true })
+            .eq("id", user.id)
+            .then(({ error }) => {
+              if (error) {
+                console.warn(
+                  "Automated .edu verification failed — profiles.is_verified may not exist yet:",
+                  error,
+                );
+                return;
+              }
+              verifiedUserCache[user.id] = true;
+            });
+        }
 
         if (
           !savedUserRow ||
@@ -12171,6 +14348,13 @@ function renderGridItem(id, post) {
         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
             <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
         </div>
+        ${
+          d.scheduled_for && new Date(d.scheduled_for).getTime() > Date.now()
+            ? `<div class="absolute top-1.5 left-1.5 bg-amber-400 text-black text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-full"><i class="fas fa-clock mr-0.5"></i>Scheduled</div>`
+            : d.is_featured
+              ? `<div class="absolute top-1.5 left-1.5 bg-sky-400 text-black text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-full"><i class="fas fa-star mr-0.5"></i>Featured</div>`
+              : ""
+        }
     </div>`;
 }
 
@@ -12399,4 +14583,43 @@ window.deleteSelectedGridItems = function () {
       }
     },
   });
+};
+
+// "Feature All" (doc: bulk-featuring selected posts from the multi-select
+// grid). Toggles posts.is_featured — a plain boolean flag, deliberately
+// NOT changing feed ranking or ordering here, since that's a separate,
+// more consequential decision (would need thought about how featured
+// posts interact with getFeedScore/decay) than just adding the flag and
+// a visual badge. Requires supabase_migration_featured_posts.sql.
+window.featureSelectedGridItems = async function () {
+  if (_gridSelectedIds.size === 0) {
+    showToast("Select at least one post first.");
+    return;
+  }
+
+  const ids = [..._gridSelectedIds];
+  showToast(`Featuring ${ids.length} post${ids.length > 1 ? "s" : ""}…`);
+
+  try {
+    const { error } = await supabase
+      .from("posts")
+      .update({ is_featured: true })
+      .in(
+        "id",
+        ids.map((id) => (isNaN(Number(id)) ? id : Number(id))),
+      )
+      .eq("user_id", currentUserData.id); // can only feature your own posts, even if selection somehow included others
+    if (error) throw error;
+
+    window.exitGridSelectMode();
+    try {
+      loadProfileStats();
+    } catch (_) {}
+    showToast(`${ids.length} post${ids.length > 1 ? "s" : ""} featured ⭐`);
+  } catch (err) {
+    console.error("Bulk feature error:", err);
+    showToast(
+      "Couldn't feature those posts — make sure supabase_migration_featured_posts.sql has been run.",
+    );
+  }
 };

@@ -1,3 +1,17 @@
+/* Tailwind v4 CSS-first config. This file is now the SOURCE your existing
+   build script compiles (see package.json: "build": "npx tailwindcss -i
+   main.css -o dist.css") — dist.css is the generated output that ships
+   to visitors, containing both Tailwind's utility classes AND every
+   custom rule below, merged into one file. Don't link main.css directly
+   in index.html anymore; link dist.css instead.
+
+   @source is critical: most of this app's classes live inside app.js's
+   JS template-string HTML, not index.html's static markup — Tailwind's
+   scanner won't find those unless told to look there explicitly. */
+@import "tailwindcss";
+@source "./index.html";
+@source "./app.js";
+
 /* ─── BASE CORE RESET ────────────────────────────────────────────────────────────────── */
 /* Tells every browser this page is intentionally dark-only. Without it,
    Android's WebView/Chrome "Force Dark" heuristics (and Safari's native
@@ -800,10 +814,44 @@ body {
   scroll-behavior: smooth;
 }
 
+/* ── SKELETON SCREENS ── */
+/* Shimmer sweep instead of a flat pulse — reads as "content is loading"
+   rather than "something is broken/blinking". Used by
+   renderSkeletonCards() in a_js.js for feed/grid loading states. */
+.skeleton-pulse {
+  position: relative;
+  overflow: hidden;
+}
+.skeleton-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.06),
+    transparent
+  );
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
 /* ── SEARCH ── */
 .search-wrap {
   position: relative;
   margin-top: 10px;
+  /* Now holds the input plus the filter-toggle button side by side —
+     was a single-child wrapper before the filter panel was added. */
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .search-wrap i {
@@ -817,6 +865,8 @@ body {
 }
 
 .search-wrap input {
+  flex: 1;
+  min-width: 0;
   width: 100%;
   background: rgba(15, 23, 42, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -838,6 +888,45 @@ body {
 .search-wrap input:focus {
   border-color: #fbbf24;
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.1);
+}
+
+/* Local suggestions dropdown (saved alerts + cached post titles) shown
+   under the search input while typing. Positioned relative to
+   .search-wrap so it tracks the input regardless of header layout. */
+.search-autocomplete-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  overflow: hidden;
+  z-index: 40;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.search-autocomplete-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 11px;
+  color: #cbd5e1;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+}
+
+.search-autocomplete-item:last-child {
+  border-bottom: none;
+}
+
+.search-autocomplete-item:active {
+  background: rgba(251, 191, 36, 0.08);
+  color: #fbbf24;
 }
 
 /* ── TABS ── */

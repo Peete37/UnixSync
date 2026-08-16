@@ -35,7 +35,20 @@
       content="black-translucent"
     />
     <meta name="apple-mobile-web-app-title" content="Unix-Sync" />
-    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Tailwind is now a real compiled build (see package.json's
+         "build" script + src/tailwind-input.css), run once at deploy
+         time by Vercel, instead of every visitor's browser re-running
+         Tailwind's JIT compiler on every page load — the previous
+         <script src=".../@tailwindcss/browser@4"> did exactly that,
+         which is real, avoidable CPU/battery cost on every visit,
+         worst on older/budget devices. Same utility classes, same
+         visual result — just pre-built instead of built live in-browser.
+         IMPORTANT: if you add a Tailwind class that's never appeared
+         anywhere in index.h or a_js.js before, it won't show up until
+         the next deploy rebuilds tailwind.css (Tailwind can only
+         generate CSS for classes it can see in those two files' source
+         text — see src/tailwind-input.css's @source lines). -->
+    <link rel="stylesheet" href="tailwind.css" />
     <!-- Error tracking (Sentry). Replace YOUR_LOADER_KEY below with the
          real one from your Sentry project settings -> Client Keys (DSN)
          -> Loader Script, after creating a free account at sentry.io.
@@ -65,7 +78,7 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="main.css" />
+    <link rel="stylesheet" href="dist.css" />
   </head>
 
   <body class="bg-[#020617] text-slate-100 min-h-screen antialiased">
@@ -131,6 +144,19 @@
         id="cameraInput"
         class="hidden"
         accept="image/*"
+        capture="environment"
+      />
+
+      <!-- Dedicated video capture — same reasoning as cameraInput above:
+           a capture input can only reliably launch ONE camera mode, so
+           video needs its own input rather than trying to widen
+           cameraInput's accept back to "image/*,video/*" (which is
+           exactly what broke the photo camera launch before). -->
+      <input
+        type="file"
+        id="cameraVideoInput"
+        class="hidden"
+        accept="video/*"
         capture="environment"
       />
 
@@ -254,6 +280,14 @@
                 Services
               </button>
               <button
+                onclick="window.filterFeed('trending', this)"
+                data-tab="trending"
+                class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300 flex items-center gap-1.5"
+              >
+                <i class="fas fa-fire text-orange-400 text-[10px]"></i>
+                <span>Trending</span>
+              </button>
+              <button
                 onclick="window.filterFeed('deals', this)"
                 data-tab="deals"
                 class="feed-tab-btn shrink-0 text-slate-500 whitespace-nowrap pb-1 border-b-2 border-transparent hover:text-slate-300 flex items-center gap-1.5"
@@ -375,7 +409,29 @@
               name="campus-global-search"
               placeholder="Search campus gigs or items..."
               oninput="window.runSearch(this.value)"
+              autocomplete="off"
             />
+            <button
+              type="button"
+              id="search-filter-toggle-btn"
+              onclick="window.toggleSearchFilterPanel()"
+              aria-label="Search filters"
+              class="relative shrink-0 text-slate-400 active:text-amber-300 transition px-1"
+            >
+              <i class="fas fa-sliders text-xs"></i>
+              <span
+                id="search-filter-badge"
+                class="hidden absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] px-0.5 rounded-full bg-amber-400 text-black text-[9px] font-black leading-[14px] text-center"
+                >0</span
+              >
+            </button>
+            <!-- Local, no-network suggestions (saved alerts + cached post
+                 titles matching what's typed so far) — see
+                 _updateSearchAutocomplete in a_js.js. -->
+            <div
+              id="search-autocomplete"
+              class="hidden search-autocomplete-panel"
+            ></div>
           </div>
         </div>
 
@@ -425,6 +481,98 @@
                 inside this viewport wrapper.
               </p>
             </div>
+
+            <!-- Search filter panel: price range, date posted, location.
+                 Toggled via the sliders icon next to the header search
+                 input (window.toggleSearchFilterPanel). Values are only
+                 applied on tapping "Apply" (window.applySearchFilters) so
+                 typing in the number fields doesn't refire a search on
+                 every keystroke. -->
+            <div
+              id="search-filter-panel"
+              class="hidden p-4 bg-slate-900 border border-slate-800/60 rounded-3xl space-y-3"
+            >
+              <div class="flex items-center justify-between">
+                <h3
+                  class="text-white font-black text-xs uppercase tracking-wider"
+                >
+                  Filters
+                </h3>
+                <button
+                  type="button"
+                  onclick="window.clearSearchFilters()"
+                  class="text-[10px] text-slate-500 hover:text-red-300 uppercase font-bold tracking-wider"
+                >
+                  Clear
+                </button>
+              </div>
+
+              <div>
+                <label
+                  class="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1.5 block"
+                  >Price range (GH₵)</label
+                >
+                <div class="flex items-center gap-2">
+                  <input
+                    type="number"
+                    inputmode="decimal"
+                    min="0"
+                    id="search-filter-min-price"
+                    placeholder="Min"
+                    class="w-full bg-slate-800/70 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500"
+                  />
+                  <span class="text-slate-600 text-xs">to</span>
+                  <input
+                    type="number"
+                    inputmode="decimal"
+                    min="0"
+                    id="search-filter-max-price"
+                    placeholder="Max"
+                    class="w-full bg-slate-800/70 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label
+                  for="search-filter-date"
+                  class="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1.5 block"
+                  >Date posted</label
+                >
+                <select
+                  id="search-filter-date"
+                  class="w-full bg-slate-800/70 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+                >
+                  <option value="any">Any time</option>
+                  <option value="today">Today</option>
+                  <option value="week">This week</option>
+                  <option value="month">This month</option>
+                </select>
+              </div>
+
+              <div>
+                <label
+                  for="search-filter-location"
+                  class="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1.5 block"
+                  >Institution</label
+                >
+                <select
+                  id="search-filter-location"
+                  class="w-full bg-slate-800/70 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+                >
+                  <option value="">Everywhere</option>
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onclick="window.applySearchFilters()"
+                class="w-full py-2.5 rounded-xl bg-amber-400 text-black text-xs font-black uppercase tracking-wider active:scale-[0.98] transition"
+              >
+                Apply Filters
+              </button>
+            </div>
+
             <div id="search-results" class="space-y-4"></div>
           </div>
 
@@ -553,6 +701,22 @@
                     id="profile-ui-bio"
                     class="text-slate-300 text-xs mt-2 leading-snug hidden"
                   ></p>
+                  <!-- Structured bio extras (courses/major, interests,
+                       active-since) — each stays hidden and empty until
+                       populated by loadOwnProfileData, so a person who
+                       hasn't filled these in sees nothing extra at all. -->
+                  <p
+                    id="profile-ui-major"
+                    class="text-slate-400 text-[11px] mt-1 hidden"
+                  ></p>
+                  <div
+                    id="profile-ui-interests"
+                    class="flex flex-wrap gap-1.5 mt-2 hidden"
+                  ></div>
+                  <p
+                    id="profile-ui-active-since"
+                    class="text-slate-600 text-[10px] mt-1.5 hidden"
+                  ></p>
                 </div>
               </div>
 
@@ -675,6 +839,12 @@
                         class="hidden text-amber-400 text-[11px] font-black uppercase tracking-wider items-center gap-1"
                       >
                         <i class="fas fa-bolt"></i> Flash Sale
+                      </button>
+                      <button
+                        onclick="window.featureSelectedGridItems()"
+                        class="text-sky-400 text-[11px] font-black uppercase tracking-wider flex items-center gap-1"
+                      >
+                        <i class="fas fa-star"></i> Feature All
                       </button>
                       <button
                         onclick="window.shareSelectedGridItems()"
@@ -919,6 +1089,53 @@
                         </div>
                         <div>
                           <label
+                            for="settingsMajor"
+                            class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                            >Course / Major</label
+                          >
+                          <input
+                            type="text"
+                            id="settingsMajor"
+                            name="settingsMajor"
+                            placeholder="e.g. BSc Computer Science"
+                            class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
+                          />
+                        </div>
+                        <div>
+                          <label
+                            for="settingsInterests"
+                            class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
+                            >Interests / Hobbies</label
+                          >
+                          <input
+                            type="text"
+                            id="settingsInterests"
+                            name="settingsInterests"
+                            placeholder="e.g. Photography, Football, Coding"
+                            class="w-full mt-1 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-amber-400"
+                          />
+                          <p class="text-[9px] text-slate-600 mt-1">
+                            Comma-separated — helps connect you with students in
+                            the same program or with similar interests.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onclick="window.open2faSettingsSheet()"
+                          class="w-full flex items-center justify-between p-3 bg-slate-800 rounded-xl border border-slate-700"
+                        >
+                          <span
+                            class="text-xs font-bold text-white flex items-center gap-1.5"
+                          >
+                            <i class="fas fa-shield-halved text-amber-400"></i>
+                            Two-Factor Authentication
+                          </span>
+                          <i
+                            class="fas fa-chevron-right chev text-slate-600"
+                          ></i>
+                        </button>
+                        <div>
+                          <label
                             for="settingsEmail"
                             class="text-[10px] uppercase font-bold text-slate-500 tracking-widest"
                             >Email</label
@@ -1117,6 +1334,31 @@
                     <div class="settings-card">
                       <div>
                         <label class="settings-row cursor-pointer">
+                          <div>
+                            <p class="text-white text-xs font-bold">
+                              Push Notifications
+                            </p>
+                            <p
+                              id="settingsPushStatus"
+                              class="text-slate-500 text-[10px] mt-0.5"
+                            >
+                              Get notified even when the app is closed
+                            </p>
+                          </div>
+                          <input
+                            type="checkbox"
+                            id="settingsNotifyPush"
+                            onchange="
+                              window.togglePushNotifications(this.checked)
+                            "
+                            class="settings-switch"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                    <div class="settings-card">
+                      <div>
+                        <label class="settings-row cursor-pointer">
                           <p class="text-white text-xs font-bold">Messages</p>
                           <input
                             type="checkbox"
@@ -1190,6 +1432,13 @@
                           class="settings-row settings-row-link"
                         >
                           <span class="text-xs font-bold">Archived Posts</span>
+                          <i class="fas fa-chevron-right chev"></i>
+                        </button>
+                        <button
+                          onclick="window.openInfoSheet('reports')"
+                          class="settings-row settings-row-link"
+                        >
+                          <span class="text-xs font-bold">Your Reports</span>
                           <i class="fas fa-chevron-right chev"></i>
                         </button>
                         <button
@@ -1395,6 +1644,34 @@
             </button>
           </div>
           <div class="space-y-3 text-xs">
+            <!-- Shown only when a saved draft exists (see
+                 window._checkForSavedDraft, called when this screen
+                 opens). Note text fields only — see the Drafts feature
+                 note in a_js.js for why media can't be restored. -->
+            <div
+              id="postDraftBanner"
+              class="hidden flex items-center justify-between gap-3 p-3 bg-amber-400/10 border border-amber-400/30 rounded-xl"
+            >
+              <p class="text-amber-300 text-[11px]">
+                <i class="fas fa-file-pen mr-1"></i>You have a saved draft.
+              </p>
+              <div class="flex gap-2 shrink-0">
+                <button
+                  type="button"
+                  onclick="window._discardPostDraft()"
+                  class="text-[10px] text-slate-400 uppercase font-bold tracking-wider"
+                >
+                  Discard
+                </button>
+                <button
+                  type="button"
+                  onclick="window._resumePostDraft()"
+                  class="text-[10px] text-amber-300 uppercase font-bold tracking-wider"
+                >
+                  Resume
+                </button>
+              </div>
+            </div>
             <div>
               <label
                 for="postTitle"
@@ -1503,6 +1780,48 @@
             </div>
             <div>
               <label
+                class="flex items-center justify-between p-3 bg-slate-800 rounded-xl border border-slate-700 cursor-pointer"
+              >
+                <span
+                  class="text-xs font-bold text-white flex items-center gap-1.5"
+                >
+                  <i class="fas fa-clock text-amber-400"></i> Schedule for later
+                </span>
+                <input
+                  type="checkbox"
+                  id="postScheduleToggle"
+                  onchange="
+                    document
+                      .getElementById('postScheduleFields')
+                      .classList.toggle('hidden', !this.checked)
+                  "
+                  class="w-5 h-5 accent-amber-400"
+                />
+              </label>
+              <div
+                id="postScheduleFields"
+                class="hidden mt-2 space-y-2 p-3 bg-slate-900/60 rounded-xl border border-slate-800"
+              >
+                <p class="text-[10px] text-slate-500">
+                  Your listing stays private until this time, then goes live on
+                  its own — no need to be online when it publishes.
+                </p>
+                <div>
+                  <label
+                    for="postScheduledFor"
+                    class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
+                    >Publish at</label
+                  >
+                  <input
+                    type="datetime-local"
+                    id="postScheduledFor"
+                    class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+            <div>
+              <label
                 for="postDescription"
                 class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
                 >Description</label
@@ -1521,20 +1840,28 @@
                 class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest"
                 >Media Showcase</span
               >
-              <div class="grid grid-cols-2 gap-2">
+              <div class="grid grid-cols-3 gap-2">
                 <button
                   id="cameraCaptureBtn"
                   onclick="document.getElementById('cameraInput').click()"
                   type="button"
-                  class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-2"
+                  class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-2 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-1.5"
                 >
-                  <i class="fas fa-camera text-amber-400"></i> Camera
+                  <i class="fas fa-camera text-amber-400"></i> Photo
+                </button>
+                <button
+                  id="cameraVideoCaptureBtn"
+                  onclick="document.getElementById('cameraVideoInput').click()"
+                  type="button"
+                  class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-2 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-1.5"
+                >
+                  <i class="fas fa-video text-amber-400"></i> Video
                 </button>
                 <button
                   id="attachMediaBtn"
                   onclick="document.getElementById('mediaInput').click()"
                   type="button"
-                  class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-2"
+                  class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-2 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-1.5"
                 >
                   <i class="fas fa-images text-amber-400"></i> Gallery
                 </button>
@@ -1544,13 +1871,22 @@
                 class="text-[10px] text-slate-500 mt-1.5 text-center"
               ></p>
             </div>
-            <button
-              id="publishPostBtn"
-              onclick="window.handlePostSubmission()"
-              class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs mt-2 transition active:scale-95 shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2"
-            >
-              <span id="publishPostBtnLabel">Publish Instantly</span>
-            </button>
+            <div class="flex gap-2 mt-2">
+              <button
+                type="button"
+                onclick="window._savePostDraft()"
+                class="shrink-0 bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 font-black py-3 px-4 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+              >
+                <i class="fas fa-file-pen mr-1"></i>Save Draft
+              </button>
+              <button
+                id="publishPostBtn"
+                onclick="window.handlePostSubmission()"
+                class="flex-1 bg-amber-400 hover:bg-amber-300 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 shadow-lg shadow-amber-400/20 flex items-center justify-center gap-2"
+              >
+                <span id="publishPostBtnLabel">Publish Instantly</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1637,6 +1973,24 @@
             <i class="fas fa-times text-xs"></i>
           </button>
           <div id="manage-listing-content"></div>
+        </div>
+      </div>
+
+      <div
+        id="mfa-manage-modal"
+        class="hidden fixed inset-0 z-[200] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4"
+      >
+        <div
+          class="bg-[#0f172a] border border-slate-800/80 rounded-3xl w-full max-w-sm overflow-hidden relative shadow-2xl modal-inner"
+        >
+          <button
+            onclick="window.close2faSettingsSheet()"
+            class="absolute top-4 right-4 z-50 bg-black/60 text-white w-8 h-8 rounded-full flex items-center justify-center hover:bg-black/80 transition focus:outline-none"
+            aria-label="Close two-factor authentication settings"
+          >
+            <i class="fas fa-times text-xs"></i>
+          </button>
+          <div id="mfa-manage-body"></div>
         </div>
       </div>
 
@@ -2029,11 +2383,19 @@
           const wrap = document.getElementById("header-search-wrap");
           const input = document.getElementById("campus-global-search");
           const results = document.getElementById("search-results");
+          const autocomplete = document.getElementById("search-autocomplete");
           if (wrap && !wrap.classList.contains("hidden")) {
             wrap.classList.add("hidden");
           }
           if (input) input.value = "";
           if (results) results.innerHTML = "";
+          // Filters intentionally survive a close — closing the search bar
+          // just means the person is done typing for now, not that they
+          // want their price/date/location filters forgotten.
+          if (autocomplete) {
+            autocomplete.innerHTML = "";
+            autocomplete.classList.add("hidden");
+          }
         };
 
         // Live count of attached files for the "Create Listing" modal, and a
@@ -2071,6 +2433,20 @@
             // so taking a second photo later isn't silently ignored
             // because the browser thinks the same file is still selected.
             cameraInput.value = "";
+          });
+
+          // Same review flow, same "reset value between captures" fix —
+          // just the video-specific capture input.
+          const cameraVideoInput = document.getElementById("cameraVideoInput");
+          cameraVideoInput?.addEventListener("change", function () {
+            if (
+              cameraVideoInput.files &&
+              cameraVideoInput.files.length > 0 &&
+              typeof window.openEditMediaModal === "function"
+            ) {
+              window.openEditMediaModal(cameraVideoInput.files);
+            }
+            cameraVideoInput.value = "";
           });
 
           function refreshCartBadges() {
