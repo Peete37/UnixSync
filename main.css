@@ -764,9 +764,6 @@ body {
 .site-header .feed-tab-btn.border-amber-400 {
   text-shadow: 0 0 12px rgba(251, 191, 36, 0.45);
 }
-.site-header .header-icon-btn {
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
-}
 
 /* Settings is a true drill-down panel rather than another section in Profile. */
 #profile-subview-settings.settings-panel-open {
@@ -906,17 +903,19 @@ body {
   align-items: center;
   justify-content: center;
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  border: none;
   color: #cbd5e1;
+  filter: drop-shadow(0 1px 6px rgba(0, 0, 0, 0.55));
   transition:
-    border-color 0.2s,
     color 0.2s,
-    background 0.2s;
+    transform 0.15s;
 }
 .header-icon-btn:hover {
   color: #fbbf24;
-  border-color: rgba(251, 191, 36, 0.3);
+}
+.header-icon-btn:active {
+  transform: scale(0.9);
 }
 .header-icon-btn .badge-dot {
   position: absolute;

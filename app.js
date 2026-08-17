@@ -1391,7 +1391,7 @@ function renderSafeSwapZoneCard(post) {
                 <p class="text-[11px] font-black uppercase tracking-[0.22em] text-emerald-300">Safe Swap Zones</p>
                 <span class="text-[10px] text-emerald-200/70 uppercase">Campus pickup</span>
             </div>
-            <p class="text-xs text-slate-300 leading-relaxed">Suggested public meetup spots near ${esc(post?.institution || post?.region || "campus")} to reduce handover risk.</p>
+            <p class="text-xs text-slate-300 leading-relaxed">Suggested public meetup spots on campus to reduce handover risk.</p>
             <div class="flex flex-wrap gap-2">
                 ${zones.map((zone) => `<span class="px-2.5 py-1 rounded-full bg-slate-900/80 border border-emerald-400/20 text-[10px] text-emerald-100">${esc(zone)}</span>`).join("")}
             </div>
@@ -4052,11 +4052,30 @@ function renderVideoTrimControls(active) {
 
 window._syncVideoTrimForPreview = function (video) {
   const active = stagedMediaFiles[activeStagedIndex];
-  if (!active || active.type !== "video" || !Number.isFinite(video.duration))
+  if (!active || active.type !== "video") return;
+
+  const applyDuration = (duration) => {
+    active.duration = duration;
+    if (duration <= MAX_VIDEO_DURATION_SECONDS) active.trimEnd = null;
+    renderVideoTrimControls(active);
+  };
+
+  // Same Infinity-duration quirk as compressVideoFile — without this,
+  // a video hitting it would never even show trim controls in the
+  // first place, on top of never actually getting capped at publish
+  // time.
+  if (!Number.isFinite(video.duration)) {
+    video.currentTime = 1e101;
+    video.ondurationchange = () => {
+      if (Number.isFinite(video.duration)) {
+        video.ondurationchange = null;
+        video.currentTime = 0;
+        applyDuration(video.duration);
+      }
+    };
     return;
-  active.duration = video.duration;
-  if (video.duration <= MAX_VIDEO_DURATION_SECONDS) active.trimEnd = null;
-  renderVideoTrimControls(active);
+  }
+  applyDuration(video.duration);
 };
 
 window._setVideoTrim = function (which, rawValue) {
@@ -4588,7 +4607,32 @@ function compressVideoFile(
     };
 
     video.onloadedmetadata = () => {
-      const { videoWidth, videoHeight, duration } = video;
+      // Many real phone-camera videos (and anything MediaRecorder
+      // produced, including a video that already went through THIS
+      // same function once) report duration as Infinity in Chrome
+      // until something forces a seek — a known browser quirk, not
+      // anything wrong with the file. Previously this silently bailed
+      // out to the ORIGINAL, completely untrimmed/uncapped file
+      // whenever it hit this — exactly matching "the 30s cap doesn't
+      // apply" and "trim doesn't work" happening together. Seeking to
+      // a huge timestamp forces Chrome to actually compute the real
+      // duration; ondurationchange fires once it has it.
+      if (!Number.isFinite(video.duration)) {
+        video.currentTime = 1e101;
+        video.ondurationchange = () => {
+          if (Number.isFinite(video.duration)) {
+            video.ondurationchange = null;
+            video.currentTime = 0;
+            proceedWithDuration(video.duration);
+          }
+        };
+        return;
+      }
+      proceedWithDuration(video.duration);
+    };
+
+    function proceedWithDuration(duration) {
+      const { videoWidth, videoHeight } = video;
       const safeStart = Math.max(0, Math.min(trimStart || 0, duration));
       const safeEnd = Math.max(
         safeStart + 0.1,
@@ -4712,7 +4756,26 @@ function compressVideoFile(
           if (recorder.state === "recording") recorder.stop();
           else finish(file);
         });
-    };
+
+      // Second, independent enforcement of the trim end-point, on top of
+      // ontimeupdate above — ontimeupdate's firing rate is throttled by
+      // the browser and isn't guaranteed to land exactly on safeEnd, and
+      // relies on currentTime tracking correctly at all (the same class
+      // of unreliable-metadata issue this function just worked around
+      // once already). A plain wall-clock timeout can't be thrown off
+      // by either of those, so between the two, the 30s cap should
+      // never fail to actually apply.
+      setTimeout(
+        () => {
+          if (recorder.state === "recording") {
+            drawing = false;
+            recorder.stop();
+            video.pause();
+          }
+        },
+        Math.ceil((safeEnd - safeStart) * 1000) + 500,
+      );
+    }
 
     video.onerror = () => finish(file);
   });
@@ -8818,7 +8881,7 @@ async function loadFollowingFeed() {
 
   feed.classList.remove("grid-mode", "reels-mode");
   pauseAllReelVideos();
-  feed.innerHTML = renderSkeletonCards(4, false);
+  feed.innerHTML = renderSkeletonCards(6, "masonry-feed");
 
   feedLoadedCount = 0;
   feedHasMore = true;
@@ -8906,7 +8969,7 @@ async function loadTrendingFeed() {
 
   feed.classList.remove("grid-mode", "reels-mode");
   pauseAllReelVideos();
-  feed.innerHTML = renderSkeletonCards(4, false);
+  feed.innerHTML = renderSkeletonCards(6, "masonry-feed");
 
   try {
     const cutoff = new Date(
@@ -9015,14 +9078,57 @@ async function loadNextFollowingPage() {
 // real content replaces these — count defaults to a typical first-screen
 // page size. grid=true renders square tiles (Explore/profile grids);
 // grid=false renders full feed-card-shaped rows (main feed).
-function renderSkeletonCards(count = 6, grid = false) {
-  if (grid) {
+// Skeleton screens (doc: "the current loading state is a spinner...a gray
+// outline of the content that's about to load is a much better UX").
+// Fix: this originally rendered a plain uniform 3-column square grid for
+// every "grid" mode — but Products/Services/the All-tab actually use
+// Pinterest-style CSS-column masonry with varied card heights
+// (.masonry-columns / .masonry-columns-feed), so the skeleton didn't
+// match the real layout at all and visibly "popped"/reflowed the instant
+// real content replaced it. Now takes a `mode` so each tab's skeleton
+// uses the exact same container/card classes the real content will,
+// with a few varied heights standing in for masonry's natural variance.
+const SKELETON_TILE_HEIGHTS = [140, 190, 160, 220, 150, 200, 170, 130];
+
+function renderSkeletonCards(count = 6, mode = "feed") {
+  if (
+    mode === "masonry" ||
+    mode === "masonry-feed" ||
+    mode === "masonry-services"
+  ) {
+    const columnsClass =
+      mode === "masonry-feed"
+        ? "masonry-columns-feed"
+        : mode === "masonry-services"
+          ? "masonry-columns-services"
+          : "masonry-columns";
+    const cardClass =
+      mode === "masonry-feed"
+        ? "masonry-card-feed"
+        : mode === "masonry-services"
+          ? "masonry-card-service"
+          : "masonry-card";
+    return `<div class="${columnsClass}">${Array.from({ length: count })
+      .map((_, i) => {
+        const h = SKELETON_TILE_HEIGHTS[i % SKELETON_TILE_HEIGHTS.length];
+        return `
+            <div class="${cardClass} mb-1">
+                <div class="rounded-xl bg-slate-800/60 skeleton-pulse" style="height:${h}px"></div>
+                <div class="h-2.5 w-2/3 mt-1.5 rounded bg-slate-800 skeleton-pulse"></div>
+                <div class="h-2 w-1/3 mt-1 rounded bg-slate-800/70 skeleton-pulse"></div>
+            </div>`;
+      })
+      .join("")}</div>`;
+  }
+
+  if (mode === "grid") {
     return `<div class="grid grid-cols-3 gap-2">${Array(count)
       .fill(
         `<div class="aspect-square rounded-xl bg-slate-800/60 skeleton-pulse"></div>`,
       )
       .join("")}</div>`;
   }
+
   return Array(count)
     .fill(
       `
@@ -9517,9 +9623,21 @@ window.filterFeed = function (type, clickedBtn = null) {
 
   const feed = document.getElementById("posts-feed");
   if (feed) {
-    const usesGridLayout =
-      type === "product" || type === "skill" || type === "deals";
-    feed.innerHTML = renderSkeletonCards(6, usesGridLayout);
+    // Matches renderSkeletonCards' mode to whatever container class this
+    // tab actually renders into (see the masonry-columns* class each
+    // branch uses further down in renderFeedFromCache) — Products/Deals
+    // and Services use slightly different column classes from each
+    // other and from the All-tab feed, so a single generic "grid" mode
+    // doesn't fit all three.
+    const skeletonMode =
+      type === "product" || type === "deals"
+        ? "masonry"
+        : type === "skill"
+          ? "masonry-services"
+          : type === "reels"
+            ? "feed" // reels has its own dedicated loading state elsewhere, this is just a safe fallback
+            : "masonry-feed"; // "all" and anything else defaults to the main feed's masonry layout
+    feed.innerHTML = renderSkeletonCards(6, skeletonMode);
   }
 
   // Product tab still fetches ALL posts (so grid + other tabs share cache)
@@ -11928,7 +12046,8 @@ function initSettingsToggles() {
 //     currently has no server-side trigger wired to every notification
 //     type yet; the one concrete call site added in this pass is a new
 //     message arriving in a DM (see sendChatMessage below).
-const VAPID_PUBLIC_KEY = ""; // <-- fill in before this feature can actually subscribe anyone
+const VAPID_PUBLIC_KEY =
+  "BLKnaqt2-U3zhS7yZYLq78S2Ori8FiueaS_BIkH_yEDLkiKvYATO9-U39NQvIDNf3TCx-GPIKkq0oWcf8Qv1TFE";
 
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
