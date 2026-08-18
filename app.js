@@ -768,6 +768,34 @@ function updateDmUnreadBadge() {
 // comparisons are always string-to-string regardless of where the id
 // originated.
 const idKey = (id) => String(id);
+
+// Tiny best-effort haptic tap for like/follow-style micro-interactions.
+// navigator.vibrate doesn't exist on iOS Safari at all (no-op there,
+// nothing to guard beyond the typeof check) and can be blocked by the
+// OS/browser for other reasons — wrapped in try/catch so a haptic nice-
+// to-have can never throw and break the actual action it's attached to.
+function hapticTap(ms = 15) {
+  try {
+    if (typeof navigator !== "undefined" && navigator.vibrate) {
+      navigator.vibrate(ms);
+    }
+  } catch (_) {}
+}
+
+// Scroll-to-top button visibility. Pure client-side UI state — no DB/
+// storage involved. Reuses the existing passive window scroll listener
+// pattern (see _lastScrollAt above) rather than adding a second one;
+// threshold check is cheap so it just runs alongside the existing
+// handler instead of a separate listener.
+window.addEventListener(
+  "scroll",
+  () => {
+    const btn = document.getElementById("scroll-top-btn");
+    if (!btn) return;
+    btn.classList.toggle("visible", window.scrollY > 600);
+  },
+  { passive: true },
+);
 const savedSearchAlerts = safeStorageJsonParse(SAVED_ALERTS_KEY, []);
 const alertedPostIds = new Set(
   safeStorageJsonParse(ALERT_NOTIFIED_POSTS_KEY, []).map(idKey),
@@ -999,6 +1027,20 @@ window.addEventListener("popstate", () => {
   // Falls through here on a genuine second press — let the
   // browser/app handle exit as a normal web history pop (closes PWA,
   // tabs back, etc). Nothing further to do.
+});
+
+// Keyboard: Escape closes the topmost open overlay (modal/sheet/DM
+// thread), mirroring the hardware/gesture back-button handler above
+// rather than duplicating its close logic. Deliberately routes through
+// history.back() so the exact same popstate branch runs either way —
+// one code path, two ways to trigger it. Guarded to only fire when an
+// overlay is actually open, so Escape does nothing (and never
+// navigates the browser) the rest of the time.
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (_uiStack.length === 0) return;
+  e.preventDefault();
+  history.back();
 });
 // ─── FEED REFRESH COALESCING ──────────────────────────────────────────────────
 // Hoisted to module scope on purpose: when the user switches across feed
@@ -3641,6 +3683,24 @@ window.handleAvatarUpload = async function (inputEl) {
       );
     }
 
+    // Fix: comments have the exact same denormalized-snapshot problem
+    // as posts did (see above) — comments.user_avatar was frozen at
+    // the moment each comment was posted, so old comments kept
+    // showing a stale photo forever while only brand-new comments got
+    // the current one. Same backfill, same table-agnostic reasoning,
+    // just a different table.
+    try {
+      await supabase
+        .from("comments")
+        .update({ user_avatar: dynamicUrl })
+        .eq("user_id", currentUserData.id);
+    } catch (backfillErr) {
+      console.warn(
+        "Avatar backfill onto existing comments failed (non-fatal):",
+        backfillErr,
+      );
+    }
+
     // Instantly reflect the new avatar on anything already rendered
     // in this session — the in-memory allCachedPosts snapshot, plus
     // every avatar <img> tagged as belonging to this user — instead
@@ -4969,6 +5029,7 @@ window.likePost = async function (postId, btn) {
     likedPostIds.add(key);
     currentCount = currentCount + 1;
     syncLikeButtonsForPost(key, true, currentCount, btn);
+    hapticTap();
   }
 
   localStorage.setItem(
@@ -5605,34 +5666,32 @@ function renderCommentItem(c, postId, options = {}) {
 
   return `
         <div class="flex gap-2 items-start text-left mt-2.5 ${indentClass}" id="comment-item-${escAttr(c.id)}">
-            <div class="feed-profile-trigger flex gap-2 items-start flex-1 min-w-0 cursor-pointer" data-user-id="${escAttr(c.user_id)}">
-                <img src="${esc(c.user_avatar) || avatarFallback}" onerror="this.onerror=null; this.src='${avatarFallback}'" class="w-7 h-7 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5" alt="${escAttr(c.user_name) || "Commenter"}">
-                <div class="${bubbleClass} rounded-2xl px-3 py-2 flex-1 border min-w-0">
-                    <div class="flex items-start justify-between gap-2">
-                        <div class="flex items-baseline gap-1.5 min-w-0">
-                            <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide truncate">${esc(c.user_name)}</p>
-                            ${isOwn ? '<span class="text-[8px] text-amber-400/60 font-bold uppercase shrink-0">You</span>' : ""}
-                            <span class="text-[9px] text-slate-500 shrink-0">· ${timeAgo(c.created_at)}</span>
-                        </div>
-                        <button onclick="event.stopPropagation(); window.openCommentOptionsMenu('${escAttr(c.id)}', '${escAttr(postId)}', ${isOwn ? "true" : "false"}, '${escAttr(c.user_id)}', '${escAttr(c.user_name)}')" class="text-slate-500 hover:text-white transition shrink-0 -mt-0.5 -mr-1 px-1.5 py-0.5" aria-label="More options">
-                            <i class="fas fa-ellipsis-vertical text-[11px]"></i>
-                        </button>
+            <img src="${esc(c.user_avatar) || avatarFallback}" onerror="this.onerror=null; this.src='${avatarFallback}'" class="feed-profile-trigger w-7 h-7 rounded-full border border-slate-800 object-cover shrink-0 mt-0.5 cursor-pointer" alt="${escAttr(c.user_name) || "Commenter"}" data-user-id="${escAttr(c.user_id)}" data-avatar-for="${escAttr(c.user_id)}">
+            <div class="${bubbleClass} rounded-2xl px-3 py-2 flex-1 border min-w-0">
+                <div class="flex items-start justify-between gap-2">
+                    <div class="feed-profile-trigger flex items-baseline gap-1.5 min-w-0 cursor-pointer" data-user-id="${escAttr(c.user_id)}">
+                        <p class="text-[9px] font-black text-amber-400 uppercase tracking-wide truncate">${esc(c.user_name)}</p>
+                        ${isOwn ? '<span class="text-[8px] text-amber-400/60 font-bold uppercase shrink-0">You</span>' : ""}
+                        <span class="text-[9px] text-slate-500 shrink-0">· ${timeAgo(c.created_at)}</span>
                     </div>
-                    <p class="selectable-text text-xs text-slate-200 mt-0.5 break-words">${esc(c.text)}</p>
-                    <div class="flex items-center gap-3 mt-1.5">
-                        <button onclick="event.stopPropagation(); window.likeComment('${escAttr(c.id)}', this)" class="flex items-center gap-1 active:scale-90 transition">
-                            <i class="${heartClass} text-[11px]"></i>
-                            <span class="comment-like-count text-[10px] text-slate-400 font-semibold">${parseInt(c.likes_count || 0)}</span>
-                        </button>
-                        ${
-                          isPreview
-                            ? ""
-                            : `
-                        <button onclick="event.stopPropagation(); window.startCommentReply('${escAttr(postId)}', '${escAttr(c.id)}', '${escAttr(c.user_name)}', this)" class="text-[10px] text-slate-400 font-semibold hover:text-amber-400 transition">
-                            Reply
-                        </button>`
-                        }
-                    </div>
+                    <button onclick="window.openCommentOptionsMenu('${escAttr(c.id)}', '${escAttr(postId)}', ${isOwn ? "true" : "false"}, '${escAttr(c.user_id)}', '${escAttr(c.user_name)}')" class="text-slate-500 hover:text-white transition shrink-0 -mt-0.5 -mr-1 px-1.5 py-0.5" aria-label="More options">
+                        <i class="fas fa-ellipsis-vertical text-[11px]"></i>
+                    </button>
+                </div>
+                <p class="selectable-text text-xs text-slate-200 mt-0.5 break-words">${esc(c.text)}</p>
+                <div class="flex items-center gap-3 mt-1.5">
+                    <button onclick="window.likeComment('${escAttr(c.id)}', this)" class="flex items-center gap-1 active:scale-90 transition">
+                        <i class="${heartClass} text-[11px]"></i>
+                        <span class="comment-like-count text-[10px] text-slate-400 font-semibold">${parseInt(c.likes_count || 0)}</span>
+                    </button>
+                    ${
+                      isPreview
+                        ? ""
+                        : `
+                    <button onclick="window.startCommentReply('${escAttr(postId)}', '${escAttr(c.id)}', '${escAttr(c.user_name)}', this)" class="text-[10px] text-slate-400 font-semibold hover:text-amber-400 transition">
+                        Reply
+                    </button>`
+                    }
                 </div>
             </div>
         </div>`;
@@ -7177,11 +7236,15 @@ function renderFeedCard(id, d, options = {}) {
         </div>
 
         <div class="px-3 pb-3">
-            <button
+            ${
+              isOwnPost
+                ? `<button disabled class="w-full flex items-center justify-center gap-1.5 bg-slate-900 border border-slate-800 text-slate-500 font-extrabold py-2.5 rounded-xl text-[11px] uppercase tracking-wider cursor-not-allowed">Your Listing</button>`
+                : `<button
                 onclick="contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}', '${escAttr(id)}')"
                 class="w-full flex items-center justify-center gap-1.5 bg-amber-400 text-black font-extrabold py-2.5 rounded-xl text-[11px] uppercase tracking-wider transition active:scale-[0.98]">
                 <i class="fas fa-bolt text-[10px]"></i> ${d.type === "skill" ? "Contact" : "Contact Seller"}
-            </button>
+            </button>`
+            }
         </div>
 
         <div id="comments-${escAttr(id)}" class="hidden px-3 pb-3 space-y-2 border-t border-slate-800/60 pt-2">
@@ -7205,6 +7268,17 @@ function renderFeedCard(id, d, options = {}) {
                 >
                     <i class="fas fa-paper-plane text-[11px]"></i>
                 </button>
+            </div>
+            <!-- Fix: Top/Newest comment sort only existed on the Reels
+                 bottom sheet — the sort/query logic in toggleComments()
+                 already works for both sheet types (it just reads
+                 commentSortMode by postId), the button UI to trigger it
+                 was simply never added here. Copied verbatim from the
+                 reel-comments sort-group markup so setCommentSortMode's
+                 class toggling (text-amber-400 / text-white/50) matches. -->
+            <div class="flex items-center gap-3 pb-0.5" id="sort-group-${escAttr(id)}">
+                <button data-sort-mode="top" onclick="window.setCommentSortMode('${escAttr(id)}', 'top', this.parentElement)" class="text-[10px] font-bold uppercase tracking-wide text-amber-400 transition">Top</button>
+                <button data-sort-mode="newest" onclick="window.setCommentSortMode('${escAttr(id)}', 'newest', this.parentElement)" class="text-[10px] font-bold uppercase tracking-wide text-white/50 transition">Newest</button>
             </div>
             <div id="comment-list-${escAttr(id)}" class="max-h-36 overflow-y-auto space-y-1.5 custom-scrollbar"></div>
         </div>
@@ -7590,11 +7664,19 @@ function renderDealsGrid() {
 // the in-memory cache; show again when a new qualifying post arrives.
 // Lightweight — runs every two seconds rather than every second since
 // the visible state only needs to change when a deadline passes.
+//
+// Fix: this only ever updated the tab BUTTON's opacity. If someone was
+// actually sitting on the Deals grid when a sale's sale_ends_at passed,
+// the expired card just stayed on screen — nothing re-ran
+// renderDealsGrid() until they navigated away and back. Now tracks the
+// live-deal count and, if it changed AND the Deals tab is the one
+// currently open, re-renders the grid so expired cards drop out live.
+let _lastLiveDealCount = null;
 setInterval(() => {
   const btn = document.querySelector('.feed-tab-btn[data-tab="deals"]');
   if (!btn) return;
   const now = Date.now();
-  const hasLiveDeal = allCachedPosts.some(({ data: d }) => {
+  const liveDeals = allCachedPosts.filter(({ data: d }) => {
     if (!d) return false;
     const op = d.original_price != null ? Number(d.original_price) : null;
     const price = Number(d.price || 0);
@@ -7602,6 +7684,16 @@ setInterval(() => {
     if (!d.sale_ends_at) return false;
     return new Date(d.sale_ends_at).getTime() > now;
   });
+  const hasLiveDeal = liveDeals.length > 0;
+  if (
+    _lastLiveDealCount !== null &&
+    liveDeals.length !== _lastLiveDealCount &&
+    typeof currentFeedType !== "undefined" &&
+    currentFeedType === "deals"
+  ) {
+    renderDealsGrid();
+  }
+  _lastLiveDealCount = liveDeals.length;
   btn.classList.toggle("opacity-40", !hasLiveDeal);
   btn.title = hasLiveDeal
     ? "Live flash-sale listings"
@@ -7963,11 +8055,15 @@ function renderReelCard(id, d, lazy = false) {
             </div>
             <p class="text-white text-sm font-semibold leading-snug line-clamp-2">${esc(d.title)}</p>
             <p class="text-amber-400 font-black text-sm mt-1">GH₵${esc(String(d.price || 0))}</p>
-            <button
+            ${
+              isOwnPost
+                ? `<button disabled class="mt-2 flex items-center gap-1.5 bg-slate-900/80 border border-white/10 text-slate-500 font-extrabold py-2 px-4 rounded-xl text-[11px] uppercase tracking-wider cursor-not-allowed w-fit">Your Listing</button>`
+                : `<button
                 onclick="event.stopPropagation(); contactSeller('${escAttr(d.user_id)}', '${escAttr(d.user_name)}', '${escAttr(d.user_avatar)}', '${escAttr(d.title)}', '${escAttr(id)}')"
                 class="mt-2 flex items-center gap-1.5 bg-amber-400 text-black font-extrabold py-2 px-4 rounded-xl text-[11px] uppercase tracking-wider active:scale-[0.97] transition w-fit">
                 <i class="fas fa-bolt text-[10px]"></i> ${d.type === "skill" ? "Contact" : "Contact Seller"}
-            </button>
+            </button>`
+            }
         </div>
 
         <div id="comments-${escAttr(id)}" class="hidden reel-comments">
@@ -8584,6 +8680,7 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
         return;
       }
       updateFollowButtons(targetUserId, true);
+      hapticTap();
     }
 
     if (

@@ -35,6 +35,21 @@
       content="black-translucent"
     />
     <meta name="apple-mobile-web-app-title" content="Unix-Sync" />
+    <!-- Perf: open the connection to the fonts CDN(s) before the
+         stylesheet link below even asks for it, so the actual font
+         files start downloading sooner instead of waiting for DNS +
+         TLS to finish first. crossorigin is required on the gstatic
+         one specifically because font files are fetched
+         cross-origin with CORS; googleapis.com only serves the CSS
+         itself, no crossorigin needed there. dns-prefetch is just a
+         same-intent fallback for older browsers that don't support
+         preconnect. NOTE: a Supabase preconnect isn't added here —
+         that needs your actual project ref (https://xxxx.supabase.co
+         from supabase-config.js, not the generic supabase.co domain),
+         which wasn't in the files given this session. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="dns-prefetch" href="https://fonts.gstatic.com" />
     <!-- Tailwind is now a real compiled build (see package.json's
          "build" script + src/tailwind-input.css), run once at deploy
          time by Vercel, instead of every visitor's browser re-running
@@ -79,6 +94,17 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="dist.css" />
+    <!-- Perf: dist.css is the last stylesheet link above, so the
+         browser doesn't even discover it needs fetching until it's
+         parsed everything before it. Preloading it here means the
+         fetch starts immediately during head-parsing instead of
+         waiting. app.js gets the same head-start via modulepreload —
+         the module-specific equivalent of rel="preload" as="script"
+         (plain "preload" on a `type="module"` script logs a browser
+         console warning for a mismatched `as`, so modulepreload is
+         the correct tag here, not the generic one). -->
+    <link rel="preload" href="dist.css" as="style" />
+    <link rel="modulepreload" href="./app.js" />
   </head>
 
   <body class="bg-[#020617] text-slate-100 min-h-screen antialiased">
@@ -1615,6 +1641,20 @@
           </ul>
         </div>
       </aside>
+
+      <!-- Scroll-to-top button: global sibling, not tied to any one view
+           container, so it works the same on Feed/Products/Profile/etc.
+           Hidden by default; app.js toggles .visible past a scroll
+           threshold and wires the click handler. Positioned to clear the
+           fixed bottom-nav-container (z-index 50) rather than overlap it. -->
+      <button
+        id="scroll-top-btn"
+        class="scroll-top-btn"
+        aria-label="Scroll to top"
+        onclick="window.scrollTo({ top: 0, behavior: 'smooth' })"
+      >
+        <i class="fas fa-arrow-up"></i>
+      </button>
 
       <div class="bottom-nav-container">
         <nav class="bottom-nav">
