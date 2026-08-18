@@ -1466,10 +1466,58 @@ function renderSimilarListingsBlock(post) {
 
   if (!candidates.length) return "";
 
+  // Fix (Aug 2026): scoring used to only weigh institution/region — two
+  // posts sharing nothing but "same type + same campus" could rank
+  // above something actually related, which is why unrelated items
+  // (toothpaste next to a wristband) could show up. Added lightweight,
+  // still-zero-new-infra signals: shared significant title words, and
+  // price-proximity (a GH₵100 item isn't "similar" to a GH₵0 one just
+  // because they're both products from the same campus). Still an
+  // honest heuristic, not real ML — just a better one, using only data
+  // already sitting in allCachedPosts.
+  const STOPWORDS = new Set([
+    "the",
+    "and",
+    "for",
+    "with",
+    "new",
+    "used",
+    "for",
+    "sale",
+    "of",
+    "a",
+    "an",
+    "in",
+    "on",
+  ]);
+  const titleWords = (t) =>
+    new Set(
+      String(t || "")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length > 2 && !STOPWORDS.has(w)),
+    );
+  const targetWords = titleWords(post.title);
+  const targetPrice = Number(post.price) || 0;
+
   const scored = candidates.map((d) => {
     let score = 0;
     if (d.institution && d.institution === post.institution) score += 10;
     else if (d.region && d.region === post.region) score += 5;
+
+    const sharedWords = [...titleWords(d.title)].filter((w) =>
+      targetWords.has(w),
+    ).length;
+    score += sharedWords * 8;
+
+    const dPrice = Number(d.price) || 0;
+    if (targetPrice > 0 && dPrice > 0) {
+      const diffRatio =
+        Math.abs(dPrice - targetPrice) / Math.max(dPrice, targetPrice);
+      if (diffRatio <= 0.3) score += 4;
+      else if (diffRatio <= 0.6) score += 1;
+    }
+
     return { d, score, createdAt: d.created_at || "" };
   });
   scored.sort(
@@ -1488,6 +1536,58 @@ function renderSimilarListingsBlock(post) {
             <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400 mb-3">You might also like</p>
             <div class="masonry-columns-feed">
                 ${picks.map((d) => renderFeedMasonryCard(idKey(d.id), d)).join("")}
+            </div>
+        </div>`;
+}
+
+// ─── DEALS STRIP (post detail page) ──────────────────────────────────────
+// Horizontal-scroll preview of live flash sales, shown above "You might
+// also like" on the post detail page — a taste of the Deals tab without
+// leaving the post you're on. Reuses getLiveDeals() (same "is this a
+// live deal" definition as the Deals tab itself), so this is zero extra
+// Supabase reads — just a different view of data already loaded in
+// allCachedPosts.
+function renderDealsStripCard(id, d) {
+  let mediaUrl = "";
+  if (d.media_url) {
+    if (d.media_url.startsWith("[")) {
+      try {
+        mediaUrl = JSON.parse(d.media_url)[0];
+      } catch (_) {
+        mediaUrl = d.media_url;
+      }
+    } else {
+      mediaUrl = d.media_url;
+    }
+  }
+  return `
+        <div class="shrink-0 w-32 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
+            <div class="relative w-32 h-32 rounded-xl overflow-hidden bg-slate-900 border border-slate-800">
+                <img src="${esc(mediaUrl)}" loading="lazy" class="w-full h-full object-cover" alt="${escAttr(d.title)}">
+                <span class="absolute top-1.5 left-1.5 bg-rose-500 text-white text-[9px] font-black uppercase px-1.5 py-0.5 rounded">Deal</span>
+            </div>
+            <p class="text-[11px] text-slate-300 mt-1 truncate">${esc(d.title)}</p>
+            <div class="flex items-baseline gap-1.5">
+                <p class="text-xs font-black text-amber-400">GH₵${esc(String(d.price || 0))}</p>
+                <p class="text-[10px] text-slate-500 line-through">GH₵${esc(String(d.original_price || 0))}</p>
+            </div>
+        </div>`;
+}
+
+function renderDealsStripBlock(excludePostId) {
+  const deals = getLiveDeals()
+    .filter(({ id }) => idKey(id) !== idKey(excludePostId))
+    .slice(0, 12);
+  if (!deals.length) return "";
+
+  return `
+        <div class="pt-2">
+            <div class="flex items-center justify-between mb-3">
+                <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">⚡ Live Deals</p>
+                <button onclick="window.navigateTo('feed'); window.filterFeed('deals', document.querySelector('.feed-tab-btn[data-tab=&quot;deals&quot;]'))" class="text-[10px] font-bold text-amber-400 uppercase tracking-wide">See all</button>
+            </div>
+            <div class="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+                ${deals.map(({ id, data: d }) => renderDealsStripCard(id, d)).join("")}
             </div>
         </div>`;
 }
@@ -2797,9 +2897,35 @@ window.togglePostModal = function () {
   const willOpen = modal.classList.contains("hidden");
   modal.classList.toggle("hidden");
 
+  // Fix: this modal never locked body scroll at all — unlike the
+  // Detail modal (see _bodyScrollLocks below), which already handles
+  // this correctly. #post-modal is a fixed inset-0 overlay, but its
+  // actual content card only fills the bottom portion (items-end);
+  // the backdrop area above the card has nothing scrollable of its
+  // own, so on mobile a swipe starting there was chaining through to
+  // the feed underneath instead of being absorbed by the overlay.
+  // Same pair++/-- counter as the Detail modal so the two nest
+  // correctly if one is ever opened from inside the other.
   if (willOpen) {
+    _bodyScrollLocks++;
+    document.body.style.overflow = "hidden";
+  } else if (--_bodyScrollLocks <= 0) {
+    _bodyScrollLocks = 0;
+    document.body.style.overflow = "";
+  }
+
+  if (willOpen) {
+    // Back-button/gesture close routes through this closure, not
+    // through this function itself (see pushUiState above) — release
+    // the same lock here too, or a back-button close would leave body
+    // scroll permanently disabled instead of just the toggle-button
+    // close path.
     pushUiState("post-modal", () => {
       document.getElementById("post-modal")?.classList.add("hidden");
+      if (--_bodyScrollLocks <= 0) {
+        _bodyScrollLocks = 0;
+        document.body.style.overflow = "";
+      }
     });
     if (typeof window._checkForSavedDraft === "function") {
       window._checkForSavedDraft();
@@ -3071,6 +3197,7 @@ window.openDetail = async function (postId, fromBack = false) {
                     <p class="text-[10px] text-slate-600 animate-pulse">Loading comments...</p>
                 </div>
                 ${safeSwapBlock}
+                ${renderDealsStripBlock(d.id)}
                 ${renderSimilarListingsBlock(d)}
             </div>
             <div id="comments-${escAttr(d.id)}" class="hidden reel-comments">
@@ -5770,6 +5897,8 @@ window.setCommentSortMode = function (postId, mode, btnGroup) {
     fetcher().catch((err) => console.error("Failed to re-sort comments:", err));
 };
 
+let _lastCommentSheetOpenAt = 0;
+
 window.toggleComments = async function (postId, triggerEl = null) {
   const key = idKey(postId);
   const commentSection = getPreferredCommentSection(key, triggerEl);
@@ -5814,6 +5943,7 @@ window.toggleComments = async function (postId, triggerEl = null) {
     commentSection.classList.remove("hidden");
     requestAnimationFrame(() => commentSection.classList.add("comments-open"));
     backdrop?.classList.add("backdrop-open");
+    _lastCommentSheetOpenAt = Date.now();
     pushUiState(`comments-${key}`, () => window._closeCommentSheet(key, true));
   } else {
     commentSection.classList.remove("hidden");
@@ -6136,6 +6266,18 @@ document.addEventListener("DOMContentLoaded", () => {
       // up here, so it's ignored. A genuine outside click (the
       // sheet's real dismiss gesture) still works exactly as
       // before.
+      // Same-class fix, second instance: a stray/delayed synthetic
+      // click from the SAME tap that opened the sheet can still land
+      // on the backdrop a beat later, right as it becomes clickable —
+      // producing a visible open-then-immediately-close flash. The
+      // bounding-box check above catches wrongly-attributed clicks
+      // that land ON the sheet; this catches the other half — clicks
+      // that fire suspiciously soon after the sheet opened at all,
+      // genuine outside-tap or not. 350ms is comfortably past any
+      // mobile browser's touch-to-synthetic-click delay while still
+      // being imperceptible as a "the close button feels sluggish"
+      // delay for an actual outside tap.
+      if (Date.now() - _lastCommentSheetOpenAt < 350) return;
       const openSheet = document.querySelector(".reel-comments.comments-open");
       if (openSheet) {
         const rect = openSheet.getBoundingClientRect();
@@ -7619,14 +7761,14 @@ function renderServiceGrid() {
 // expired, the tab is hidden entirely (handled by the setInterval below
 // that toggles the button's .hidden class). Reuses renderProductGridCard
 // for consistent visuals with the Products tab.
-function renderDealsGrid() {
-  const feed = document.getElementById("posts-feed");
-  if (!feed) return;
-
-  feed.classList.add("grid-mode");
-
+// Shared "is this post a live flash sale right now" filter — was
+// duplicated verbatim in renderDealsGrid and the tick interval below;
+// factored out here so the new horizontal Deals strip (post detail
+// page) uses the exact same definition of "live deal" instead of a
+// third copy that could drift out of sync.
+function getLiveDeals() {
   const now = Date.now();
-  const dealEntries = allCachedPosts.filter(({ data: d }) => {
+  return allCachedPosts.filter(({ data: d }) => {
     if (!d) return false;
     const op = d.original_price != null ? Number(d.original_price) : null;
     const price = Number(d.price || 0);
@@ -7634,6 +7776,15 @@ function renderDealsGrid() {
     if (!d.sale_ends_at) return false;
     return new Date(d.sale_ends_at).getTime() > now;
   });
+}
+
+function renderDealsGrid() {
+  const feed = document.getElementById("posts-feed");
+  if (!feed) return;
+
+  feed.classList.add("grid-mode");
+
+  const dealEntries = getLiveDeals();
 
   if (dealEntries.length === 0) {
     feed.innerHTML = `
@@ -7675,15 +7826,7 @@ let _lastLiveDealCount = null;
 setInterval(() => {
   const btn = document.querySelector('.feed-tab-btn[data-tab="deals"]');
   if (!btn) return;
-  const now = Date.now();
-  const liveDeals = allCachedPosts.filter(({ data: d }) => {
-    if (!d) return false;
-    const op = d.original_price != null ? Number(d.original_price) : null;
-    const price = Number(d.price || 0);
-    if (op == null || op <= 0 || op === price) return false;
-    if (!d.sale_ends_at) return false;
-    return new Date(d.sale_ends_at).getTime() > now;
-  });
+  const liveDeals = getLiveDeals();
   const hasLiveDeal = liveDeals.length > 0;
   if (
     _lastLiveDealCount !== null &&
@@ -10931,10 +11074,25 @@ async function loadProfileStats() {
       // Archived Posts) rather than being mixed into this grid —
       // this filter is what makes that separation real instead of
       // cosmetic.
+      //
+      // Fix: this used to select only id/title/media/price/
+      // scheduled_for/is_featured — enough for the grid thumbnails
+      // themselves, but this same result also gets cached into
+      // _ownProfilePostsById and reused by openProfilePostViewer for
+      // the full-screen swipe view of your OWN posts (see below).
+      // That viewer needs the same shape as FEED_SELECT_COLUMNS
+      // (name, avatar, description, counts, etc.) — without them it
+      // rendered your own posts with the generic "Student" fallback
+      // and blank description/counts, while everyone else's profile
+      // viewer worked fine because that branch does its own full
+      // fetch instead of reusing this lean cache. Union of both
+      // column sets rather than switching to FEED_SELECT_COLUMNS
+      // outright, since scheduled_for/is_featured are grid-only
+      // fields FEED_SELECT_COLUMNS doesn't carry.
       supabase
         .from("posts")
         .select(
-          "id, title, media_url, thumbnail_url, media_type, price, scheduled_for, is_featured",
+          "id, title, description, price, original_price, sale_ends_at, media_url, thumbnail_url, media_type, institution, region, user_name, user_avatar, user_id, likes_count, comments_count, type, created_at, scheduled_for, is_featured",
         )
         .eq("user_id", currentUserData.id)
         .eq("is_archived", false)
