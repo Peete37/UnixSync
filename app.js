@@ -2705,7 +2705,7 @@ window.navigateTo = function (viewId, btn = null) {
   // from. Removing them without replacing anything left a bare,
   // half-empty header bar (icons bunched at the left edge), so a page
   // title fills that same space instead on exactly those two views.
-  const HEADER_TITLES = { profile: "Profile", dms: "Messages" };
+  const HEADER_TITLES = { profile: "Profile", dms: "Inbox" };
   const searchBtn = document.getElementById("search-toggle-btn");
   const cartBtn = document.getElementById("nav-btn-cart");
   const pageTitle = document.getElementById("header-page-title");
@@ -2716,6 +2716,13 @@ window.navigateTo = function (viewId, btn = null) {
     pageTitle.classList.toggle("hidden", !titleText);
     if (titleText) pageTitle.textContent = titleText;
   }
+
+  // TikTok-style profile header: the bookmark icon's spot (already
+  // hidden on Profile by the block above) gets a Share icon instead —
+  // only on Profile, not DMs, since DMs has no "share this" concept.
+  const profileShareBtn = document.getElementById("header-profile-share-btn");
+  if (profileShareBtn)
+    profileShareBtn.classList.toggle("hidden", viewId !== "profile");
 
   // Leaving the feed always exits Reels overlay mode so the header goes
   // back to its normal solid bar on Profile/DMs/Explore/Cart.
@@ -5336,6 +5343,48 @@ window.copyPostLink = function (postId) {
       .catch(() => showToast("Couldn't copy the link."));
   } else {
     showToast("Couldn't copy the link.");
+  }
+};
+
+// TikTok-style profile share — mirrors sharePost/copyPostLink's pattern:
+// native share sheet first, with a clipboard-copy fallback that still
+// carries a real, working link (?u=ID) since the app checks for that on
+// boot (see the ?post=ID handling further down) and opens that person's
+// public profile instead of just landing on the generic app URL.
+window.shareProfile = function () {
+  if (!currentUserData) {
+    showToast("Please sign in first.");
+    return;
+  }
+  const name =
+    currentUserData.user_metadata?.full_name || "my CampusMarket profile";
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.searchParams.set("u", currentUserData.id);
+  const text = `Check out ${name} on CampusMarket!`;
+
+  const fallbackCopy = () => {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(url.toString())
+        .then(() => showToast("Profile link copied! ✓"))
+        .catch(() => showToast("Couldn't copy the link."));
+    } else {
+      showToast("Couldn't share the link.");
+    }
+  };
+
+  if (navigator.share) {
+    navigator
+      .share({ title: name, text, url: url.toString() })
+      .then(() => showToast("Shared! ✓"))
+      .catch((err) => {
+        if (err?.name === "AbortError") return; // user-initiated cancel
+        console.warn("navigator.share failed:", err);
+        fallbackCopy();
+      });
+  } else {
+    fallbackCopy();
   }
 };
 
@@ -12685,7 +12734,7 @@ function renderInboxList() {
   const inboxHeader = `
         <div class="flex items-center justify-between gap-3 bg-slate-900 border border-slate-800/60 rounded-3xl px-4 py-3">
             <div>
-                <p class="text-white font-black text-sm uppercase tracking-wider">Messages</p>
+                <p class="text-white font-black text-sm uppercase tracking-wider">Inbox</p>
                 <p class="text-slate-500 text-[11px]">Search users and start a chat anytime.</p>
             </div>
             <button onclick="window.openDMUserSearch()" class="inline-flex items-center gap-2 rounded-2xl bg-slate-800 border border-slate-700 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-200 active:scale-95 transition" aria-label="Find people">
@@ -14567,6 +14616,17 @@ if (activeAuthChange) {
             "post",
           );
           if (sharedPostId) window.openDetail(sharedPostId);
+        } catch (_) {}
+
+        // If this page was opened via a shared profile link (?u=ID, see
+        // shareProfile's Share icon on the Profile tab), open that
+        // person's public profile once the feed has finished its initial
+        // load — same reasoning as the ?post=ID handling just above.
+        try {
+          const sharedUserId = new URLSearchParams(window.location.search).get(
+            "u",
+          );
+          if (sharedUserId) window.openPublicProfile(sharedUserId);
         } catch (_) {}
 
         // Populate the DMs unread badge immediately on sign-in,

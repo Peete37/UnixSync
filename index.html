@@ -453,6 +453,19 @@
               <i class="fas fa-bookmark text-xs"></i>
               <span id="header-cart-badge" class="badge-dot hidden">0</span>
             </button>
+
+            <!-- TikTok-style: on the Profile tab specifically, this Share
+                 icon takes the same header slot the search+bookmark icons
+                 already vacate there (see HEADER_TITLES in navigateTo) —
+                 hidden everywhere else. -->
+            <button
+              id="header-profile-share-btn"
+              class="header-icon-btn shrink-0 hidden"
+              onclick="window.shareProfile()"
+              aria-label="Share profile"
+            >
+              <i class="fas fa-share text-xs"></i>
+            </button>
           </div>
 
           <div class="search-wrap hidden" id="header-search-wrap">
