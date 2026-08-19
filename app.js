@@ -10492,18 +10492,27 @@ async function _runSearchImmediate(term) {
             </p>
             ${trimmedTerm ? `<button onclick="window.saveSearchAlert('${escAttr(trimmedTerm)}')" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-amber-400/40 text-amber-300 text-[10px] font-black uppercase tracking-wider active:scale-95 transition"><i class="fas fa-bell mr-1"></i>Save alert</button>` : ""}
         </div>
-        ${renderSavedAlertPills(trimmedTerm)}`;
+        ${renderSavedAlertPills(trimmedTerm)}
+        <div class="masonry-columns-feed" id="search-results-grid"></div>`;
 
+  // Fix: search results used to render one full-width renderFeedCard
+  // per result (same card as the main feed) inside a plain space-y-4
+  // stack — always one tall column, regardless of screen size. Every
+  // other browse surface (Deals, Services, "You might also like") uses
+  // the compact masonry card in a 2-column grid instead. Switched
+  // search to the same renderFeedMasonryCard + masonry-columns-feed
+  // pairing those already use, so it matches instead of standing out
+  // as its own thing. Dropped wireCarouselCounters/
+  // fetchAndCacheCommentCount — those exist for renderFeedCard's
+  // carousel/comment-count UI, which the masonry card doesn't have
+  // (same reason "You might also like" never called them either).
+  const gridEl = document.getElementById("search-results-grid");
   matches.slice(0, SEARCH_RESULTS_CAP).forEach((item) => {
     const id = item.id;
     const d = item.data ? item.data : item;
-    resultsEl.innerHTML += renderFeedCard(id, d);
-    wireCarouselCounters(id);
-    fetchAndCacheCommentCount(id);
+    gridEl.innerHTML += renderFeedMasonryCard(id, d);
   });
 
-  setupFeedVideoObserver();
-  setupFeedCommentAutoClose();
   refreshFollowButtonStates();
 }
 
