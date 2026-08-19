@@ -954,7 +954,8 @@ let _currentDetailPostId = null;
 // convention most Android apps use (Instagram, Twitter, etc.) — a toast,
 // not a modal, since a modal here would be more disruptive than the
 // problem it's solving.
-let _exitConfirmArmed = false;
+const EXIT_CONFIRM_PRESSES_REQUIRED = 3;
+let _exitConfirmPresses = 0;
 let _exitConfirmTimer = null;
 
 window.addEventListener("popstate", () => {
@@ -1002,29 +1003,37 @@ window.addEventListener("popstate", () => {
   }
 
   // Nothing reachable — this is a genuine exit back-press (both the
-  // overlay stack and the view-history stack are empty). Require a
-  // second back-press within 2 seconds before actually letting it
-  // happen, rather than exiting on the very first one.
-  if (!_exitConfirmArmed) {
-    _exitConfirmArmed = true;
-    showToast("Press back again to exit");
+  // overlay stack and the view-history stack are empty). Fix: was a
+  // single confirmation press (2 total presses to exit) — request was
+  // for 3 total, matching apps that want back-to-exit to be harder to
+  // trigger by accident. Each press within the window re-arms the
+  // timer, so the person gets the full 2s from their MOST RECENT
+  // press, not a fixed 2s from the first one.
+  if (_exitConfirmPresses < EXIT_CONFIRM_PRESSES_REQUIRED - 1) {
+    _exitConfirmPresses++;
+    const remaining = EXIT_CONFIRM_PRESSES_REQUIRED - _exitConfirmPresses;
+    showToast(
+      remaining === 1
+        ? "Press back again to exit"
+        : `Press back ${remaining} more times to exit`,
+    );
     // Re-push a history entry so THIS back-press is absorbed instead
-    // of actually navigating away. If the second press comes within
-    // the window below, it'll find both stacks still empty and fall
-    // through past this block to the real exit (nothing re-pushes
-    // state at that point, so the browser/app handles it normally).
+    // of actually navigating away. Once the required number of presses
+    // is reached, it'll find both stacks still empty and fall through
+    // past this block to the real exit (nothing re-pushes state at
+    // that point, so the browser/app handles it normally).
     try {
       history.pushState({ uiExitGuard: true }, "");
     } catch (_) {}
     clearTimeout(_exitConfirmTimer);
     _exitConfirmTimer = setTimeout(() => {
-      _exitConfirmArmed = false;
+      _exitConfirmPresses = 0;
     }, 2000);
     return;
   }
-  _exitConfirmArmed = false;
+  _exitConfirmPresses = 0;
   clearTimeout(_exitConfirmTimer);
-  // Falls through here on a genuine second press — let the
+  // Falls through here on the final required press — let the
   // browser/app handle exit as a normal web history pop (closes PWA,
   // tabs back, etc). Nothing further to do.
 });
@@ -2689,6 +2698,24 @@ window.navigateTo = function (viewId, btn = null) {
   // same way the old two-row header did.
   const tabs = document.getElementById("feed-tabs");
   if (tabs) tabs.style.display = viewId === "feed" ? "flex" : "none";
+
+  // Fix: Profile and DMs don't need the search icon or the saved-items
+  // (bookmark/cart) shortcut in the header — search already lives on
+  // Explore, and neither view is a place you'd bookmark something
+  // from. Removing them without replacing anything left a bare,
+  // half-empty header bar (icons bunched at the left edge), so a page
+  // title fills that same space instead on exactly those two views.
+  const HEADER_TITLES = { profile: "Profile", dms: "Messages" };
+  const searchBtn = document.getElementById("search-toggle-btn");
+  const cartBtn = document.getElementById("nav-btn-cart");
+  const pageTitle = document.getElementById("header-page-title");
+  const titleText = HEADER_TITLES[viewId];
+  if (searchBtn) searchBtn.classList.toggle("hidden", !!titleText);
+  if (cartBtn) cartBtn.classList.toggle("hidden", !!titleText);
+  if (pageTitle) {
+    pageTitle.classList.toggle("hidden", !titleText);
+    if (titleText) pageTitle.textContent = titleText;
+  }
 
   // Leaving the feed always exits Reels overlay mode so the header goes
   // back to its normal solid bar on Profile/DMs/Explore/Cart.
@@ -14777,6 +14804,32 @@ window.addEventListener("online", () => {
 // just quietly not doing what they expected, with a debounce so a
 // cascade of related errors doesn't spam multiple toasts at once.
 let _lastGlobalErrorToastAt = 0;
+
+// Fix: this always showed the same generic "Something went wrong" even
+// when the actual cause was simply no internet connection — the most
+// common real-world trigger for an unhandled fetch/Supabase rejection.
+// navigator.onLine is checked first since it's an instant, certain
+// answer when available; the message-pattern check below is the
+// fallback for the (more common) case where the connection drops mid-
+// request rather than being off outright, which onLine won't always
+// catch reliably. Patterns cover Chrome/Edge ("Failed to fetch"),
+// Firefox ("NetworkError when attempting to fetch resource"), and
+// Safari ("Load failed") — the three failure signatures a lost
+// connection actually throws as, across the browsers this app
+// realistically runs in.
+function _isLikelyNetworkError(err) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return true;
+  }
+  const msg = String(err?.message || err || "");
+  return (
+    /failed to fetch/i.test(msg) ||
+    /networkerror when attempting to fetch/i.test(msg) ||
+    /load failed/i.test(msg) ||
+    /network request failed/i.test(msg)
+  );
+}
+
 function showGlobalErrorToast(context, err) {
   console.error(`[Global Error Handler] ${context}:`, err);
 
@@ -14795,7 +14848,11 @@ function showGlobalErrorToast(context, err) {
   const now = Date.now();
   if (now - _lastGlobalErrorToastAt < 4000) return; // avoid toast spam from a cascade of related errors
   _lastGlobalErrorToastAt = now;
-  showToast("Something went wrong. Please try again.");
+  showToast(
+    _isLikelyNetworkError(err)
+      ? "No internet connection"
+      : "Something went wrong. Please try again.",
+  );
 }
 
 window.addEventListener("error", (event) => {

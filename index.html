@@ -287,6 +287,16 @@
               <i class="fas fa-search text-xs"></i>
             </button>
 
+            <!-- Fix: Profile/DMs don't need search or the saved-items
+                 shortcut (Explore already covers search, and DMs/
+                 Profile aren't places you'd bookmark something from)
+                 — navigateTo() hides both on those two views, same as
+                 it already hid feed-tabs there. Left both icons
+                 collapsing to the left edge with a bare gap where the
+                 title should be, so this fills that gap with the
+                 current view's name instead of leaving it empty. -->
+            <p id="header-page-title" class="hidden flex-1 text-sm font-black text-white tracking-wide"></p>
+
             <div
               id="feed-tabs"
               class="feed-tabs-scroll flex-1 flex items-center gap-4 overflow-x-auto no-scrollbar text-[11px] font-bold tracking-wider uppercase"
