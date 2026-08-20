@@ -290,9 +290,14 @@ let conversationsCache = [];
 
 // ─── SESSION MANAGEMENT ────────────────────────────────────────────────────
 // Three requirements live here:
-//   1. Session expiration on a defined timeline — an IDLE timeout (signed
-//      out after inactivity) and an ABSOLUTE timeout (signed out after N
-//      days no matter how active), on top of Supabase's own JWT expiry.
+//   1. Session expiration on a defined timeline — an ABSOLUTE timeout
+//      (signed out after N days no matter how active), on top of
+//      Supabase's own JWT expiry. (An idle/inactivity timeout used to
+//      also live here — removed: 45 minutes of no taps/scrolls was
+//      signing people out of a casual browsing app mid-session for no
+//      real security benefit this app needs. The absolute timeout below,
+//      the device limit, and instant revocation already cover the
+//      actual risk — a stolen/forgotten session staying valid forever.)
 //   2. A concurrent-session limit — tracked in a `user_sessions` table
 //      (see session-management-migration.sql, run once in the Supabase
 //      SQL editor) since the client SDK has no built-in concept of "how
@@ -309,7 +314,6 @@ let conversationsCache = [];
 // supabase.auth.signOut({ scope: 'others' }), which really does invalidate
 // those tokens server-side. Both layers matter; don't remove either one
 // thinking the other covers it.
-const SESSION_IDLE_TIMEOUT_MS = 45 * 60 * 1000; // 45 min inactivity
 const SESSION_ABSOLUTE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000; // 7 days since login
 const SESSION_HEARTBEAT_MS = 10 * 60 * 1000; // keep-alive interval — see note below
 const SESSION_EXPIRY_CHECK_MS = 60 * 1000;
@@ -341,32 +345,23 @@ function getDeviceSessionId() {
       String(Date.now()),
     );
   }
-  if (!localStorage.getItem("campus_market_last_activity_at")) {
-    localStorage.setItem("campus_market_last_activity_at", String(Date.now()));
-  }
   return id;
 }
 
 // Call this at the moment of an actual fresh sign-in (not a page refresh
 // of an already-signed-in session) — mints a brand new session id and
-// resets both the idle and absolute clocks to right now.
+// resets the absolute-timeout clock to right now.
 function startNewDeviceSession() {
   const id = _newSessionId();
   const now = String(Date.now());
   localStorage.setItem("campus_market_session_id", id);
   localStorage.setItem("campus_market_session_started_at", now);
-  localStorage.setItem("campus_market_last_activity_at", now);
   return id;
-}
-
-function touchSessionActivity() {
-  localStorage.setItem("campus_market_last_activity_at", String(Date.now()));
 }
 
 function clearDeviceSessionStorage() {
   localStorage.removeItem("campus_market_session_id");
   localStorage.removeItem("campus_market_session_started_at");
-  localStorage.removeItem("campus_market_last_activity_at");
 }
 
 function guessDeviceLabel() {
@@ -486,30 +481,21 @@ function stopSessionHeartbeat() {
   }
 }
 
-// Idle + absolute expiry, checked on an interval rather than a single
-// setTimeout — a laptop that sleeps pauses JS timers but not the wall
-// clock, so a periodic check against real timestamps catches the true
-// elapsed time whenever the tab wakes back up, instead of firing early
-// or (worse) never firing at all.
+// Absolute expiry, checked on an interval rather than a single setTimeout
+// — a laptop that sleeps pauses JS timers but not the wall clock, so a
+// periodic check against a real timestamp catches the true elapsed time
+// whenever the tab wakes back up, instead of firing early or (worse)
+// never firing at all.
 function startSessionExpiryWatch() {
   stopSessionExpiryWatch();
-  ["click", "keydown", "touchstart", "scroll"].forEach((evt) =>
-    window.addEventListener(evt, touchSessionActivity, { passive: true }),
-  );
   sessionIdleCheckTimer = setInterval(() => {
     if (!currentUserData?.id) return;
     const now = Date.now();
     const startedAt = Number(
       localStorage.getItem("campus_market_session_started_at") || now,
     );
-    const lastActivity = Number(
-      localStorage.getItem("campus_market_last_activity_at") || now,
-    );
 
-    if (now - lastActivity > SESSION_IDLE_TIMEOUT_MS) {
-      showToast("You've been signed out after being idle for a while.");
-      window.logout();
-    } else if (now - startedAt > SESSION_ABSOLUTE_TIMEOUT_MS) {
+    if (now - startedAt > SESSION_ABSOLUTE_TIMEOUT_MS) {
       showToast("Your session has expired — please sign in again.");
       window.logout();
     }
