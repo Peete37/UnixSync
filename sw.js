@@ -174,3 +174,52 @@ self.addEventListener("fetch", (event) => {
     ),
   );
 });
+
+// ─── PUSH NOTIFICATIONS ─────────────────────────────────────────────────────
+// Additive only — nothing above this point is touched. Fires when the
+// send-push Edge Function delivers a payload of the shape
+// { title, body, url } (see app.js's supabase.functions.invoke("send-push")
+// call). Wrapped in event.waitUntil so the service worker isn't killed
+// mid-notification, and every step has a fallback so a malformed/missing
+// payload shows SOMETHING rather than silently doing nothing.
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (_) {
+    payload = { title: "CampusMarket", body: event.data?.text() || "" };
+  }
+
+  const title = payload.title || "CampusMarket";
+  const options = {
+    body: payload.body || "",
+    icon: "./icon-192.png",
+    badge: "./icon-192.png",
+    data: { url: payload.url || "./" },
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Tapping the notification focuses an already-open tab if one exists
+// (rather than always opening a new one) and navigates it to the
+// relevant URL; only opens a fresh tab/window if none is open.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || "./";
+
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((clientsArr) => {
+        const existing = clientsArr.find(
+          (c) => new URL(c.url).origin === self.location.origin,
+        );
+        if (existing) {
+          existing.navigate(targetUrl);
+          return existing.focus();
+        }
+        return self.clients.openWindow(targetUrl);
+      }),
+  );
+});
