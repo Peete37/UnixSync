@@ -1531,7 +1531,15 @@ body {
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-top: 1px solid rgba(255, 255, 255, 0.07);
-  padding: 8px 12px max(20px, env(safe-area-inset-bottom, 20px));
+  /* Fix: this used to force max(20px, env(...)) — a 20px floor even on
+     devices whose real gesture-bar inset is smaller (or zero, e.g. a
+     phone with on-screen buttons instead of a gesture bar). That
+     artificial minimum is exactly the "extra reserved dark panel"
+     other apps don't have — they just trust the real inset. Using the
+     actual env() value directly now, same as everyone else; 8px is
+     just a normal minimum content padding, not a stand-in gesture-bar
+     reservation. */
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
   z-index: 50;
   transition: transform 0.3s ease;
 }
