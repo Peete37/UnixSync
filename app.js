@@ -303,6 +303,23 @@ let _activeThreadMessagesById = new Map();
 // never does — see renderOfferBubble.
 let _activeThreadOffersById = new Map();
 let conversationsCache = [];
+// Fix: openInboxView() used to do a full fetch + show the "Loading
+// chats..." spinner + re-subscribe on literally every navigation to
+// DMs, even seconds after leaving and coming back — read as "the app
+// reloads every time I switch tabs". subscribeConversationsList()
+// already keeps conversationsCache continuously fresh via realtime for
+// as long as this flag is true, so once that's established there's
+// nothing stale to fetch — just re-render straight from cache. Reset
+// to false on sign-out (see signOutUser) so a new session does one real
+// fetch again.
+let _inboxSubscriptionActive = false;
+
+// Same underlying complaint, different fix — Profile has no realtime
+// keeping loadProfileStats() fresh the way DMs does, so a full TTL-
+// skip cache: still reloads periodically (posts/follower counts can
+// genuinely change), just not on every single tab switch.
+const PROFILE_STATS_CACHE_TTL_MS = 45 * 1000;
+let _lastProfileStatsLoadAt = 0;
 
 // ─── SESSION MANAGEMENT ────────────────────────────────────────────────────
 // Three requirements live here:
@@ -1599,12 +1616,12 @@ function renderDealsStripCard(id, d) {
         <div class="shrink-0 w-32 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
             <div class="relative w-32 h-32 rounded-xl overflow-hidden bg-slate-900 border border-slate-800">
                 <img src="${esc(mediaUrl)}" loading="lazy" class="w-full h-full object-cover" alt="${escAttr(d.title)}">
-                <span class="absolute top-1.5 left-1.5 bg-rose-500 text-white text-[9px] font-black uppercase px-1.5 py-0.5 rounded">Deal</span>
+                <span class="sale-countdown-badge absolute top-1.5 left-1.5 bg-rose-500/90 text-white text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</span>
             </div>
             <p class="text-[11px] text-slate-300 mt-1 truncate">${esc(d.title)}</p>
             <div class="flex items-baseline gap-1.5">
                 <p class="text-xs font-black text-amber-400">GH₵${esc(String(d.price || 0))}</p>
-                <p class="text-[10px] text-slate-500 line-through">GH₵${esc(String(d.original_price || 0))}</p>
+                <p class="sale-strike-price text-[10px] text-slate-500 line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.original_price || 0))}</p>
             </div>
         </div>`;
 }
@@ -2265,6 +2282,8 @@ window.logout = async function () {
   try {
     unsubscribeFeed();
     unsubscribeConversations();
+    _inboxSubscriptionActive = false; // force a real fetch next sign-in, not stale cache from the previous account
+    _lastProfileStatsLoadAt = 0; // same reasoning for the Profile stats cache
     unsubscribeActiveThread();
     if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
     await authSignOut();
@@ -2568,7 +2587,7 @@ async function subscribeFeed(baseFilter = null) {
                 .getElementById("profile-container")
                 ?.classList.contains("hidden")
             ) {
-              loadProfileStats();
+              loadProfileStats(true);
             }
           } catch (err) {
             console.error("Feed live refresh error:", err);
@@ -3267,7 +3286,7 @@ window.openDetail = async function (postId, fromBack = false) {
       saleActiveDetail &&
       d.original_price != null &&
       Number(d.original_price) > 0 &&
-      Number(d.original_price) !== Number(d.price || 0);
+      Number(d.original_price) > Number(d.price || 0);
     const detailActionsBlock = isSoldDetail
       ? `<p class="text-center text-slate-500 text-xs uppercase tracking-widest py-2">This listing is no longer available</p>`
       : isOwn
@@ -3544,7 +3563,7 @@ window.openManageListingSheet = async function (postId) {
             <div>
                 <label for="managePrice" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Listing price (GH₵)</label>
                 <p class="text-[10px] text-slate-500 mb-1.5">Change your listing price without re-uploading. Saving marks the post as new in the feed.</p>
-                <input type="number" id="managePrice" min="0" max="1000000" step="0.01" value="${post.price ?? 0}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+                <input type="text" inputmode="decimal" id="managePrice" oninput="window._formatPriceInput(this)" value="${post.price ?? 0}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
             <label class="flex items-center justify-between p-3 bg-slate-900 rounded-xl border border-slate-800 cursor-pointer">
@@ -3556,7 +3575,7 @@ window.openManageListingSheet = async function (postId) {
             <div>
                 <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Discount price (optional, any amount)</label>
                 <p class="text-[10px] text-slate-500 mb-1.5">Set any ORIGINAL price (typically higher) — your listing shows a strikethrough on the old price next to the deal.</p>
-                <input type="number" id="manageOriginalPrice" min="0" max="1000000" step="0.01" value="${post.original_price ?? ""}" placeholder="e.g. ${(Number(post.price || 0) * 1.2).toFixed(2)}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+                <input type="text" inputmode="decimal" id="manageOriginalPrice" oninput="window._formatPriceInput(this)" value="${post.original_price ?? ""}" placeholder="e.g. ${(Number(post.price || 0) * 1.2).toFixed(2)}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
             <div>
@@ -3564,10 +3583,31 @@ window.openManageListingSheet = async function (postId) {
                 <input type="datetime-local" id="manageSaleEndsAt" value="${saleEndsValue}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
+            ${
+              post.sale_ends_at &&
+              new Date(post.sale_ends_at).getTime() > Date.now()
+                ? `<button onclick="window._endFlashSaleNow('${escAttr(postId)}')" class="w-full bg-rose-500/10 border border-rose-500/40 text-rose-400 font-bold py-2.5 rounded-xl active:scale-95 transition-transform uppercase tracking-wider text-[11px]">
+                End Flash Sale Now
+            </button>`
+                : ""
+            }
+
             <button onclick="window._saveManageListing('${escAttr(postId)}')" class="w-full bg-amber-400 text-black font-black py-3 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
                 Save Changes
             </button>
         </div>`;
+
+  // The two price fields switched from type="number" to a plain text
+  // field with live comma-formatting (window._formatPriceInput) — that
+  // formatter only runs on the person's own typing (oninput), so an
+  // EXISTING price loaded straight from the DB above still shows
+  // unformatted ("9000") until they touch the field. Running it once
+  // here formats the starting value too, matching how it'll look after
+  // any edit.
+  ["managePrice", "manageOriginalPrice"].forEach((fieldId) => {
+    const field = document.getElementById(fieldId);
+    if (field && field.value) window._formatPriceInput(field);
+  });
 };
 
 window.closeManageListingSheet = function (fromPop = false) {
@@ -3589,7 +3629,13 @@ window._saveManageListing = async function (postId) {
   )
     return;
 
-  const newPriceRaw = priceInput.value.trim();
+  // Fix: these fields now display with comma thousands-separators (see
+  // window._formatPriceInput), so the raw value at this point can be
+  // "9,000" — parseFloat stops at the first non-numeric character, so
+  // without stripping the commas here this would silently save "9"
+  // instead of 9000, even though the field visually showed the right
+  // number the whole time.
+  const newPriceRaw = priceInput.value.trim().replace(/,/g, "");
   const parsedPrice = newPriceRaw !== "" ? parseFloat(newPriceRaw) : null;
   if (newPriceRaw !== "" && (isNaN(parsedPrice) || parsedPrice < 0)) {
     showToast("Price can't be negative.");
@@ -3600,7 +3646,7 @@ window._saveManageListing = async function (postId) {
     return;
   }
 
-  const originalPriceRaw = originalPriceInput.value.trim();
+  const originalPriceRaw = originalPriceInput.value.trim().replace(/,/g, "");
   const parsedOriginalPrice = originalPriceRaw
     ? parseFloat(originalPriceRaw)
     : null;
@@ -3662,6 +3708,40 @@ window._saveManageListing = async function (postId) {
   showToast("Listing updated.");
   window.closeManageListingSheet();
   renderFeedFromCache();
+};
+
+// Explicit "end it now" action, separate from Save Changes — clears
+// original_price/sale_ends_at directly rather than asking the owner to
+// clear two fields themselves and remember to hit Save. Deliberately
+// does NOT touch created_at the way Save Changes does — bumping the
+// post as "new" isn't the intent of ending a sale early, just stopping
+// the discount. Re-renders the sheet in place afterward (rather than
+// closing it) so the owner can see the price/discount fields reset and
+// keep editing if they want to.
+window._endFlashSaleNow = async function (postId) {
+  if (!currentUserData) return;
+
+  const { error } = await supabase
+    .from("posts")
+    .update({ original_price: null, sale_ends_at: null })
+    .eq("id", postId)
+    .eq("user_id", currentUserData.id);
+
+  if (error) {
+    console.error("End flash sale error:", error);
+    showToast("Couldn't end the flash sale. Try again.");
+    return;
+  }
+
+  const cached = allCachedPosts.find(({ id }) => idKey(id) === idKey(postId));
+  if (cached?.data) {
+    cached.data.original_price = null;
+    cached.data.sale_ends_at = null;
+  }
+
+  showToast("Flash sale ended.");
+  renderFeedFromCache();
+  window.openManageListingSheet(postId); // re-render the sheet's own fields
 };
 
 // ─── 10. LOGIN MODAL ──────────────────────────────────────────────────────────
@@ -7522,13 +7602,17 @@ function renderFeedCard(id, d, options = {}) {
 
   const _saleActiveForCard =
     d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
+  // Fix: was String(...) !== String(...), which treated a price INCREASE
+  // (original lower than current) as a valid "flash sale" too — same bug
+  // as getLiveDeals() had, just a separate copy of the check. A flash
+  // sale is a discount by definition, so this now requires original
+  // strictly greater than current price, not just "different".
   const _isFlashPost =
     _saleActiveForCard &&
     d.original_price != null &&
-    String(d.original_price) !== String(d.price || 0);
+    Number(d.original_price) > Number(d.price || 0);
   const _originalPriceNum =
     d.original_price != null ? Number(d.original_price) : null;
-  // Strikethrough applies for any original_price != price (lower OR higher).
   const _strikePrice = _isFlashPost;
 
   return `
@@ -7674,7 +7758,7 @@ function renderFeedMasonryCard(id, d, options = {}) {
     saleActive &&
     d.original_price != null &&
     Number(d.original_price) > 0 &&
-    Number(d.original_price) !== Number(d.price || 0);
+    Number(d.original_price) > Number(d.price || 0); // Fix: was !== (allowed a price increase to count as a "discount")
 
   registerPostContext(id, d, isVideo ? "" : primaryUrl);
 
@@ -7747,7 +7831,7 @@ function renderProductGridCard(id, d) {
     saleActive &&
     d.original_price != null &&
     Number(d.original_price) > 0 &&
-    Number(d.original_price) !== Number(d.price || 0);
+    Number(d.original_price) > Number(d.price || 0); // Fix: was !== (allowed a price increase to count as a "discount")
 
   const viewer = currentUserData;
   const showFollow = viewer && d.user_id !== viewer.id;
@@ -7868,7 +7952,7 @@ function renderServiceGridCard(id, d) {
     saleActive &&
     d.original_price != null &&
     Number(d.original_price) > 0 &&
-    Number(d.original_price) !== Number(d.price || 0);
+    Number(d.original_price) > Number(d.price || 0); // Fix: was !== (allowed a price increase to count as a "discount")
 
   const viewer = currentUserData;
   const showFollow = viewer && d.user_id !== viewer.id;
@@ -7974,7 +8058,14 @@ function getLiveDeals() {
     if (!d) return false;
     const op = d.original_price != null ? Number(d.original_price) : null;
     const price = Number(d.price || 0);
-    if (op == null || op <= 0 || op === price) return false;
+    // Fix: this only excluded an EQUAL original/sale price, not a lower
+    // one — a listing whose "original" price was actually less than
+    // its current price (a price increase, not a discount) still
+    // passed as a "live deal", showing an inverted strikethrough (the
+    // higher current price shown big/amber, the genuinely lower price
+    // struck through next to it, reading backwards). Now requires a
+    // real discount: original strictly greater than the current price.
+    if (op == null || op <= 0 || op <= price) return false;
     if (!d.sale_ends_at) return false;
     return new Date(d.sale_ends_at).getTime() > now;
   });
@@ -9051,7 +9142,7 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
         .getElementById("profile-container")
         ?.classList.contains("hidden")
     ) {
-      loadProfileStats();
+      loadProfileStats(true);
     }
   } catch (err) {
     console.error("Follow toggle error:", err);
@@ -9196,7 +9287,7 @@ window.restorePost = async function (postId) {
     ) {
       window.openInfoSheet("archived");
     }
-    loadProfileStats();
+    loadProfileStats(true);
   } catch (err) {
     console.warn("Restore failed:", err);
     showToast("Couldn't restore that post — try again.");
@@ -11293,8 +11384,23 @@ window.handlePostSubmission = async function () {
 };
 
 // ─── 18. PROFILE STATS ───────────────────────────────────────────────────────
-async function loadProfileStats() {
+async function loadProfileStats(force = false) {
   if (!currentUserData) return;
+  // Fix: this used to run a full fetch (posts/followers/following/bio)
+  // on every single call, including every plain navigation to Profile —
+  // switching Home->Profile->Home->Profile rapidly re-fetched and
+  // re-rendered the whole grid each time, reading as "the page
+  // reloads". The 7 other call sites (after editing profile, posting,
+  // deleting, following someone, etc.) all pass force=true since those
+  // genuinely need fresh data right away; only the plain tab-switch
+  // call in navigateTo() relies on this cache window.
+  if (
+    !force &&
+    Date.now() - _lastProfileStatsLoadAt < PROFILE_STATS_CACHE_TTL_MS
+  ) {
+    return;
+  }
+  _lastProfileStatsLoadAt = Date.now();
   try {
     const [followersRes, followingRes, postsRes, bioRes] = await Promise.all([
       supabase
@@ -12363,7 +12469,7 @@ window.unfollowFromList = async function (targetUserId) {
         .getElementById("profile-container")
         ?.classList.contains("hidden")
     ) {
-      loadProfileStats();
+      loadProfileStats(true);
     }
     window.openFollowListModal(currentUserData.id, "following");
   } catch (err) {
@@ -12844,6 +12950,14 @@ async function openInboxView() {
   const content = document.getElementById("dms-content");
   if (!content || !currentUserData) return;
 
+  // Already subscribed and being kept fresh in realtime — just
+  // re-render from the cache that's already up to date instead of
+  // refetching (and flashing a loading spinner) on every visit.
+  if (_inboxSubscriptionActive) {
+    renderInboxList();
+    return;
+  }
+
   content.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Loading chats...</div>`;
 
   try {
@@ -12857,6 +12971,7 @@ async function openInboxView() {
     conversationsCache = data || [];
     renderInboxList();
     subscribeConversationsList();
+    _inboxSubscriptionActive = true;
     updateDmUnreadBadge();
   } catch (err) {
     console.error("Inbox load error:", err);
@@ -14798,7 +14913,7 @@ if (activeAuthChange) {
         );
         window.filterFeed(currentFeedType, savedTabBtn);
         try {
-          loadProfileStats();
+          loadProfileStats(true);
         } catch (_) {}
         _initAvatarLongPress();
 
@@ -15463,7 +15578,7 @@ window.deleteSelectedGridItems = function () {
 
       window.exitGridSelectMode();
       try {
-        loadProfileStats();
+        loadProfileStats(true);
       } catch (_) {}
 
       if (failCount === 0) {
@@ -15505,7 +15620,7 @@ window.featureSelectedGridItems = async function () {
 
     window.exitGridSelectMode();
     try {
-      loadProfileStats();
+      loadProfileStats(true);
     } catch (_) {}
     showToast(`${ids.length} post${ids.length > 1 ? "s" : ""} featured ⭐`);
   } catch (err) {
