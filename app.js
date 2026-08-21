@@ -280,6 +280,34 @@ let currentCampusScope =
 // exist, so scrolling to the bottom can fetch the next page instead of
 // just... stopping.
 let currentFeedBaseFilter = null; // function(query) -> query, applies only the tab's type condition
+// Fix: switching between tabs that query the exact same underlying data
+// (All/Products/Deals all fetch every post, unfiltered by type — only
+// Services and Reels apply a real DB-level filter) used to always show
+// a skeleton and re-fetch/re-sync everything from scratch, even for a
+// same-signature switch a second later. Other apps don't reload on
+// every tab tap; they only refetch when the data actually could have
+// changed. This tracks which "query signature" allCachedPosts currently
+// holds and when it was loaded, so filterFeed can skip straight to a
+// client-side re-render when nothing about the underlying query
+// actually changed.
+let _feedCacheSignature = null;
+let _feedCacheLoadedAt = 0;
+let _pendingFeedSignature = null;
+const FEED_CACHE_REUSE_TTL_MS = 25000;
+function _feedSignatureBucket(type) {
+  // All/Products/Deals share one identical unfiltered query; Services
+  // and Reels each apply their own distinct DB-level filter.
+  return type === "skill" ? "skill" : type === "reels" ? "reels" : "shared";
+}
+function computeFeedSignature(type) {
+  const scopeValue =
+    currentCampusScope === "institution"
+      ? currentUserData?.institution || ""
+      : currentCampusScope === "region"
+        ? currentUserData?.region || ""
+        : "";
+  return `${currentCampusScope}|${scopeValue}|${_feedSignatureBucket(type)}`;
+}
 let feedLoadedCount = 0;
 let feedHasMore = true;
 let isFeedLoadingMore = false;
@@ -910,6 +938,12 @@ const MAX_VIDEO_DURATION_SECONDS = 30;
 // phone's hardware/gesture back button closes them one layer at a time
 // instead of exiting/backgrounding the app.
 const _uiStack = [];
+// Counts history entries that were consumed programmatically (by
+// popUiState below, when a layer is closed via its own X/back-arrow
+// button rather than the phone's back gesture) so the popstate handler
+// can tell "a real user back-press" apart from "our own history.back()
+// call catching up with a manual close" and skip re-processing it.
+let _suppressPopstateCount = 0;
 
 // Tracks whether the person is actively scrolling right now — used below
 // to defer the feed's Realtime-triggered re-render (which rebuilds
@@ -961,6 +995,16 @@ let _exitConfirmPresses = 0;
 let _exitConfirmTimer = null;
 
 window.addEventListener("popstate", () => {
+  // A layer that was closed manually (X/back-arrow button) already
+  // consumed its own history entry via popUiState's history.back()
+  // call below — this popstate is that call catching up, not a real
+  // user back-press, so it must do nothing rather than being treated
+  // as a fresh back-press and closing/navigating something else.
+  if (_suppressPopstateCount > 0) {
+    _suppressPopstateCount--;
+    return;
+  }
+
   // Highest priority: a still-open overlay (modal/sheet/DM thread).
   // Close it first, leave the underlying view alone.
   if (_uiStack.length > 0) {
@@ -1118,7 +1162,34 @@ function pushUiState(id, closeFn) {
 
 function popUiState(id) {
   const idx = _uiStack.findIndex((l) => l.id === id);
-  if (idx !== -1) _uiStack.splice(idx, 1);
+  if (idx === -1) return;
+  const wasTop = idx === _uiStack.length - 1;
+  _uiStack.splice(idx, 1);
+
+  // Fix: closing a layer via its own X/back-arrow button (as opposed
+  // to the phone's back gesture) used to only update _uiStack, leaving
+  // the history entry pushUiState() pushed for it sitting orphaned in
+  // the browser's real history. Those orphaned entries pile up with
+  // every manual close and don't map to anything still open, so a
+  // later back-gesture press had to silently "burn through" several of
+  // them before doing anything visible — and once they ran out, the
+  // very next gesture press had no more in-app history left to
+  // consume, so the phone's OS handled it as a normal back navigation
+  // and closed/backgrounded the whole app. Calling history.back() here
+  // consumes the matching entry the moment it's actually orphaned,
+  // keeping the real browser history and _uiStack in lockstep so every
+  // later back-press/gesture does exactly one meaningful thing.
+  // Guarded to only fire when the closed layer really was the top of
+  // history (the normal case) — closing something out of order is left
+  // alone rather than risking popping the wrong entry.
+  if (wasTop && history.state && history.state.uiLayer === id) {
+    _suppressPopstateCount++;
+    try {
+      history.back();
+    } catch (_) {
+      _suppressPopstateCount--;
+    }
+  }
 }
 
 // Seed one base history entry so the first back-press when nothing is open
@@ -1599,7 +1670,7 @@ function renderDealsStripCard(id, d) {
         <div class="shrink-0 w-32 cursor-pointer" onclick="openDetail('${escAttr(id)}')">
             <div class="relative w-32 h-32 rounded-xl overflow-hidden bg-slate-900 border border-slate-800">
                 <img src="${esc(mediaUrl)}" loading="lazy" class="w-full h-full object-cover" alt="${escAttr(d.title)}">
-                <span class="sale-countdown-badge absolute top-1.5 left-1.5 bg-rose-500/90 text-white text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</span>
+                <span class="sale-countdown-badge absolute top-1.5 left-1.5 bg-rose-500/90 text-white text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</span>
             </div>
             <p class="text-[11px] text-slate-300 mt-1 truncate">${esc(d.title)}</p>
             <div class="flex items-baseline gap-1.5">
@@ -2372,6 +2443,17 @@ async function subscribeFeed(baseFilter = null) {
     feedHasMore = data.length === FEED_PAGE_SIZE;
     updateFeedCursorFromPosts(data, "feed");
     applyFeedRankingToCache();
+    // Record what this fresh load actually contains so a same-signature
+    // tab switch shortly after can reuse it instead of reloading (see
+    // filterFeed). Only set when filterFeed is what triggered this call
+    // — subscribeFeed() also runs from sign-out/reconnect paths that
+    // don't set a pending signature, and those should never be treated
+    // as a reusable cache.
+    if (_pendingFeedSignature) {
+      _feedCacheSignature = _pendingFeedSignature;
+      _feedCacheLoadedAt = Date.now();
+      _pendingFeedSignature = null;
+    }
 
     // Sync local bookmark view mapping if authenticated
     if (currentUserData) {
@@ -3266,8 +3348,7 @@ window.openDetail = async function (postId, fromBack = false) {
     const hasDiscountDetail =
       saleActiveDetail &&
       d.original_price != null &&
-      Number(d.original_price) > 0 &&
-      Number(d.original_price) !== Number(d.price || 0);
+      Number(d.original_price) > Number(d.price || 0);
     const detailActionsBlock = isSoldDetail
       ? `<p class="text-center text-slate-500 text-xs uppercase tracking-widest py-2">This listing is no longer available</p>`
       : isOwn
@@ -3523,6 +3604,14 @@ window.openManageListingSheet = async function (postId) {
   const saleEndsValue = post.sale_ends_at
     ? new Date(post.sale_ends_at).toISOString().slice(0, 16)
     : "";
+  // Same "is this a live flash sale right now" definition used
+  // everywhere else (getLiveDeals) — controls whether the "End Flash
+  // Sale Now" button below is shown at all.
+  const hasActiveSaleForManage =
+    post.original_price != null &&
+    Number(post.original_price) > Number(post.price || 0) &&
+    post.sale_ends_at &&
+    new Date(post.sale_ends_at).getTime() > Date.now();
 
   content.innerHTML = `
         <div class="p-6 space-y-5">
@@ -3544,7 +3633,7 @@ window.openManageListingSheet = async function (postId) {
             <div>
                 <label for="managePrice" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Listing price (GH₵)</label>
                 <p class="text-[10px] text-slate-500 mb-1.5">Change your listing price without re-uploading. Saving marks the post as new in the feed.</p>
-                <input type="text" inputmode="decimal" id="managePrice" value="${post.price ?? 0}" oninput="window._formatPriceInput(this)" placeholder="e.g. 8,000" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+                <input type="text" inputmode="decimal" id="managePrice" placeholder="0.00" oninput="window._formatPriceInput(this)" value="${esc(Number(post.price ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
             <label class="flex items-center justify-between p-3 bg-slate-900 rounded-xl border border-slate-800 cursor-pointer">
@@ -3556,7 +3645,7 @@ window.openManageListingSheet = async function (postId) {
             <div>
                 <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Discount price (optional, any amount)</label>
                 <p class="text-[10px] text-slate-500 mb-1.5">Set any ORIGINAL price (typically higher) — your listing shows a strikethrough on the old price next to the deal.</p>
-                <input type="text" inputmode="decimal" id="manageOriginalPrice" value="${post.original_price ?? ""}" oninput="window._formatPriceInput(this)" placeholder="e.g. ${(Number(post.price || 0) * 1.2).toFixed(2)}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+                <input type="text" inputmode="decimal" id="manageOriginalPrice" oninput="window._formatPriceInput(this)" value="${post.original_price != null ? esc(Number(post.original_price).toLocaleString("en-US", { maximumFractionDigits: 2 })) : ""}" placeholder="e.g. ${esc((Number(post.price || 0) * 1.2).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
             <div>
@@ -3564,14 +3653,17 @@ window.openManageListingSheet = async function (postId) {
                 <input type="datetime-local" id="manageSaleEndsAt" value="${saleEndsValue}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
-            <div class="grid grid-cols-2 gap-2">
-                <button onclick="window._endFlashSale('${escAttr(postId)}')" class="w-full bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-200 font-black py-3 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
-                    End Flash Sale
-                </button>
-                <button onclick="window._saveManageListing('${escAttr(postId)}')" class="w-full bg-amber-400 text-black font-black py-3 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
-                    Save Changes
-                </button>
-            </div>
+            ${
+              hasActiveSaleForManage
+                ? `<button onclick="window._endFlashSaleNow('${escAttr(postId)}')" class="w-full bg-slate-800 border border-rose-500/40 text-rose-400 font-black py-3 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
+                End Flash Sale Now
+            </button>`
+                : ""
+            }
+
+            <button onclick="window._saveManageListing('${escAttr(postId)}')" class="w-full bg-amber-400 text-black font-black py-3 rounded-2xl active:scale-95 transition-transform uppercase tracking-wider text-xs">
+                Save Changes
+            </button>
         </div>`;
 };
 
@@ -3594,7 +3686,11 @@ window._saveManageListing = async function (postId) {
   )
     return;
 
-  const newPriceRaw = priceInput.value.trim();
+  // Both price fields display thousands separators as you type (see
+  // _formatPriceInput) — stripped back to a plain numeric string here,
+  // same as Create Listing's price field, so "8,000" parses as 8000
+  // instead of silently truncating at the comma.
+  const newPriceRaw = priceInput.value.trim().replace(/,/g, "");
   const parsedPrice = newPriceRaw !== "" ? parseFloat(newPriceRaw) : null;
   if (newPriceRaw !== "" && (isNaN(parsedPrice) || parsedPrice < 0)) {
     showToast("Price can't be negative.");
@@ -3605,7 +3701,7 @@ window._saveManageListing = async function (postId) {
     return;
   }
 
-  const originalPriceRaw = originalPriceInput.value.trim();
+  const originalPriceRaw = originalPriceInput.value.trim().replace(/,/g, "");
   const parsedOriginalPrice = originalPriceRaw
     ? parseFloat(originalPriceRaw)
     : null;
@@ -3640,13 +3736,7 @@ window._saveManageListing = async function (postId) {
     updates.original_price = parsedOriginalPrice;
   }
   if (!saleEndsRaw) {
-    // End flash sale: clearing the end time also clears the discount
-    // price, so the strikethrough on the post's price row disappears
-    // (cards already gate hasDiscount on saleActive, but also writing
-    // the source-of-truth field to null keeps the cached post aligned
-    // if the same listing is opened elsewhere before a refetch).
     updates.sale_ends_at = null;
-    updates.original_price = null;
   } else if (saleEndsIso) {
     updates.sale_ends_at = saleEndsIso;
   }
@@ -3675,43 +3765,35 @@ window._saveManageListing = async function (postId) {
   renderFeedFromCache();
 };
 
-// One-tap "End Flash Sale" action for the listing's owner. Unlike
-// _saveManageListing (which edits price/discount/ends-at + sold
-// toggle), this is the minimal "stop the countdown NOW" path — it
-// writes sale_ends_at=null and original_price=null so the row
-// immediately reverts to the normal price with no strikethrough, then
-// re-renders the current feed snapshot from cache so the change shows
-// up without a Supabase round-trip. Also closes the manage sheet so
-// the seller sees the result, not the form.
-window._endFlashSale = async function (postId) {
+// Ends a listing's flash sale immediately (clears original_price and
+// sale_ends_at) without going through _saveManageListing — deliberately
+// its own DB call so it doesn't bump created_at the way Save Changes
+// does (that would incorrectly re-surface the post as "new" just for
+// ending a sale). Only reachable from the button that's shown when a
+// sale is actually active, but re-checks currentUserData ownership at
+// the DB level via the same .eq("user_id", ...) guard as every other
+// listing mutation here.
+window._endFlashSaleNow = async function (postId) {
   if (!currentUserData) return;
-  const post = (
-    (allCachedPosts || []).find(({ id }) => idKey(id) === idKey(postId)) || {}
-  ).data;
-  if (!post || post.user_id !== currentUserData.id) {
-    showToast("Couldn't end that flash sale.");
-    return;
-  }
-  if (
-    !post.sale_ends_at ||
-    new Date(post.sale_ends_at).getTime() <= Date.now()
-  ) {
-    showToast("No active flash sale to end.");
-    window.closeManageListingSheet();
-    return;
-  }
+
   const { error } = await supabase
     .from("posts")
-    .update({ sale_ends_at: null, original_price: null })
+    .update({ original_price: null, sale_ends_at: null })
     .eq("id", postId)
     .eq("user_id", currentUserData.id);
+
   if (error) {
     console.error("End flash sale error:", error);
     showToast("Couldn't end the flash sale. Try again.");
     return;
   }
-  post.sale_ends_at = null;
-  post.original_price = null;
+
+  const cached = allCachedPosts.find(({ id }) => idKey(id) === idKey(postId));
+  if (cached?.data) {
+    cached.data.original_price = null;
+    cached.data.sale_ends_at = null;
+  }
+
   showToast("Flash sale ended.");
   window.closeManageListingSheet();
   renderFeedFromCache();
@@ -7578,10 +7660,11 @@ function renderFeedCard(id, d, options = {}) {
   const _isFlashPost =
     _saleActiveForCard &&
     d.original_price != null &&
-    String(d.original_price) !== String(d.price || 0);
+    Number(d.original_price) > Number(d.price || 0);
   const _originalPriceNum =
     d.original_price != null ? Number(d.original_price) : null;
-  // Strikethrough applies for any original_price != price (lower OR higher).
+  // Strikethrough only applies when original_price is genuinely higher
+  // than price — a price increase must never render as a fake deal.
   const _strikePrice = _isFlashPost;
 
   return `
@@ -7726,8 +7809,7 @@ function renderFeedMasonryCard(id, d, options = {}) {
   const hasDiscount =
     saleActive &&
     d.original_price != null &&
-    Number(d.original_price) > 0 &&
-    Number(d.original_price) !== Number(d.price || 0);
+    Number(d.original_price) > Number(d.price || 0);
 
   registerPostContext(id, d, isVideo ? "" : primaryUrl);
 
@@ -7799,8 +7881,7 @@ function renderProductGridCard(id, d) {
   const hasDiscount =
     saleActive &&
     d.original_price != null &&
-    Number(d.original_price) > 0 &&
-    Number(d.original_price) !== Number(d.price || 0);
+    Number(d.original_price) > Number(d.price || 0);
 
   const viewer = currentUserData;
   const showFollow = viewer && d.user_id !== viewer.id;
@@ -7920,8 +8001,7 @@ function renderServiceGridCard(id, d) {
   const hasDiscount =
     saleActive &&
     d.original_price != null &&
-    Number(d.original_price) > 0 &&
-    Number(d.original_price) !== Number(d.price || 0);
+    Number(d.original_price) > Number(d.price || 0);
 
   const viewer = currentUserData;
   const showFollow = viewer && d.user_id !== viewer.id;
@@ -8027,7 +8107,10 @@ function getLiveDeals() {
     if (!d) return false;
     const op = d.original_price != null ? Number(d.original_price) : null;
     const price = Number(d.price || 0);
-    if (op == null || op <= 0 || op === price) return false;
+    // A real deal requires the original price to be strictly higher
+    // than the current price — a price INCREASE (or an unchanged
+    // price) must never qualify as a "live deal".
+    if (op == null || op <= price) return false;
     if (!d.sale_ends_at) return false;
     return new Date(d.sale_ends_at).getTime() > now;
   });
@@ -9394,15 +9477,7 @@ async function loadFollowingFeed() {
 
   feed.classList.remove("grid-mode", "reels-mode");
   pauseAllReelVideos();
-  // Render from cache first if we already have anything for the
-  // Following tab — avoids the brief skeleton flash every time the
-  // user revisits this tab. The background refresh below still updates
-  // the cache once new posts are available.
-  if (allCachedPosts.length > 0) {
-    renderFeedFromCache();
-  } else {
-    feed.innerHTML = renderSkeletonCards(6, "masonry-feed");
-  }
+  feed.innerHTML = renderSkeletonCards(6, "masonry-feed");
 
   feedLoadedCount = 0;
   feedHasMore = true;
@@ -9490,11 +9565,7 @@ async function loadTrendingFeed() {
 
   feed.classList.remove("grid-mode", "reels-mode");
   pauseAllReelVideos();
-  if (allCachedPosts.length > 0) {
-    renderFeedFromCache();
-  } else {
-    feed.innerHTML = renderSkeletonCards(6, "masonry-feed");
-  }
+  feed.innerHTML = renderSkeletonCards(6, "masonry-feed");
 
   try {
     const cutoff = new Date(
@@ -10151,6 +10222,27 @@ window.filterFeed = function (type, clickedBtn = null) {
     loadTrendingFeed();
     return;
   }
+
+  // If the tab we're switching TO queries the exact same underlying
+  // data (same campus scope + same shared/skill/reels bucket) as
+  // what's already loaded, and that load happened recently enough to
+  // still be fresh, skip the skeleton and re-fetch entirely — just
+  // re-render the existing allCachedPosts in the new tab's layout.
+  // This is what makes quick All <-> Products <-> Deals taps instant
+  // instead of reloading every time; Services/Reels (a genuinely
+  // different query) and Following/Trending (handled above, before
+  // this point) always still fetch fresh.
+  const _thisSignature = computeFeedSignature(type);
+  if (
+    _feedCacheSignature === _thisSignature &&
+    Date.now() - _feedCacheLoadedAt < FEED_CACHE_REUSE_TTL_MS &&
+    allCachedPosts.length > 0
+  ) {
+    updateCampusScopeBanner();
+    renderFeedFromCache();
+    return;
+  }
+  _pendingFeedSignature = _thisSignature;
 
   const feed = document.getElementById("posts-feed");
   if (feed) {
@@ -14960,6 +15052,10 @@ if (activeAuthChange) {
       document.getElementById("dms-content")?.classList.add("hidden");
 
       document.getElementById("campus-scope-banner")?.classList.add("hidden");
+      // This fetches with no filter at all (logged-out view) — never
+      // let a later tab switch mistake this for a reusable same-scope
+      // cache and skip a real reload.
+      _feedCacheSignature = null;
       subscribeFeed();
       // Bug fix: the sign-in modal used to pop up automatically on ANY
       // sign-out event, including the very common case where the
@@ -15111,6 +15207,10 @@ window.addEventListener("online", () => {
         }
         return q;
       };
+      // Bypasses filterFeed, so it never sets _pendingFeedSignature —
+      // invalidate the cache signature so it isn't left describing
+      // stale pre-reconnect data.
+      _feedCacheSignature = null;
       subscribeFeed(baseFilter);
     }
   }
