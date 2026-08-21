@@ -8,6 +8,22 @@ import {
 
 // ─── 2. CONSTANTS ─────────────────────────────────────────────────────────────
 const FEED_PAGE_SIZE = 15; // posts per page for infinite scroll (was a single hard cap of 30 with no way to see more)
+
+// Fix: allCachedPosts had no ceiling at all — every continuous scroll
+// session just kept concatenating more pages onto it forever. Two
+// compounding problems from that: (1) every tab switch re-filters and
+// rebuilds its ENTIRE grid from this one shared array, so that got
+// slower the longer a session went on, regardless of which tab —
+// matches "freezes on all tabs, not just video"; (2) the Following
+// tab's own pagination (see loadNextFollowingPage) does a FULL
+// re-render on every single page load, not an incremental append, so
+// that path got slower on every scroll within itself too, not just
+// on tab switches. Capping how many posts one continuous session
+// accumulates bounds both — once hit, infinite scroll stops with a
+// "you've reached the end for now" message rather than pretending
+// there's nothing left; switching tabs or refreshing starts a clean
+// session under the cap again.
+const FEED_SESSION_CAP = 300;
 const FEED_LIMIT = FEED_PAGE_SIZE; // kept for any code that still references the old name
 const SEARCH_LIMIT = 100;
 const SEARCH_RESULTS_CAP = 20;
@@ -984,6 +1000,30 @@ window.addEventListener("popstate", () => {
         { uiView: _viewHistory[_viewHistory.length - 1] || "base" },
         "",
       );
+    } catch (_) {}
+    return;
+  }
+
+  // Feed sub-tabs (All/Products/Services/Reels/Deals/Following) never
+  // pushed their own history entries — filterFeed() is a pure client-
+  // side re-render, so switching tabs left no trace for back to walk
+  // through. That meant landing on, say, Reels or Products and hitting
+  // back skipped straight to the exit-confirmation sequence below,
+  // instead of returning to All first like every other app's back
+  // gesture does with its default/home tab. Only applies once the
+  // view-history stack above is already exhausted (i.e. we're
+  // genuinely on the base Feed view, not mid-navigation elsewhere) —
+  // and only fires while actually on the feed view, so it doesn't
+  // interfere with Explore/Profile/DMs/Cart at all.
+  if (
+    document.getElementById("feed-container") &&
+    !document.getElementById("feed-container").classList.contains("hidden") &&
+    typeof currentFeedType !== "undefined" &&
+    currentFeedType !== "all"
+  ) {
+    window.filterFeed("all", document.querySelector('.feed-tab-btn[data-tab="all"]'));
+    try {
+      history.pushState({ uiFeedTab: "all" }, "");
     } catch (_) {}
     return;
   }
@@ -1974,6 +2014,97 @@ window._submitSellerRating = async function (sellerId) {
   loadAndRenderSellerRating(sellerId, `seller-rating-${idKey(sellerId)}`);
 };
 
+// ─── PASSWORD SET / RESET ──────────────────────────────────────────────────
+// Two entry points share the same modal and submit function:
+//   1. "Forgot password?" on the sign-in form -> resetPasswordForEmail()
+//      emails a link -> clicking it lands back here and fires a
+//      PASSWORD_RECOVERY auth event, caught below -> this modal opens.
+//   2. "Set/Change Password" in Account settings, for anyone already
+//      signed in — most usefully, accounts that signed up via Google and
+//      have never had a password at all (see the "only Google sign-in
+//      works" issue this exists to fix).
+// Both ultimately call the same supabase.auth.updateUser({ password }).
+let _isPasswordRecoveryFlow = false;
+
+window.openSetPasswordModal = function (isRecovery = false) {
+  _isPasswordRecoveryFlow = isRecovery;
+  const modal = document.getElementById("set-password-modal");
+  const closeBtn = document.getElementById("set-password-close-btn");
+  const title = document.getElementById("set-password-modal-title");
+  if (!modal) return;
+  // The recovery flow can't be dismissed without setting a password —
+  // there's no other "logged in" state to fall back to at that point
+  // (the recovery link itself IS the sign-in). The Settings entry point
+  // is a normal already-signed-in action, so it can be closed freely.
+  if (closeBtn) closeBtn.classList.toggle("hidden", isRecovery);
+  if (title) {
+    title.textContent = isRecovery ? "Set New Password" : "Change Password";
+  }
+  modal.classList.remove("hidden");
+};
+
+window.closeSetPasswordModal = function () {
+  if (_isPasswordRecoveryFlow) return; // see the note above
+  document.getElementById("set-password-modal")?.classList.add("hidden");
+};
+
+window.submitNewPassword = async function (event) {
+  event.preventDefault();
+  const pw = document.getElementById("new-password-field")?.value || "";
+  const confirmPw =
+    document.getElementById("new-password-confirm-field")?.value || "";
+
+  if (pw.length < 8) {
+    showToast("Password needs to be at least 8 characters.");
+    return;
+  }
+  if (pw !== confirmPw) {
+    showToast("Those passwords don't match.");
+    return;
+  }
+
+  const btn = document.getElementById("set-password-submit-btn");
+  const originalText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Saving...";
+  }
+
+  try {
+    const { error } = await supabase.auth.updateUser({ password: pw });
+    if (error) throw error;
+
+    document.getElementById("set-password-modal")?.classList.add("hidden");
+    document.getElementById("new-password-field").value = "";
+    document.getElementById("new-password-confirm-field").value = "";
+    showToast(
+      _isPasswordRecoveryFlow
+        ? "Password set! You're signed in."
+        : "Password updated ✓",
+    );
+    _isPasswordRecoveryFlow = false;
+  } catch (err) {
+    console.error("[Set Password] updateUser failed:", err);
+    showToast(err?.message || "Couldn't update your password. Try again.");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Save Password";
+    }
+  }
+};
+
+// Catches landing back on the app via the emailed reset link. Separate
+// from activeAuthChange above deliberately — that wrapper only exposes
+// the resulting user object, not which specific auth EVENT fired, and
+// PASSWORD_RECOVERY is the one event this app needs to react to
+// differently from an ordinary sign-in.
+supabase.auth.onAuthStateChange((event) => {
+  if (event === "PASSWORD_RECOVERY") {
+    window.openSetPasswordModal(true);
+  }
+});
+
 const activeAuthChange =
   typeof onAuthChange === "function"
     ? onAuthChange
@@ -2481,11 +2612,20 @@ async function loadNextFeedPage() {
 
     allCachedPosts = allCachedPosts.concat(newItems);
     feedLoadedCount += data.length;
-    feedHasMore = data.length === FEED_PAGE_SIZE;
+    feedHasMore =
+      data.length === FEED_PAGE_SIZE &&
+      allCachedPosts.length < FEED_SESSION_CAP;
     updateFeedCursorFromPosts(data, "feed");
     applyFeedRankingToCache();
 
     appendFeedCards(newItems);
+
+    if (!feedHasMore && data.length === FEED_PAGE_SIZE && sentinel) {
+      // Hit the session cap specifically (not a real end-of-feed) —
+      // say so, rather than showing nothing/implying there's truly
+      // nothing left.
+      sentinel.innerHTML = `<div class="py-6 text-center text-slate-500 text-[10px] uppercase tracking-widest">You've reached the end for now — refresh for the latest</div>`;
+    }
 
     // Immediately start fetching the page after THIS one, so it's
     // likely ready the next time the person scrolls this far.
@@ -8050,6 +8190,24 @@ function setupFeedVideoObserver() {
           }
         } else {
           video.pause();
+          // Fix: this used to only pause on scroll-out, never actually
+          // releasing anything — src stayed loaded on every video
+          // scrolled past for the rest of the session. Each one holds
+          // real decoder/memory resources the browser never got back,
+          // so a long scrolling session through a lot of video posts
+          // gradually piled up until the whole page froze (scrolling
+          // included). Not intersecting at all (fully off-screen, not
+          // just under the 0.5 autoplay threshold) now actually
+          // releases it — same removeAttribute+load() pattern
+          // pauseAllReelVideos() already uses correctly for Reels —
+          // and resets dataset.loaded so scrolling back re-triggers the
+          // lazy-load branch above exactly like a video that was never
+          // opened yet.
+          if (!entry.isIntersecting && video.dataset.loaded === "true") {
+            video.removeAttribute("src");
+            video.load();
+            video.dataset.loaded = "false";
+          }
         }
       });
     },
@@ -9361,11 +9519,17 @@ async function loadNextFollowingPage() {
 
     allCachedPosts = allCachedPosts.concat(newItems);
     feedLoadedCount += (posts || []).length;
-    feedHasMore = (posts || []).length === FEED_PAGE_SIZE;
+    feedHasMore =
+      (posts || []).length === FEED_PAGE_SIZE &&
+      allCachedPosts.length < FEED_SESSION_CAP;
     updateFeedCursorFromPosts(posts || [], "following");
     applyFeedRankingToCache();
 
     renderFeedFromCache();
+
+    if (!feedHasMore && (posts || []).length === FEED_PAGE_SIZE && sentinel) {
+      sentinel.innerHTML = `<div class="py-6 text-center text-slate-500 text-[10px] uppercase tracking-widest">You've reached the end for now — refresh for the latest</div>`;
+    }
   } catch (err) {
     console.error("Load more (following) error:", err);
     showToast("Couldn't load more posts. Try scrolling again.");
@@ -14403,11 +14567,58 @@ if (activeAuthChange) {
     // actual sign-OUT event (user === null) while offline — that's
     // the case a network drop can spuriously fake — and let a real
     // user object through regardless of connectivity.
+    //
+    // Second bug fix, same scenario: that guard alone still wasn't
+    // enough for a genuinely COLD boot while offline — currentUserData
+    // starts as `null` (see the top of this file), so "skip the
+    // update" just left it at that same null it already had. The
+    // guard protected an already-set value from being wiped, but did
+    // nothing the very first time. Restoring from a small cached
+    // snapshot (saved below, right after every real sign-in) closes
+    // that gap — opening the app fully offline now shows the last
+    // known signed-in identity instead of the sign-in gate.
     if (!navigator.onLine && !user) {
+      try {
+        const cached = JSON.parse(
+          localStorage.getItem("campus_market_last_known_user") || "null",
+        );
+        if (cached?.id) {
+          console.warn(
+            "[Auth Observer] Offline on cold boot — restoring last known signed-in user from cache.",
+          );
+          currentUserData = cached;
+          if (typeof window.updateAuthButton === "function") {
+            window.updateAuthButton(cached);
+          }
+          return;
+        }
+      } catch (_) {}
       console.warn(
         "[Auth Observer] Network is offline and no cached session — ignoring sign-out evaluation.",
       );
       return;
+    }
+
+    // Keep a lightweight snapshot of whoever's actually signed in, purely
+    // so the offline-cold-boot case above has something to restore from.
+    // Deliberately small — just enough for the UI to treat the person as
+    // signed in and show their name/avatar, not a substitute for the
+    // real object once network is back.
+    if (user) {
+      try {
+        localStorage.setItem(
+          "campus_market_last_known_user",
+          JSON.stringify({
+            id: user.id,
+            email: user.email,
+            user_metadata: user.user_metadata || {},
+          }),
+        );
+      } catch (_) {}
+    } else {
+      try {
+        localStorage.removeItem("campus_market_last_known_user");
+      } catch (_) {}
     }
 
     currentUserData = user;
@@ -14859,12 +15070,17 @@ let _lastGlobalErrorToastAt = 0;
 // fallback for the (more common) case where the connection drops mid-
 // request rather than being off outright, which onLine won't always
 // catch reliably. Patterns cover Chrome/Edge ("Failed to fetch"),
-// Firefox ("NetworkError when attempting to fetch resource"), and
-// Safari ("Load failed") — the three failure signatures a lost
-// connection actually throws as, across the browsers this app
-// realistically runs in.
+// Firefox ("NetworkError when attempting to fetch resource"), Safari
+// ("Load failed"), and Supabase-js's own wrapped network-failure error
+// classes (AuthRetryableFetchError / FetchError), since those don't
+// always carry one of the raw browser messages above — checked by
+// err.name rather than message text, since Supabase controls that
+// wording and it isn't guaranteed to match any specific phrase.
 function _isLikelyNetworkError(err) {
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return true;
+  }
+  if (err?.name === "AuthRetryableFetchError" || err?.name === "FetchError") {
     return true;
   }
   const msg = String(err?.message || err || "");
@@ -14872,7 +15088,8 @@ function _isLikelyNetworkError(err) {
     /failed to fetch/i.test(msg) ||
     /networkerror when attempting to fetch/i.test(msg) ||
     /load failed/i.test(msg) ||
-    /network request failed/i.test(msg)
+    /network request failed/i.test(msg) ||
+    /network error/i.test(msg)
   );
 }
 

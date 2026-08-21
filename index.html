@@ -1216,6 +1216,21 @@
                             class="fas fa-chevron-right chev text-slate-600"
                           ></i>
                         </button>
+                        <button
+                          type="button"
+                          onclick="window.openSetPasswordModal(false)"
+                          class="w-full flex items-center justify-between p-3 bg-slate-800 rounded-xl border border-slate-700"
+                        >
+                          <span
+                            class="text-xs font-bold text-white flex items-center gap-1.5"
+                          >
+                            <i class="fas fa-key text-amber-400"></i>
+                            Set / Change Password
+                          </span>
+                          <i
+                            class="fas fa-chevron-right chev text-slate-600"
+                          ></i>
+                        </button>
                         <div>
                           <label
                             for="settingsEmail"
@@ -2229,6 +2244,13 @@
                   <i id="pw-eye-icon" class="fas fa-eye"></i>
                 </button>
               </div>
+              <button
+                type="button"
+                onclick="window.openForgotPasswordModal()"
+                class="text-[11px] text-amber-400/80 hover:text-amber-400 font-semibold mt-1.5 ml-1"
+              >
+                Forgot password?
+              </button>
             </div>
             <button
               type="submit"
@@ -2247,6 +2269,148 @@
               Create one free
             </button>
           </p>
+        </div>
+      </div>
+
+      <!-- Forgot Password modal: requests a reset-link email via Supabase's
+           own resetPasswordForEmail. Deliberately shows the same success
+           message whether or not the email actually has an account —
+           confirming/denying account existence via this form is an
+           account-enumeration leak, the same reasoning most real auth
+           systems (and this app's own login-guard) already follow. -->
+      <div
+        id="forgot-password-modal"
+        class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4"
+      >
+        <div
+          class="bg-[#0b1220] border border-white/10 rounded-[2rem] p-7 w-full max-w-sm space-y-6 shadow-2xl"
+        >
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-black text-white">Reset Password</h2>
+            <button
+              onclick="window.closeForgotPasswordModal()"
+              class="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-400 hover:text-white transition"
+              aria-label="Close"
+            >
+              <i class="fas fa-xmark text-xs"></i>
+            </button>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            Enter the email on your account and we'll send a link to reset
+            your password.
+          </p>
+          <form
+            onsubmit="window.submitForgotPassword(event)"
+            class="space-y-4"
+          >
+            <div>
+              <label
+                for="forgot-password-email"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5 ml-1 tracking-widest"
+                >Email</label
+              >
+              <div class="relative">
+                <i
+                  class="fas fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                ></i>
+                <input
+                  type="email"
+                  id="forgot-password-email"
+                  name="forgot-password-email"
+                  placeholder="student@university.edu.gh"
+                  required
+                  class="w-full bg-white/5 border border-white/10 text-white text-sm rounded-full pl-10 pr-4 py-3 focus:outline-none focus:border-amber-400/70 focus:bg-white/[0.07] transition font-medium placeholder:text-slate-600"
+                />
+              </div>
+            </div>
+            <button
+              type="submit"
+              id="forgot-password-submit-btn"
+              class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3.5 rounded-full text-sm transition active:scale-95 shadow-lg shadow-amber-400/20"
+            >
+              Send Reset Link
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Set New Password modal — shared by two entry points:
+           1. Landing back here via the emailed reset link (PASSWORD_RECOVERY
+              event, caught in app.js).
+           2. "Set/Change Password" in Account settings, for anyone
+              already signed in (most usefully: Google-created accounts
+              that have never had a password at all — see setPasswordMode). -->
+      <div
+        id="set-password-modal"
+        class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4"
+      >
+        <div
+          class="bg-[#0b1220] border border-white/10 rounded-[2rem] p-7 w-full max-w-sm space-y-6 shadow-2xl"
+        >
+          <div class="flex items-center justify-between">
+            <h2 id="set-password-modal-title" class="text-lg font-black text-white">
+              Set New Password
+            </h2>
+            <button
+              id="set-password-close-btn"
+              onclick="window.closeSetPasswordModal()"
+              class="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-slate-400 hover:text-white transition"
+              aria-label="Close"
+            >
+              <i class="fas fa-xmark text-xs"></i>
+            </button>
+          </div>
+          <form onsubmit="window.submitNewPassword(event)" class="space-y-4">
+            <div>
+              <label
+                for="new-password-field"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5 ml-1 tracking-widest"
+                >New Password</label
+              >
+              <div class="relative">
+                <i
+                  class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                ></i>
+                <input
+                  type="password"
+                  id="new-password-field"
+                  name="new-password-field"
+                  placeholder="At least 8 characters"
+                  minlength="8"
+                  required
+                  class="w-full bg-white/5 border border-white/10 text-white text-sm rounded-full pl-10 pr-4 py-3 focus:outline-none focus:border-amber-400/70 focus:bg-white/[0.07] transition font-medium placeholder:text-slate-600"
+                />
+              </div>
+            </div>
+            <div>
+              <label
+                for="new-password-confirm-field"
+                class="block text-[10px] uppercase font-bold text-slate-500 mb-1.5 ml-1 tracking-widest"
+                >Confirm Password</label
+              >
+              <div class="relative">
+                <i
+                  class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"
+                ></i>
+                <input
+                  type="password"
+                  id="new-password-confirm-field"
+                  name="new-password-confirm-field"
+                  placeholder="Retype the password"
+                  minlength="8"
+                  required
+                  class="w-full bg-white/5 border border-white/10 text-white text-sm rounded-full pl-10 pr-4 py-3 focus:outline-none focus:border-amber-400/70 focus:bg-white/[0.07] transition font-medium placeholder:text-slate-600"
+                />
+              </div>
+            </div>
+            <button
+              type="submit"
+              id="set-password-submit-btn"
+              class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3.5 rounded-full text-sm transition active:scale-95 shadow-lg shadow-amber-400/20"
+            >
+              Save Password
+            </button>
+          </form>
         </div>
       </div>
 
@@ -2405,6 +2569,77 @@
           } else {
             pwInput.type = "password";
             icon.className = "fas fa-eye";
+          }
+        };
+
+        window.openForgotPasswordModal = function () {
+          const emailField = document.getElementById("login-email");
+          const modal = document.getElementById("forgot-password-modal");
+          if (!modal) return;
+          // Carry over whatever they already typed on the sign-in form,
+          // so they don't have to retype the email a second time.
+          const forgotEmailField = document.getElementById(
+            "forgot-password-email",
+          );
+          if (forgotEmailField && emailField?.value) {
+            forgotEmailField.value = emailField.value;
+          }
+          modal.classList.remove("hidden");
+        };
+
+        window.closeForgotPasswordModal = function () {
+          document
+            .getElementById("forgot-password-modal")
+            ?.classList.add("hidden");
+        };
+
+        window.submitForgotPassword = async function (event) {
+          event.preventDefault();
+          const email = document
+            .getElementById("forgot-password-email")
+            ?.value?.trim();
+          if (!email) return;
+
+          const btn = document.getElementById("forgot-password-submit-btn");
+          const originalText = btn ? btn.textContent : "";
+          if (btn) {
+            btn.disabled = true;
+            btn.textContent = "Sending...";
+          }
+
+          try {
+            // redirectTo points back at this same page — the
+            // PASSWORD_RECOVERY listener (see the script block further
+            // down) catches the person landing back here via the link
+            // in their email and prompts them to set a new password.
+            const { error } = await supabase.auth.resetPasswordForEmail(
+              email,
+              { redirectTo: window.location.origin + window.location.pathname },
+            );
+            if (error) throw error;
+          } catch (err) {
+            console.error("[Forgot Password] resetPasswordForEmail failed:", err);
+            // Deliberately still shows success below even on error —
+            // see the comment on the modal itself: confirming or
+            // denying that an email has an account here is an
+            // account-enumeration leak. A genuine network/rate-limit
+            // error is rare enough that this tradeoff is worth it.
+          } finally {
+            if (btn) {
+              btn.disabled = false;
+              btn.textContent = originalText;
+            }
+          }
+
+          window.closeForgotPasswordModal();
+          if (typeof showToast === "function") {
+            showToast(
+              "If an account exists for that email, a reset link is on its way.",
+            );
+          } else {
+            alert(
+              "If an account exists for that email, a reset link is on its way.",
+            );
           }
         };
 
