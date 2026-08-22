@@ -286,13 +286,26 @@ let currentFeedBaseFilter = null; // function(query) -> query, applies only the 
 // a skeleton and re-fetch/re-sync everything from scratch, even for a
 // same-signature switch a second later. Other apps don't reload on
 // every tab tap; they only refetch when the data actually could have
-// changed. This tracks which "query signature" allCachedPosts currently
-// holds and when it was loaded, so filterFeed can skip straight to a
-// client-side re-render when nothing about the underlying query
-// actually changed.
-let _feedCacheSignature = null;
-let _feedCacheLoadedAt = 0;
-let _pendingFeedSignature = null;
+// changed.
+//
+// Keyed by "query signature" (see computeFeedSignature) rather than a
+// single last-loaded slot — a single slot only helped when re-tapping
+// the SAME tab twice in a row; ping-ponging between two different tabs
+// (e.g. All <-> Reels) evicted it every time. A small per-signature map
+// lets each tab keep its own short-lived cache independently.
+//
+// Fix: a fetch that gets superseded by an even-faster subsequent tab
+// switch (see the _feedLoadGeneration guard in subscribeFeed) used to
+// bail out before ever recording anything here — so switching tabs
+// FASTER than the network round-trip (exactly "move through tabs really
+// really quickly") meant this cache could never actually populate,
+// defeating the whole point. subscribeFeed now stores into this map
+// unconditionally, keyed by the signature it was fetching for (passed
+// in directly as a parameter, not read back off a shared mutable
+// variable, which would itself be racy under overlapping in-flight
+// fetches) — even a "losing" fetch's data is still perfectly good for
+// whenever that tab comes up again.
+const _feedBucketCache = new Map(); // signature -> { posts, feedLoadedCount, feedHasMore, feedCursor, loadedAt }
 const FEED_CACHE_REUSE_TTL_MS = 25000;
 function _feedSignatureBucket(type) {
   // All/Products/Deals share one identical unfiltered query; Services
@@ -2565,7 +2578,7 @@ async function fetchFeedSnapshot(queryFactory = null) {
   return data || [];
 }
 
-async function subscribeFeed(baseFilter = null) {
+async function subscribeFeed(baseFilter = null, forSignature = null) {
   unsubscribeFeed();
   currentFeedBaseFilter = baseFilter;
   feedLoadedCount = 0;
@@ -2583,22 +2596,41 @@ async function subscribeFeed(baseFilter = null) {
     const data = await fetchFeedSnapshot(() =>
       buildFeedQuery(baseFilter, null, FEED_PAGE_SIZE),
     );
+    const freshPosts = data.map((item) => ({ id: item.id, data: item }));
+    // Cache this snapshot for its signature regardless of whether an
+    // even-newer tab switch has since superseded it (see
+    // _feedBucketCache's own comment) — captured from the `forSignature`
+    // parameter (this call's own closure), never from a shared mutable
+    // variable, so two overlapping in-flight fetches can never stomp on
+    // each other's cache entry. Only set when filterFeed is what
+    // triggered this call — subscribeFeed() also runs from sign-out/
+    // reconnect paths that pass no signature, and those should never be
+    // treated as a reusable cache.
+    if (forSignature) {
+      const cursorForCache = data.length
+        ? getPostCursor(data[data.length - 1])
+        : null;
+      _feedBucketCache.set(forSignature, {
+        posts: freshPosts,
+        feedLoadedCount: data.length,
+        feedHasMore: data.length === FEED_PAGE_SIZE,
+        feedCursor: cursorForCache,
+        loadedAt: Date.now(),
+      });
+    }
     if (myGeneration !== _feedLoadGeneration) return; // superseded by a newer tab switch
-    allCachedPosts = data.map((item) => ({ id: item.id, data: item }));
+    allCachedPosts = freshPosts;
     feedLoadedCount = data.length;
     feedHasMore = data.length === FEED_PAGE_SIZE;
     updateFeedCursorFromPosts(data, "feed");
     applyFeedRankingToCache();
-    // Record what this fresh load actually contains so a same-signature
-    // tab switch shortly after can reuse it instead of reloading (see
-    // filterFeed). Only set when filterFeed is what triggered this call
-    // — subscribeFeed() also runs from sign-out/reconnect paths that
-    // don't set a pending signature, and those should never be treated
-    // as a reusable cache.
-    if (_pendingFeedSignature) {
-      _feedCacheSignature = _pendingFeedSignature;
-      _feedCacheLoadedAt = Date.now();
-      _pendingFeedSignature = null;
+    // Keep the bucket cache entry in sync with the now-ranked order,
+    // since the version stored above (pre-ranking, to avoid mutating
+    // the shared ranking state for a possibly-superseded fetch) is
+    // slightly out of order otherwise.
+    if (forSignature) {
+      const entry = _feedBucketCache.get(forSignature);
+      if (entry) entry.posts = allCachedPosts;
     }
 
     // Sync local bookmark view mapping if authenticated
@@ -3773,7 +3805,7 @@ window.openManageListingSheet = async function (postId) {
             <div>
                 <label for="managePrice" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Listing price (GH₵)</label>
                 <p class="text-[10px] text-slate-500 mb-1.5">Change your listing price without re-uploading. Saving marks the post as new in the feed.</p>
-                <input type="text" inputmode="decimal" id="managePrice" placeholder="0.00" oninput="window._formatPriceInput(this)" value="${esc(Number(post.price ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+                <input type="text" inputmode="decimal" id="managePrice" data-original-value="${esc(String(post.price ?? 0))}" placeholder="0.00" oninput="window._formatPriceInput(this)" value="${esc(Number(post.price ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
             <label class="flex items-center justify-between p-3 bg-slate-900 rounded-xl border border-slate-800 cursor-pointer">
@@ -3785,12 +3817,12 @@ window.openManageListingSheet = async function (postId) {
             <div>
                 <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Flash sale price</label>
                 <p class="text-[10px] text-slate-500 mb-1.5">Set a lower price for the sale — your listing price above stays crossed out next to it, and everything reverts automatically once the timer ends.</p>
-                <input type="text" inputmode="decimal" id="manageOriginalPrice" oninput="window._formatPriceInput(this)" value="${post.original_price != null ? esc(Number(post.original_price).toLocaleString("en-US", { maximumFractionDigits: 2 })) : ""}" placeholder="e.g. ${esc((Number(post.price || 0) * 0.8).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+                <input type="text" inputmode="decimal" id="manageOriginalPrice" data-original-value="${post.original_price != null ? esc(String(post.original_price)) : ""}" oninput="window._formatPriceInput(this)" value="${post.original_price != null ? esc(Number(post.original_price).toLocaleString("en-US", { maximumFractionDigits: 2 })) : ""}" placeholder="e.g. ${esc((Number(post.price || 0) * 0.8).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
             <div>
                 <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Flash sale ends (optional)</label>
-                <input type="datetime-local" id="manageSaleEndsAt" value="${saleEndsValue}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+                <input type="datetime-local" id="manageSaleEndsAt" data-original-value="${saleEndsValue}" value="${saleEndsValue}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
             ${
@@ -3826,12 +3858,6 @@ window._saveManageListing = async function (postId) {
   )
     return;
 
-  // Needed below to validate a sale-end time against the listing's
-  // current price when the price field itself is left unchanged.
-  const cachedPost = allCachedPosts.find(
-    ({ id }) => idKey(id) === idKey(postId),
-  )?.data;
-
   // Both price fields display thousands separators as you type (see
   // _formatPriceInput) — stripped back to a plain numeric string here,
   // same as Create Listing's price field, so "8,000" parses as 8000
@@ -3851,40 +3877,68 @@ window._saveManageListing = async function (postId) {
   const parsedOriginalPrice = originalPriceRaw
     ? parseFloat(originalPriceRaw)
     : null;
-  if (
-    originalPriceRaw &&
-    (isNaN(parsedOriginalPrice) || parsedOriginalPrice < 0)
-  ) {
-    showToast("Flash sale price can't be negative.");
-    return;
-  }
-  if (parsedOriginalPrice !== null && parsedOriginalPrice > 1000000) {
-    showToast("That flash sale price seems too high — please double-check it.");
-    return;
-  }
-
   const saleEndsRaw = saleEndsInput.value;
-  const saleEndsIso = saleEndsRaw ? new Date(saleEndsRaw).toISOString() : null;
-  if (saleEndsIso && new Date(saleEndsIso).getTime() <= Date.now()) {
-    showToast("Flash sale end time must be in the future.");
-    return;
-  }
-  // Same rule as Create Listing: a sale end time only means anything if
-  // it comes with a flash sale price that's genuinely lower than the
-  // listing price — otherwise the post ends up with a running timer
-  // that never counts as a real deal anywhere. Uses the actual values
-  // this save is about to apply (a field left blank keeps the post's
-  // existing price/discount, not the un-submitted input default).
-  if (saleEndsRaw) {
-    const effectivePrice =
-      parsedPrice !== null ? parsedPrice : Number(cachedPost?.price || 0);
-    const effectiveOriginalPrice =
-      originalPriceRaw === "" ? null : parsedOriginalPrice;
-    if (effectiveOriginalPrice === null || effectiveOriginalPrice >= effectivePrice) {
+
+  // Fix: changing ONLY the listing price used to always re-validate the
+  // flash sale fields too (future-end-time check, price-vs-discount
+  // check) even when neither field was touched — so a stale end time
+  // left over from a past sale (still sitting in the field, already in
+  // the past) blocked a plain price edit entirely, with no way to save
+  // until the person also cleared the flash sale fields by hand. Only
+  // re-validate flash sale fields when they've actually changed from
+  // what was loaded — compared against data-original-value, set once
+  // when the sheet opened, so this can't drift out of sync with what's
+  // really stored.
+  const flashPriceUnchanged =
+    originalPriceRaw === (originalPriceInput.dataset.originalValue || "");
+  const saleEndsUnchanged =
+    saleEndsRaw === (saleEndsInput.dataset.originalValue || "");
+  const flashFieldsUnchanged = flashPriceUnchanged && saleEndsUnchanged;
+
+  let saleEndsIso = null;
+  if (!flashFieldsUnchanged) {
+    if (
+      originalPriceRaw &&
+      (isNaN(parsedOriginalPrice) || parsedOriginalPrice < 0)
+    ) {
+      showToast("Flash sale price can't be negative.");
+      return;
+    }
+    if (parsedOriginalPrice !== null && parsedOriginalPrice > 1000000) {
       showToast(
-        "Set a flash sale price lower than your listing price to run a flash sale.",
+        "That flash sale price seems too high — please double-check it.",
       );
       return;
+    }
+
+    saleEndsIso = saleEndsRaw ? new Date(saleEndsRaw).toISOString() : null;
+    if (saleEndsIso && new Date(saleEndsIso).getTime() <= Date.now()) {
+      showToast("Flash sale end time must be in the future.");
+      return;
+    }
+    // Same rule as Create Listing: a sale end time only means anything
+    // if it comes with a flash sale price that's genuinely lower than
+    // the listing price — otherwise the post ends up with a running
+    // timer that never counts as a real deal anywhere. Uses the actual
+    // values this save is about to apply (a price field left blank
+    // keeps the post's existing price, read from its own
+    // data-original-value rather than a possibly-stale feed cache).
+    if (saleEndsRaw) {
+      const effectivePrice =
+        parsedPrice !== null
+          ? parsedPrice
+          : Number(priceInput.dataset.originalValue || 0);
+      const effectiveOriginalPrice =
+        originalPriceRaw === "" ? null : parsedOriginalPrice;
+      if (
+        effectiveOriginalPrice === null ||
+        effectiveOriginalPrice >= effectivePrice
+      ) {
+        showToast(
+          "Set a flash sale price lower than your listing price to run a flash sale.",
+        );
+        return;
+      }
     }
   }
 
@@ -3894,15 +3948,21 @@ window._saveManageListing = async function (postId) {
   if (parsedPrice !== null) {
     updates.price = parsedPrice;
   }
-  if (originalPriceRaw === "") {
-    updates.original_price = null;
-  } else if (parsedOriginalPrice !== null) {
-    updates.original_price = parsedOriginalPrice;
-  }
-  if (!saleEndsRaw) {
-    updates.sale_ends_at = null;
-  } else if (saleEndsIso) {
-    updates.sale_ends_at = saleEndsIso;
+  // Flash sale fields are only included in the update at all when they
+  // were actually touched — leaving them out entirely when unchanged
+  // means a pure price edit can never accidentally clear or rewrite an
+  // existing (or stale) flash sale value.
+  if (!flashFieldsUnchanged) {
+    if (originalPriceRaw === "") {
+      updates.original_price = null;
+    } else if (parsedOriginalPrice !== null) {
+      updates.original_price = parsedOriginalPrice;
+    }
+    if (!saleEndsRaw) {
+      updates.sale_ends_at = null;
+    } else if (saleEndsIso) {
+      updates.sale_ends_at = saleEndsIso;
+    }
   }
 
   const { error } = await supabase
@@ -3927,6 +3987,22 @@ window._saveManageListing = async function (postId) {
   showToast("Listing updated.");
   window.closeManageListingSheet();
   renderFeedFromCache();
+  // Fix: closing this sheet and re-rendering the feed grid never
+  // touched the post detail page underneath it — Manage Listing is
+  // usually opened FROM there (via the ⋮ menu on your own post), so
+  // saving showed the old price until you left the detail view and
+  // came back to it (which re-fetches fresh). openDetail always does a
+  // full fresh fetch rather than reading the feed cache, so calling it
+  // again here (fromBack=true: no new history entry, no duplicate view
+  // analytics) is a direct, guaranteed-accurate refresh of exactly what
+  // just changed.
+  if (
+    _currentDetailPostId &&
+    idKey(_currentDetailPostId) === idKey(postId) &&
+    !document.getElementById("detail-modal")?.classList.contains("hidden")
+  ) {
+    window.openDetail(postId, true);
+  }
 };
 
 // Ends a listing's flash sale immediately (clears original_price and
@@ -3961,6 +4037,13 @@ window._endFlashSaleNow = async function (postId) {
   showToast("Flash sale ended.");
   window.closeManageListingSheet();
   renderFeedFromCache();
+  if (
+    _currentDetailPostId &&
+    idKey(_currentDetailPostId) === idKey(postId) &&
+    !document.getElementById("detail-modal")?.classList.contains("hidden")
+  ) {
+    window.openDetail(postId, true);
+  }
 };
 
 // ─── 10. LOGIN MODAL ──────────────────────────────────────────────────────────
@@ -9843,6 +9926,29 @@ async function loadNextFollowingPage() {
 const SKELETON_TILE_HEIGHTS = [140, 190, 160, 220, 150, 200, 170, 130];
 
 function renderSkeletonCards(count = 6, mode = "feed") {
+  if (mode === "reels") {
+    // Matches .reel-card exactly (height/width: 100%, black background)
+    // inside the same position:fixed, full-viewport .reels-mode
+    // container the real reel feed uses — a masonry/list skeleton
+    // rendered a small divided card here because #posts-feed didn't
+    // have .reels-mode applied yet at skeleton time (see filterFeed).
+    // Only the first card is ever visible (scroll-snap + 100% height),
+    // so a single one is enough.
+    return `
+        <div class="reel-card">
+            <div class="absolute inset-0 bg-slate-900 skeleton-pulse"></div>
+            <div class="reel-info space-y-2">
+                <div class="h-3 w-32 rounded bg-slate-700/70 skeleton-pulse"></div>
+                <div class="h-2.5 w-48 rounded bg-slate-700/50 skeleton-pulse"></div>
+            </div>
+            <div class="reel-actions">
+                <div class="w-11 h-11 rounded-full bg-slate-700/60 skeleton-pulse"></div>
+                <div class="w-11 h-11 rounded-full bg-slate-700/60 skeleton-pulse"></div>
+                <div class="w-11 h-11 rounded-full bg-slate-700/60 skeleton-pulse"></div>
+            </div>
+        </div>`;
+  }
+
   if (
     mode === "masonry" ||
     mode === "masonry-feed" ||
@@ -10375,44 +10481,12 @@ window.filterFeed = function (type, clickedBtn = null) {
 
   // If the tab we're switching TO queries the exact same underlying
   // data (same campus scope + same shared/skill/reels bucket) as
-  // what's already loaded, and that load happened recently enough to
-  // still be fresh, skip the skeleton and re-fetch entirely — just
-  // re-render the existing allCachedPosts in the new tab's layout.
-  // This is what makes quick All <-> Products <-> Deals taps instant
-  // instead of reloading every time; Services/Reels (a genuinely
-  // different query) and Following/Trending (handled above, before
-  // this point) always still fetch fresh.
-  const _thisSignature = computeFeedSignature(type);
-  if (
-    _feedCacheSignature === _thisSignature &&
-    Date.now() - _feedCacheLoadedAt < FEED_CACHE_REUSE_TTL_MS &&
-    allCachedPosts.length > 0
-  ) {
-    updateCampusScopeBanner();
-    renderFeedFromCache();
-    return;
-  }
-  _pendingFeedSignature = _thisSignature;
-
-  const feed = document.getElementById("posts-feed");
-  if (feed) {
-    // Matches renderSkeletonCards' mode to whatever container class this
-    // tab actually renders into (see the masonry-columns* class each
-    // branch uses further down in renderFeedFromCache) — Products/Deals
-    // and Services use slightly different column classes from each
-    // other and from the All-tab feed, so a single generic "grid" mode
-    // doesn't fit all three.
-    const skeletonMode =
-      type === "product" || type === "deals"
-        ? "masonry"
-        : type === "skill"
-          ? "masonry-services"
-          : type === "reels"
-            ? "feed" // reels has its own dedicated loading state elsewhere, this is just a safe fallback
-            : "masonry-feed"; // "all" and anything else defaults to the main feed's masonry layout
-    feed.innerHTML = renderSkeletonCards(6, skeletonMode);
-  }
-
+  // something already fetched recently — whether that's the tab we're
+  // LEAVING or one visited earlier this session — skip the skeleton
+  // and re-fetch entirely and just restore + re-render that snapshot.
+  // This is what makes quick tab-hopping (in any order, any speed)
+  // feel instant instead of reloading every time.
+  //
   // Product tab still fetches ALL posts (so grid + other tabs share cache)
   // but renderFeedFromCache() switches to grid layout based on currentFeedType.
   //
@@ -10458,8 +10532,61 @@ window.filterFeed = function (type, clickedBtn = null) {
     return q;
   };
 
+  const _thisSignature = computeFeedSignature(type);
+  const _cachedBucket = _feedBucketCache.get(_thisSignature);
+  if (
+    _cachedBucket &&
+    Date.now() - _cachedBucket.loadedAt < FEED_CACHE_REUSE_TTL_MS &&
+    _cachedBucket.posts.length > 0
+  ) {
+    allCachedPosts = _cachedBucket.posts;
+    feedLoadedCount = _cachedBucket.feedLoadedCount;
+    feedHasMore = _cachedBucket.feedHasMore;
+    feedCursor = _cachedBucket.feedCursor;
+    // Kept up to date exactly like a real subscribeFeed() call would,
+    // so "load more" (infinite scroll) still fetches the right next
+    // page for whichever tab this cache hit just restored.
+    currentFeedBaseFilter = baseFilter;
+    if (type === "reels") {
+      document.getElementById("posts-feed")?.classList.add("reels-mode");
+    } else {
+      document.getElementById("posts-feed")?.classList.remove("reels-mode");
+    }
+    updateCampusScopeBanner();
+    renderFeedFromCache();
+    return;
+  }
+
+  const feed = document.getElementById("posts-feed");
+  if (feed) {
+    // Reels renders as a fixed, full-viewport overlay (see .reels-mode
+    // in main.css) — that class normally only gets added once real
+    // reel content renders, so the skeleton needs it applied here too,
+    // or it lays out as a small in-flow card instead of full-screen.
+    if (type === "reels") {
+      feed.classList.add("reels-mode");
+    } else {
+      feed.classList.remove("reels-mode");
+    }
+    // Matches renderSkeletonCards' mode to whatever container class this
+    // tab actually renders into (see the masonry-columns* class each
+    // branch uses further down in renderFeedFromCache) — Products/Deals
+    // and Services use slightly different column classes from each
+    // other and from the All-tab feed, so a single generic "grid" mode
+    // doesn't fit all three.
+    const skeletonMode =
+      type === "product" || type === "deals"
+        ? "masonry"
+        : type === "skill"
+          ? "masonry-services"
+          : type === "reels"
+            ? "reels"
+            : "masonry-feed"; // "all" and anything else defaults to the main feed's masonry layout
+    feed.innerHTML = renderSkeletonCards(6, skeletonMode);
+  }
+
   updateCampusScopeBanner();
-  subscribeFeed(baseFilter);
+  subscribeFeed(baseFilter, _thisSignature);
 };
 
 // Shows/hides and updates the text of the campus-scope banner above the
@@ -14940,6 +15067,60 @@ if (activeAuthChange) {
           if (typeof window.updateAuthButton === "function") {
             window.updateAuthButton(cached);
           }
+          // Fix: restoring currentUserData alone wasn't enough — every
+          // other "you're signed in" UI state (the Profile/DMs gates,
+          // the nav button showing "Sign In" instead of "Profile", the
+          // profile name/avatar) is normally set by the full sign-in
+          // branch further below, which this offline path deliberately
+          // skips (it does real network calls — profiles table fetch,
+          // device session registration, etc. — that would just fail
+          // or hang with no connection). That's exactly why opening the
+          // app offline showed sign-in prompts everywhere even though
+          // you were still genuinely signed in: this early return left
+          // all of that UI in its default logged-out state. Applying
+          // just the network-free parts of that same UI update here
+          // closes the gap; syncBlockedUsers/syncFollowingIds/device
+          // session registration are deliberately still skipped, and
+          // will run for real the next time a real sign-in event fires
+          // once connectivity actually returns.
+          const cachedMetadata = cached.user_metadata || {};
+          const authProfileNavOffline =
+            document.getElementById("auth-profile-nav");
+          if (authProfileNavOffline) {
+            authProfileNavOffline.innerHTML = `<i class="fas fa-user text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Profile</span>`;
+            authProfileNavOffline.onclick = function (e) {
+              e.stopPropagation();
+              window.navigateTo("profile", authProfileNavOffline);
+            };
+          }
+          const authProfileNavDesktopOffline = document.getElementById(
+            "auth-profile-nav-desktop",
+          );
+          if (authProfileNavDesktopOffline) {
+            authProfileNavDesktopOffline.innerHTML = `<i class="fas fa-user"></i><span>Profile</span>`;
+            authProfileNavDesktopOffline.onclick = function (e) {
+              e.stopPropagation();
+              window.navigateTo("profile", authProfileNavDesktopOffline);
+            };
+          }
+          const avatarElOffline = document.getElementById("profile-ui-avatar");
+          const nameElOffline = document.getElementById("profile-ui-name");
+          if (avatarElOffline)
+            avatarElOffline.src =
+              cachedMetadata.avatar_url ||
+              `https://ui-avatars.com/api/?name=${encodeURIComponent(cachedMetadata.full_name || "User")}`;
+          if (nameElOffline)
+            nameElOffline.textContent =
+              cachedMetadata.full_name || "Campus Student";
+
+          document.getElementById("profile-auth-gate")?.classList.add("hidden");
+          document
+            .getElementById("profile-content")
+            ?.classList.remove("hidden");
+          document.getElementById("dms-auth-gate")?.classList.add("hidden");
+          document.getElementById("dms-content")?.classList.remove("hidden");
+
+          isAuthInitialized = true;
           return;
         }
       } catch (_) {}
@@ -15248,7 +15429,7 @@ if (activeAuthChange) {
       // This fetches with no filter at all (logged-out view) — never
       // let a later tab switch mistake this for a reusable same-scope
       // cache and skip a real reload.
-      _feedCacheSignature = null;
+      _feedBucketCache.clear();
       subscribeFeed();
       // Bug fix: the sign-in modal used to pop up automatically on ANY
       // sign-out event, including the very common case where the
@@ -15400,10 +15581,10 @@ window.addEventListener("online", () => {
         }
         return q;
       };
-      // Bypasses filterFeed, so it never sets _pendingFeedSignature —
-      // invalidate the cache signature so it isn't left describing
+      // Bypasses filterFeed, so it never records into the bucket cache —
+      // clear it so a later tab switch can't mistake it for describing
       // stale pre-reconnect data.
-      _feedCacheSignature = null;
+      _feedBucketCache.clear();
       subscribeFeed(baseFilter);
     }
   }
