@@ -330,6 +330,15 @@ let followingFeedCursor = null;
 
 // DM state
 let currentConversationsChan = null;
+// Fix: opening the DMs tab always showed "Loading chats..." and
+// re-fetched from scratch, even seconds after you'd just left it — the
+// conversations-list realtime channel actually stays subscribed for the
+// entire signed-in session (it's only torn down on sign-out/reconnect,
+// not on navigating away from DMs), so conversationsCache is already
+// kept fresh in the background the whole time you're elsewhere in the
+// app. As long as that channel is still alive, a repeat visit can skip
+// straight to rendering what's already cached instead of reloading.
+let _inboxLoadedOnce = false;
 let currentMessagesChan = null;
 let activeConversationId = null;
 let activeConversationPeer = null; // { id, name, avatar }
@@ -923,6 +932,23 @@ function syncHeaderCartBadge() {
 }
 syncHeaderCartBadge();
 
+// Fix: the Profile page's "Saved Items" pill and tab-label count only
+// ever got refreshed as a side effect of renderCartListView() — which
+// itself only runs when the Saved Items screen is actually open. Saving
+// or unsaving a post from anywhere else (the feed, a detail page) left
+// those two numbers stuck at whatever they were the last time you
+// happened to open that tab, until you clicked into it again. This is
+// deliberately just the count (getValidCartItems().length), not a full
+// renderCartListView() re-render — cheap enough to call unconditionally
+// on every save/unsave, unlike the full card list rebuild.
+function syncProfileSavedCountBadges() {
+  const count = getValidCartItems().length;
+  ["profile-saved-count", "profile-saved-count-pill"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(count);
+  });
+}
+
 Object.defineProperty(window, "_currentUser", { get: () => currentUserData });
 Object.defineProperty(window, "_userCartList", { get: () => userCartList });
 // Debug helper: likedPostIds is a module-scoped const, so it's private
@@ -1077,7 +1103,10 @@ window.addEventListener("popstate", () => {
     typeof currentFeedType !== "undefined" &&
     currentFeedType !== "all"
   ) {
-    window.filterFeed("all", document.querySelector('.feed-tab-btn[data-tab="all"]'));
+    window.filterFeed(
+      "all",
+      document.querySelector('.feed-tab-btn[data-tab="all"]'),
+    );
     try {
       history.pushState({ uiFeedTab: "all" }, "");
     } catch (_) {}
@@ -1222,13 +1251,15 @@ document.addEventListener(
     if (nextIndex < 0 || nextIndex >= _swipeTabOrder.length) return;
 
     const nextTab = _swipeTabOrder[nextIndex];
-    const btn = document.querySelector(
-      `.feed-tab-btn[data-tab="${nextTab}"]`,
-    );
+    const btn = document.querySelector(`.feed-tab-btn[data-tab="${nextTab}"]`);
     if (!btn) return;
     hapticTap(10);
     window.filterFeed(nextTab, btn);
-    btn.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+    btn.scrollIntoView({
+      behavior: "smooth",
+      inline: "center",
+      block: "nearest",
+    });
   },
   { passive: true },
 );
@@ -1808,7 +1839,7 @@ function renderDealsStripBlock(excludePostId) {
         <div class="pt-2">
             <div class="flex items-center justify-between mb-3">
                 <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">⚡ Live Deals</p>
-                <button onclick="window.navigateTo('feed'); window.filterFeed('deals', document.querySelector('.feed-tab-btn[data-tab=&quot;deals&quot;]'))" class="text-[10px] font-bold text-amber-400 uppercase tracking-wide">See all</button>
+                <button onclick="window.closeDetailModal(); window.navigateTo('feed'); window.filterFeed('deals', document.querySelector('.feed-tab-btn[data-tab=&quot;deals&quot;]'))" class="text-[10px] font-bold text-amber-400 uppercase tracking-wide">See all</button>
             </div>
             <div class="flex gap-3 overflow-x-auto no-scrollbar pb-1">
                 ${deals.map(({ id, data: d }) => renderDealsStripCard(id, d)).join("")}
@@ -2043,7 +2074,9 @@ function isSaleActiveForPost(d) {
 // read this instead of d.price directly, since d.price alone ignores an
 // active sale.
 function getEffectivePrice(d) {
-  return isSaleActiveForPost(d) ? Number(d.original_price) : Number(d.price || 0);
+  return isSaleActiveForPost(d)
+    ? Number(d.original_price)
+    : Number(d.price || 0);
 }
 
 // Renders a flash-sale end time as a countdown string. Days-out sales
@@ -2670,6 +2703,12 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
           "campus_market_cart",
           JSON.stringify(userCartList),
         );
+        // This reconciliation can genuinely change the saved count
+        // (e.g. a save made on another device) — keep the header badge
+        // and Profile's Saved Items numbers in sync with it rather than
+        // waiting for the next explicit save/unsave action to catch up.
+        syncHeaderCartBadge();
+        syncProfileSavedCountBadges();
       }
 
       // Fix: likedPostIds was only ever derived from localStorage,
@@ -3562,7 +3601,7 @@ window.openDetail = async function (postId, fromBack = false) {
                 <div class="flex items-start justify-between gap-4 -mt-1">
                     <div class="flex items-baseline gap-2 flex-wrap">
                         ${isSoldDetail ? `<span class="bg-slate-800 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] px-2.5 py-1 rounded-full border border-slate-700">Sold</span>` : ""}
-                        <span class="text-amber-400 font-black text-3xl leading-none sale-live-price" ${hasDiscountDetail ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPriceDetail || 0))}</span>
+                        <span class="text-amber-400 font-black text-3xl leading-none${hasDiscountDetail ? " sale-live-price" : ""}" ${hasDiscountDetail ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPriceDetail || 0))}</span>
                         ${hasDiscountDetail ? `<span class="sale-strike-price text-slate-500 text-base line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
                         ${!isSoldDetail && saleActiveDetail ? `<span class="sale-countdown-badge bg-rose-500/90 text-white text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</span>` : ""}
                     </div>
@@ -3712,6 +3751,32 @@ window._goBackInDetailModal = function () {
   const prevId = _detailPostStack.pop();
   if (prevId) {
     window.openDetail(prevId, true);
+    // Fix: the popstate handler already popped this layer's _uiStack
+    // entry before calling us (that's how it got here) — and openDetail
+    // skips its usual pushUiState call entirely whenever fromBack is
+    // true, since that flag also covers unrelated "just refresh this
+    // modal's content in place" callers (Manage Listing save) that must
+    // NOT push a new entry. The net effect for a genuine drill-back
+    // like this one was that the modal stayed visually open (now
+    // showing the previous post) with NOTHING in _uiStack representing
+    // it — so the next back-press found an empty stack, skipped closing
+    // the still-open modal, skipped returning to the All tab, and fell
+    // straight into the exit sequence instead.
+    //
+    // Only push directly onto _uiStack here, NOT via pushUiState — the
+    // popstate handler that called us already re-pushes a real history
+    // entry for whatever's on top of _uiStack once this close() call
+    // returns (see the `if (_uiStack.length > 0) history.pushState(...)`
+    // right after `top.close(true)`), so calling pushUiState here too
+    // would push history state TWICE for one back-press, inflating real
+    // browser history depth beyond what _uiStack expects — the exact
+    // kind of drift that eventually causes a premature exit.
+    _uiStack.push({
+      id: "detail-modal",
+      close: _detailPostStack.length
+        ? () => window._goBackInDetailModal()
+        : () => window.closeDetailModal(true),
+    });
   } else {
     window.closeDetailModal(true);
   }
@@ -8076,7 +8141,7 @@ function renderFeedMasonryCard(id, d, options = {}) {
                 : ""
             }
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2.5 pt-6 pb-2 flex items-baseline gap-1.5">
-                <span class="text-amber-400 font-black text-xs sale-live-price" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
+                <span class="text-amber-400 font-black text-xs${hasDiscount ? " sale-live-price" : ""}" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
                 ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
             </div>
         </div>
@@ -8148,7 +8213,7 @@ function renderProductGridCard(id, d) {
                 <i class="${bookmarkClass} text-xs"></i>
             </button>
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2 pt-5 pb-1.5 flex items-baseline gap-1.5">
-                <span class="text-amber-400 font-black text-[11px] sale-live-price" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
+                <span class="text-amber-400 font-black text-[11px]${hasDiscount ? " sale-live-price" : ""}" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
                 ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[9px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
             </div>
         </div>
@@ -8261,7 +8326,7 @@ function renderServiceGridCard(id, d) {
                 <i class="fas fa-bolt text-[9px]"></i> Service
             </div>
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-3 pt-6 pb-2 flex items-baseline gap-1.5">
-                <span class="text-amber-400 font-black text-sm sale-live-price" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
+                <span class="text-amber-400 font-black text-sm${hasDiscount ? " sale-live-price" : ""}" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
                 ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
             </div>
         </div>
@@ -9009,6 +9074,7 @@ window.toggleCartItem = async function (postId) {
 
   localStorage.setItem("campus_market_cart", JSON.stringify(userCartList));
   syncHeaderCartBadge();
+  syncProfileSavedCountBadges();
 
   // Instantly update icons/buttons on current cards
   const feedIcon = document
@@ -9286,9 +9352,11 @@ function buildCartListMarkup() {
                             </button>
                             ${(() => {
                               const cartSaleActive = isSaleActiveForPost(item);
-                              const cartDisplayPrice = cartSaleActive ? item.original_price : item.price;
+                              const cartDisplayPrice = cartSaleActive
+                                ? item.original_price
+                                : item.price;
                               return `<div class="flex items-baseline gap-1.5 mt-1">
-                                <span class="text-amber-400 font-extrabold text-sm sale-live-price" ${cartSaleActive ? `data-sale-ends="${escAttr(item.sale_ends_at)}" data-regular-price="${escAttr(String(item.price ?? 0))}"` : ""}>GH₵${esc(String(cartDisplayPrice ?? 0))}</span>
+                                <span class="text-amber-400 font-extrabold text-sm${cartSaleActive ? " sale-live-price" : ""}" ${cartSaleActive ? `data-sale-ends="${escAttr(item.sale_ends_at)}" data-regular-price="${escAttr(String(item.price ?? 0))}"` : ""}>GH₵${esc(String(cartDisplayPrice ?? 0))}</span>
                                 ${cartSaleActive ? `<span class="sale-strike-price text-slate-500 text-[11px] line-through" data-sale-ends="${escAttr(item.sale_ends_at)}">GH₵${esc(String(item.price ?? 0))}</span>` : ""}
                               </div>`;
                             })()}
@@ -10011,6 +10079,22 @@ function renderSkeletonCards(count = 6, mode = "feed") {
 function renderFeedFromCache() {
   const feed = document.getElementById("posts-feed");
   if (!feed) return;
+
+  // Fix: this rebuilt the entire visible-card-count worth of markup
+  // (up to FEED_SESSION_CAP=300 posts) and wrote it via innerHTML even
+  // when the Feed screen wasn't the one on screen at all — e.g. saving
+  // a flash sale from Manage Listing opened off Profile's "My Gigs &
+  // Posts" grid patches allCachedPosts and unconditionally called this,
+  // paying the full render cost for a screen nobody could see. That
+  // main-thread work is exactly what made touch/scroll (including
+  // pull-to-refresh) feel briefly unresponsive right after saving.
+  // Skipping it here is safe: the data itself is already updated in
+  // allCachedPosts by whoever called this, and the next real switch
+  // back to Feed calls this again and paints correctly from that
+  // already-current cache — nothing is lost by not painting invisible
+  // pixels.
+  const feedContainer = document.getElementById("feed-container");
+  if (feedContainer && feedContainer.classList.contains("hidden")) return;
 
   // Blocking a user should hide their posts everywhere in the app —
   // rather than patching every fetch site that populates
@@ -13257,6 +13341,10 @@ function unsubscribeConversations() {
     supabase.removeChannel(currentConversationsChan);
     currentConversationsChan = null;
   }
+  // The channel being torn down means conversationsCache can no longer
+  // be trusted to stay in sync in the background — the next open must
+  // do a real fetch again, not skip straight to rendering stale data.
+  _inboxLoadedOnce = false;
 }
 
 let currentTypingChan = null;
@@ -13294,6 +13382,16 @@ async function openInboxView() {
   const content = document.getElementById("dms-content");
   if (!content || !currentUserData) return;
 
+  // Repeat visit within the same still-subscribed session — the
+  // realtime channel has kept conversationsCache current the whole
+  // time, so render straight from it instead of showing a skeleton and
+  // re-fetching data that's already right there.
+  if (_inboxLoadedOnce && currentConversationsChan) {
+    renderInboxList();
+    updateDmUnreadBadge();
+    return;
+  }
+
   content.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Loading chats...</div>`;
 
   try {
@@ -13308,6 +13406,7 @@ async function openInboxView() {
     renderInboxList();
     subscribeConversationsList();
     updateDmUnreadBadge();
+    _inboxLoadedOnce = true;
   } catch (err) {
     console.error("Inbox load error:", err);
     content.innerHTML = `
