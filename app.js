@@ -983,14 +983,13 @@ let _detailPostStack = [];
 let _currentDetailPostId = null;
 
 // Exit confirmation: when both the overlay stack and the view-history
-// stack are empty, a back-press would otherwise close the app/PWA
-// immediately — easy to trigger by accident (one extra back-tap right
-// after opening it, or a gesture that goes slightly too far). Requires a
-// second back-press within 2 seconds, same "press back again to exit"
-// convention most Android apps use (Instagram, Twitter, etc.) — a toast,
-// not a modal, since a modal here would be more disruptive than the
-// problem it's solving.
-const EXIT_CONFIRM_PRESSES_REQUIRED = 3;
+// stack are empty (and, per the feed-sub-tab check above, the person is
+// already on the All tab if they're on Feed at all), a back-press would
+// otherwise close the app/PWA immediately. Requires a second back-press
+// within 2 seconds with a "Press back again to exit" toast — the exact
+// convention most Android apps use (Instagram, Twitter, WhatsApp,
+// etc.), one warning then confirm, not a custom multi-press sequence.
+const EXIT_CONFIRM_PRESSES_REQUIRED = 2;
 let _exitConfirmPresses = 0;
 let _exitConfirmTimer = null;
 
@@ -1073,20 +1072,14 @@ window.addEventListener("popstate", () => {
   }
 
   // Nothing reachable — this is a genuine exit back-press (both the
-  // overlay stack and the view-history stack are empty). Fix: was a
-  // single confirmation press (2 total presses to exit) — request was
-  // for 3 total, matching apps that want back-to-exit to be harder to
-  // trigger by accident. Each press within the window re-arms the
-  // timer, so the person gets the full 2s from their MOST RECENT
+  // overlay stack and the view-history stack are empty, and if this is
+  // the Feed view, it's already on the All tab per the check above).
+  // One warning, one confirm — each press within the window re-arms
+  // the timer, so the person gets the full 2s from their MOST RECENT
   // press, not a fixed 2s from the first one.
   if (_exitConfirmPresses < EXIT_CONFIRM_PRESSES_REQUIRED - 1) {
     _exitConfirmPresses++;
-    const remaining = EXIT_CONFIRM_PRESSES_REQUIRED - _exitConfirmPresses;
-    showToast(
-      remaining === 1
-        ? "Press back again to exit"
-        : `Press back ${remaining} more times to exit`,
-    );
+    showToast("Press back again to exit");
     // Re-push a history entry so THIS back-press is absorbed instead
     // of actually navigating away. Once the required number of presses
     // is reached, it'll find both stacks still empty and fall through
@@ -1121,6 +1114,112 @@ window.addEventListener("keydown", (e) => {
   e.preventDefault();
   history.back();
 });
+
+// ─── SWIPE BETWEEN FEED TABS (Instagram-style) ────────────────────────────────
+// Horizontal swipe over the feed content moves to the adjacent tab in the
+// same left-to-right order the tab bar itself is laid out in — same
+// gesture Instagram uses to move between its top-level tabs. Deliberately
+// scoped to #posts-feed only (not the whole document), so it can't ever
+// fire while some other view (Explore/Profile/DMs/Cart) is on screen,
+// and deliberately passive/non-preventDefault throughout so it never
+// fights the feed's own vertical scroll (or Reels' vertical snap-scroll,
+// which lives in this same container) — it only acts once a swipe is
+// already clearly finished and was clearly horizontal.
+const _swipeTabOrder = [
+  "all",
+  "reels",
+  "following",
+  "product",
+  "skill",
+  "trending",
+  "deals",
+];
+const SWIPE_MIN_DISTANCE_PX = 70;
+const SWIPE_MAX_OFF_AXIS_RATIO = 0.55; // vertical drift allowed, relative to horizontal distance
+const SWIPE_MAX_DURATION_MS = 600; // a deliberate flick, not a slow drag
+let _swipeStartX = 0;
+let _swipeStartY = 0;
+let _swipeStartTime = 0;
+let _swipeCancelled = false;
+
+function _feedSwipeTarget() {
+  const feed = document.getElementById("posts-feed");
+  if (!feed) return null;
+  const container = document.getElementById("feed-container");
+  if (!container || container.classList.contains("hidden")) return null;
+  return feed;
+}
+
+document.addEventListener(
+  "touchstart",
+  (e) => {
+    if (e.touches.length !== 1) return;
+    const feed = _feedSwipeTarget();
+    if (!feed || !feed.contains(e.target)) return;
+    // Never hijack a swipe while any overlay (detail modal, sheet, DM
+    // thread, etc.) is open above the feed.
+    if (_uiStack.length > 0) return;
+    _swipeStartX = e.touches[0].clientX;
+    _swipeStartY = e.touches[0].clientY;
+    _swipeStartTime = Date.now();
+    _swipeCancelled = false;
+  },
+  { passive: true },
+);
+
+document.addEventListener(
+  "touchmove",
+  (e) => {
+    if (_swipeCancelled || !_swipeStartTime || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - _swipeStartX;
+    const dy = e.touches[0].clientY - _swipeStartY;
+    // Once it's clearly a vertical scroll (Reels paging, normal feed
+    // scroll), stop treating this touch as a tab-swipe candidate at all.
+    if (Math.abs(dy) > 24 && Math.abs(dy) > Math.abs(dx)) {
+      _swipeCancelled = true;
+    }
+  },
+  { passive: true },
+);
+
+document.addEventListener(
+  "touchend",
+  (e) => {
+    if (_swipeCancelled || !_swipeStartTime) {
+      _swipeStartTime = 0;
+      return;
+    }
+    const touch = e.changedTouches[0];
+    const elapsed = Date.now() - _swipeStartTime;
+    _swipeStartTime = 0;
+    if (!touch) return;
+    const dx = touch.clientX - _swipeStartX;
+    const dy = touch.clientY - _swipeStartY;
+    if (elapsed > SWIPE_MAX_DURATION_MS) return;
+    if (Math.abs(dx) < SWIPE_MIN_DISTANCE_PX) return;
+    if (Math.abs(dy) > Math.abs(dx) * SWIPE_MAX_OFF_AXIS_RATIO) return;
+
+    const currentIndex = _swipeTabOrder.indexOf(currentFeedType);
+    if (currentIndex === -1) return;
+    // Swiped left (finger moved left, content "moves" to reveal the tab
+    // to the right) -> next tab; swiped right -> previous tab. No
+    // wrap-around at either end, matching how Instagram's own top tabs
+    // behave.
+    const nextIndex = dx < 0 ? currentIndex + 1 : currentIndex - 1;
+    if (nextIndex < 0 || nextIndex >= _swipeTabOrder.length) return;
+
+    const nextTab = _swipeTabOrder[nextIndex];
+    const btn = document.querySelector(
+      `.feed-tab-btn[data-tab="${nextTab}"]`,
+    );
+    if (!btn) return;
+    hapticTap(10);
+    window.filterFeed(nextTab, btn);
+    btn.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  },
+  { passive: true },
+);
+
 // ─── FEED REFRESH COALESCING ──────────────────────────────────────────────────
 // Hoisted to module scope on purpose: when the user switches across feed
 // tabs (Products → All → Reels) rapidly, each new subscribeFeed() runs
@@ -1283,6 +1382,12 @@ function registerPostContext(id, d, firstMediaUrl) {
     id,
     title: d.title || "Listing",
     price: d.price || 0,
+    // Kept alongside price so anywhere reading from this registry (e.g.
+    // Make an Offer) can tell whether a live flash sale price applies
+    // right now, via isSaleActiveForPost/getEffectivePrice, instead of
+    // always defaulting to the regular price.
+    originalPrice: d.original_price ?? null,
+    saleEndsAt: d.sale_ends_at ?? null,
     image: firstMediaUrl || "",
     type: d.type || "product",
     userId: d.user_id || null,
@@ -1674,8 +1779,8 @@ function renderDealsStripCard(id, d) {
             </div>
             <p class="text-[11px] text-slate-300 mt-1 truncate">${esc(d.title)}</p>
             <div class="flex items-baseline gap-1.5">
-                <p class="text-xs font-black text-amber-400">GH₵${esc(String(d.price || 0))}</p>
-                <p class="text-[10px] text-slate-500 line-through">GH₵${esc(String(d.original_price || 0))}</p>
+                <p class="text-xs font-black text-amber-400">GH₵${esc(String(d.original_price ?? 0))}</p>
+                <p class="text-[10px] text-slate-500 line-through">GH₵${esc(String(d.price || 0))}</p>
             </div>
         </div>`;
 }
@@ -1900,6 +2005,34 @@ function formatMonthYear(dateStr) {
   return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 }
 
+// Flash-sale price model: `price` is always the regular, standing price
+// — it's never overwritten by a sale and is what shows once a sale ends.
+// `original_price` (misleadingly named at the DB-column level, kept as-is
+// to avoid a migration) actually holds the FLASH SALE price — a separate,
+// lower number that only applies while sale_ends_at is still in the
+// future. The moment the timer runs out, the sale price simply stops
+// being used anywhere (display, offers, etc.) and the post reverts to
+// showing just the regular price — no manual edit needed, matching how
+// other marketplaces run a flash sale.
+function isSaleActiveForPost(d) {
+  return (
+    !!d &&
+    d.original_price != null &&
+    Number(d.original_price) > 0 &&
+    Number(d.original_price) < Number(d.price || 0) &&
+    !!d.sale_ends_at &&
+    new Date(d.sale_ends_at).getTime() > Date.now()
+  );
+}
+// The price a buyer actually pays right now: the sale price while a
+// sale is live, otherwise the regular price. Anywhere that needs "the
+// price" for an actual transaction (Make an Offer default, etc.) should
+// read this instead of d.price directly, since d.price alone ignores an
+// active sale.
+function getEffectivePrice(d) {
+  return isSaleActiveForPost(d) ? Number(d.original_price) : Number(d.price || 0);
+}
+
 // Renders a flash-sale end time as a countdown string. Days-out sales
 // still show a coarse "Nd left" (a live second-by-second tick wouldn't
 // mean much a week out), but once under 24h it renders H:MM:SS so the
@@ -1946,6 +2079,19 @@ setInterval(() => {
   document.querySelectorAll(".sale-strike-price").forEach((el) => {
     const endsAt = el.getAttribute("data-sale-ends");
     if (endsAt && !countdownText(endsAt)) el.remove();
+  });
+  // The big price itself also needs to revert from the (now-expired)
+  // sale price back to the regular price the instant the countdown
+  // runs out — not just wait for the card's next full re-render.
+  document.querySelectorAll(".sale-live-price").forEach((el) => {
+    const endsAt = el.getAttribute("data-sale-ends");
+    if (!endsAt) return;
+    if (!countdownText(endsAt)) {
+      const regular = el.getAttribute("data-regular-price");
+      if (regular != null) el.textContent = `GH₵${regular}`;
+      el.removeAttribute("data-sale-ends");
+      el.removeAttribute("data-regular-price");
+    }
   });
 }, 1000);
 
@@ -3337,18 +3483,12 @@ window.openDetail = async function (postId, fromBack = false) {
     const ctaLabel = d.type === "skill" ? "Contact" : "Contact Seller";
     const safeSwapBlock = renderSafeSwapZoneCard(d);
     const isSoldDetail = !!d.sold_at;
-    const saleActiveDetail =
-      d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
-    // Fix: this used to ignore saleActiveDetail entirely, so the
-    // crossed-out original price kept showing forever after a flash
-    // sale's countdown ran out — only the countdown badge itself ever
-    // disappeared. Requiring saleActiveDetail here means the price
-    // reverts to a plain listing price the moment the sale ends,
-    // matching what already happens to the countdown badge.
-    const hasDiscountDetail =
-      saleActiveDetail &&
-      d.original_price != null &&
-      Number(d.original_price) > Number(d.price || 0);
+    const saleActiveDetail = isSaleActiveForPost(d);
+    const hasDiscountDetail = saleActiveDetail;
+    // Big price is what a buyer pays right now (the sale price while
+    // live); the regular price shows crossed out next to it, and
+    // disappears the instant the countdown ends.
+    const displayPriceDetail = saleActiveDetail ? d.original_price : d.price;
     const detailActionsBlock = isSoldDetail
       ? `<p class="text-center text-slate-500 text-xs uppercase tracking-widest py-2">This listing is no longer available</p>`
       : isOwn
@@ -3390,8 +3530,8 @@ window.openDetail = async function (postId, fromBack = false) {
                 <div class="flex items-start justify-between gap-4 -mt-1">
                     <div class="flex items-baseline gap-2 flex-wrap">
                         ${isSoldDetail ? `<span class="bg-slate-800 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] px-2.5 py-1 rounded-full border border-slate-700">Sold</span>` : ""}
-                        <span class="text-amber-400 font-black text-3xl leading-none">GH₵${esc(String(d.price || 0))}</span>
-                        ${hasDiscountDetail ? `<span class="sale-strike-price text-slate-500 text-base" data-sale-ends="${escAttr(d.sale_ends_at)}">Now GH₵${esc(String(d.original_price))}</span>` : ""}
+                        <span class="text-amber-400 font-black text-3xl leading-none sale-live-price" ${hasDiscountDetail ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPriceDetail || 0))}</span>
+                        ${hasDiscountDetail ? `<span class="sale-strike-price text-slate-500 text-base line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
                         ${!isSoldDetail && saleActiveDetail ? `<span class="sale-countdown-badge bg-rose-500/90 text-white text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</span>` : ""}
                     </div>
                     <button onclick="window.openPostOptionsMenu('${escAttr(d.id)}', ${isOwn ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-slate-400 hover:text-white transition px-1 shrink-0">
@@ -3545,7 +3685,7 @@ window._goBackInDetailModal = function () {
   }
 };
 
-// ─── 9b. MANAGE LISTING (mark sold / discount price / flash sale) ───────────
+// ─── 9b. MANAGE LISTING (mark sold / flash sale price / countdown) ───────────
 // Deliberately narrow in scope rather than a full post editor (no title,
 // description, or image editing here) — see conversation: the ask was
 // specifically for sold-status and sale-pricing controls on an existing
@@ -3604,14 +3744,14 @@ window.openManageListingSheet = async function (postId) {
   const saleEndsValue = post.sale_ends_at
     ? new Date(post.sale_ends_at).toISOString().slice(0, 16)
     : "";
-  // Same "is this a live flash sale right now" definition used
-  // everywhere else (getLiveDeals) — controls whether the "End Flash
-  // Sale Now" button below is shown at all.
+  // Shows the "End Flash Sale Now" button whenever there's a running
+  // countdown at all (sale_ends_at in the future) — not just when it's
+  // a valid discount. A listing can end up with a countdown but no real
+  // discount (sale end time was set without ever setting a flash sale
+  // price below the listing price), and that stray timer needs to be
+  // clearable too, not just an actual live deal.
   const hasActiveSaleForManage =
-    post.original_price != null &&
-    Number(post.original_price) > Number(post.price || 0) &&
-    post.sale_ends_at &&
-    new Date(post.sale_ends_at).getTime() > Date.now();
+    !!post.sale_ends_at && new Date(post.sale_ends_at).getTime() > Date.now();
 
   content.innerHTML = `
         <div class="p-6 space-y-5">
@@ -3643,9 +3783,9 @@ window.openManageListingSheet = async function (postId) {
             <p class="text-[10px] text-slate-500 -mt-3">Sold listings are hidden from browsing and automatically removed after 48 hours.</p>
 
             <div>
-                <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Discount price (optional, any amount)</label>
-                <p class="text-[10px] text-slate-500 mb-1.5">Set any ORIGINAL price (typically higher) — your listing shows a strikethrough on the old price next to the deal.</p>
-                <input type="text" inputmode="decimal" id="manageOriginalPrice" oninput="window._formatPriceInput(this)" value="${post.original_price != null ? esc(Number(post.original_price).toLocaleString("en-US", { maximumFractionDigits: 2 })) : ""}" placeholder="e.g. ${esc((Number(post.price || 0) * 1.2).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+                <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Flash sale price</label>
+                <p class="text-[10px] text-slate-500 mb-1.5">Set a lower price for the sale — your listing price above stays crossed out next to it, and everything reverts automatically once the timer ends.</p>
+                <input type="text" inputmode="decimal" id="manageOriginalPrice" oninput="window._formatPriceInput(this)" value="${post.original_price != null ? esc(Number(post.original_price).toLocaleString("en-US", { maximumFractionDigits: 2 })) : ""}" placeholder="e.g. ${esc((Number(post.price || 0) * 0.8).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
             <div>
@@ -3686,6 +3826,12 @@ window._saveManageListing = async function (postId) {
   )
     return;
 
+  // Needed below to validate a sale-end time against the listing's
+  // current price when the price field itself is left unchanged.
+  const cachedPost = allCachedPosts.find(
+    ({ id }) => idKey(id) === idKey(postId),
+  )?.data;
+
   // Both price fields display thousands separators as you type (see
   // _formatPriceInput) — stripped back to a plain numeric string here,
   // same as Create Listing's price field, so "8,000" parses as 8000
@@ -3709,11 +3855,11 @@ window._saveManageListing = async function (postId) {
     originalPriceRaw &&
     (isNaN(parsedOriginalPrice) || parsedOriginalPrice < 0)
   ) {
-    showToast("Discount price can't be negative.");
+    showToast("Flash sale price can't be negative.");
     return;
   }
   if (parsedOriginalPrice !== null && parsedOriginalPrice > 1000000) {
-    showToast("That price seems too high — please double-check it.");
+    showToast("That flash sale price seems too high — please double-check it.");
     return;
   }
 
@@ -3722,6 +3868,24 @@ window._saveManageListing = async function (postId) {
   if (saleEndsIso && new Date(saleEndsIso).getTime() <= Date.now()) {
     showToast("Flash sale end time must be in the future.");
     return;
+  }
+  // Same rule as Create Listing: a sale end time only means anything if
+  // it comes with a flash sale price that's genuinely lower than the
+  // listing price — otherwise the post ends up with a running timer
+  // that never counts as a real deal anywhere. Uses the actual values
+  // this save is about to apply (a field left blank keeps the post's
+  // existing price/discount, not the un-submitted input default).
+  if (saleEndsRaw) {
+    const effectivePrice =
+      parsedPrice !== null ? parsedPrice : Number(cachedPost?.price || 0);
+    const effectiveOriginalPrice =
+      originalPriceRaw === "" ? null : parsedOriginalPrice;
+    if (effectiveOriginalPrice === null || effectiveOriginalPrice >= effectivePrice) {
+      showToast(
+        "Set a flash sale price lower than your listing price to run a flash sale.",
+      );
+      return;
+    }
   }
 
   const updates = {
@@ -7655,16 +7819,13 @@ function renderFeedCard(id, d, options = {}) {
     applyVerifiedBadgeWhenReady(d.user_id, `.feed-username-${CSS.escape(id)}`);
   }
 
-  const _saleActiveForCard =
-    d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
-  const _isFlashPost =
-    _saleActiveForCard &&
-    d.original_price != null &&
-    Number(d.original_price) > Number(d.price || 0);
+  const _saleActiveForCard = isSaleActiveForPost(d);
+  const _isFlashPost = _saleActiveForCard;
   const _originalPriceNum =
     d.original_price != null ? Number(d.original_price) : null;
-  // Strikethrough only applies when original_price is genuinely higher
-  // than price — a price increase must never render as a fake deal.
+  // Strikethrough shows the regular price crossed out, only while a
+  // valid flash sale (sale price genuinely lower than regular price) is
+  // still running.
   const _strikePrice = _isFlashPost;
 
   return `
@@ -7799,17 +7960,12 @@ function renderFeedMasonryCard(id, d, options = {}) {
     : "far fa-bookmark text-white/80";
 
   const isSold = !!d.sold_at;
-  const saleActive =
-    d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
-  // Fix: hasDiscount used to ignore saleActive, so the crossed-out
-  // original price stuck around forever after a flash sale's countdown
-  // ran out (only the badge itself ever disappeared). Gating on
-  // saleActive here reverts the card to a plain price the moment the
-  // sale ends, matching the badge.
-  const hasDiscount =
-    saleActive &&
-    d.original_price != null &&
-    Number(d.original_price) > Number(d.price || 0);
+  const saleActive = isSaleActiveForPost(d);
+  const hasDiscount = saleActive;
+  // Big price shows what a buyer pays right now (the sale price while
+  // live); the regular price only appears crossed out next to it, and
+  // disappears the instant the countdown ends.
+  const displayPrice = saleActive ? d.original_price : d.price;
 
   registerPostContext(id, d, isVideo ? "" : primaryUrl);
 
@@ -7837,8 +7993,8 @@ function renderFeedMasonryCard(id, d, options = {}) {
                 : ""
             }
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2.5 pt-6 pb-2 flex items-baseline gap-1.5">
-                <span class="text-amber-400 font-black text-xs">GH₵${esc(String(d.price || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Now GH₵${esc(String(d.original_price))}</span>` : ""}
+                <span class="text-amber-400 font-black text-xs sale-live-price" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
             </div>
         </div>
         <div class="px-2.5 py-2">
@@ -7871,17 +8027,12 @@ function renderProductGridCard(id, d) {
     : "far fa-bookmark text-white/80";
 
   const isSolid = !!d.sold_at;
-  const saleActive =
-    d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
-  // Fix: hasDiscount used to ignore saleActive, so the crossed-out
-  // original price stuck around forever after a flash sale's countdown
-  // ran out (only the badge itself ever disappeared). Gating on
-  // saleActive here reverts the card to a plain price the moment the
-  // sale ends, matching the badge.
-  const hasDiscount =
-    saleActive &&
-    d.original_price != null &&
-    Number(d.original_price) > Number(d.price || 0);
+  const saleActive = isSaleActiveForPost(d);
+  const hasDiscount = saleActive;
+  // Big price shows what a buyer pays right now (the sale price while
+  // live); the regular price only appears crossed out next to it, and
+  // disappears the instant the countdown ends.
+  const displayPrice = saleActive ? d.original_price : d.price;
 
   const viewer = currentUserData;
   const showFollow = viewer && d.user_id !== viewer.id;
@@ -7914,8 +8065,8 @@ function renderProductGridCard(id, d) {
                 <i class="${bookmarkClass} text-xs"></i>
             </button>
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2 pt-5 pb-1.5 flex items-baseline gap-1.5">
-                <span class="text-amber-400 font-black text-[11px]">GH₵${esc(String(d.price || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[9px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Now GH₵${esc(String(d.original_price))}</span>` : ""}
+                <span class="text-amber-400 font-black text-[11px] sale-live-price" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[9px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
             </div>
         </div>
         <div class="p-2">
@@ -7991,17 +8142,12 @@ function renderServiceGridCard(id, d) {
   const isVideo = d.media_type === "video";
 
   const isSolid = !!d.sold_at;
-  const saleActive =
-    d.sale_ends_at && new Date(d.sale_ends_at).getTime() > Date.now();
-  // Fix: hasDiscount used to ignore saleActive, so the crossed-out
-  // original price stuck around forever after a flash sale's countdown
-  // ran out (only the badge itself ever disappeared). Gating on
-  // saleActive here reverts the card to a plain price the moment the
-  // sale ends, matching the badge.
-  const hasDiscount =
-    saleActive &&
-    d.original_price != null &&
-    Number(d.original_price) > Number(d.price || 0);
+  const saleActive = isSaleActiveForPost(d);
+  const hasDiscount = saleActive;
+  // Big price shows what a buyer pays right now (the sale price while
+  // live); the regular price only appears crossed out next to it, and
+  // disappears the instant the countdown ends.
+  const displayPrice = saleActive ? d.original_price : d.price;
 
   const viewer = currentUserData;
   const showFollow = viewer && d.user_id !== viewer.id;
@@ -8032,8 +8178,8 @@ function renderServiceGridCard(id, d) {
                 <i class="fas fa-bolt text-[9px]"></i> Service
             </div>
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-3 pt-6 pb-2 flex items-baseline gap-1.5">
-                <span class="text-amber-400 font-black text-sm">GH₵${esc(String(d.price || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px]" data-sale-ends="${escAttr(d.sale_ends_at)}">Now GH₵${esc(String(d.original_price))}</span>` : ""}
+                <span class="text-amber-400 font-black text-sm sale-live-price" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
             </div>
         </div>
         <div class="p-3">
@@ -8102,18 +8248,7 @@ function renderServiceGrid() {
 // page) uses the exact same definition of "live deal" instead of a
 // third copy that could drift out of sync.
 function getLiveDeals() {
-  const now = Date.now();
-  return allCachedPosts.filter(({ data: d }) => {
-    if (!d) return false;
-    const op = d.original_price != null ? Number(d.original_price) : null;
-    const price = Number(d.price || 0);
-    // A real deal requires the original price to be strictly higher
-    // than the current price — a price INCREASE (or an unchanged
-    // price) must never qualify as a "live deal".
-    if (op == null || op <= price) return false;
-    if (!d.sale_ends_at) return false;
-    return new Date(d.sale_ends_at).getTime() > now;
-  });
+  return allCachedPosts.filter(({ data: d }) => isSaleActiveForPost(d));
 }
 
 function renderDealsGrid() {
@@ -8941,6 +9076,12 @@ async function hydrateCartItemsFromSource() {
         ...item,
         title: item.title || source.title || "Campus Item",
         price: item.price || source.price || 0,
+        // Always take these two fresh from source rather than keeping
+        // a stale cached value — a flash sale can start or end after
+        // an item was first saved, and the card needs to reflect
+        // whatever's true right now, not whatever it was when saved.
+        original_price: source.original_price ?? null,
+        sale_ends_at: source.sale_ends_at ?? null,
         media_url: item.media_url || source.media_url || "",
         media_type: item.media_type || source.media_type || "image",
         institution: item.institution || source.institution || "",
@@ -8964,7 +9105,7 @@ async function hydrateCartItemsFromSource() {
       const { data, error } = await supabase
         .from("posts")
         .select(
-          "id, title, price, media_url, media_type, institution, type, user_id, user_name, user_avatar",
+          "id, title, price, original_price, sale_ends_at, media_url, media_type, institution, type, user_id, user_name, user_avatar",
         )
         .in("id", missingIds);
       if (error) throw error;
@@ -8977,6 +9118,8 @@ async function hydrateCartItemsFromSource() {
           ...item,
           title: source.title || item.title || "Campus Item",
           price: source.price ?? item.price ?? 0,
+          original_price: source.original_price ?? null,
+          sale_ends_at: source.sale_ends_at ?? null,
           media_url: source.media_url || item.media_url || "",
           media_type: source.media_type || item.media_type || "image",
           institution: source.institution || item.institution || "",
@@ -9058,7 +9201,14 @@ function buildCartListMarkup() {
                             <button onclick="openDetail('${escAttr(item.id)}')" class="text-left block w-full">
                                 <p class="text-white font-black text-sm leading-tight line-clamp-2">${esc(item.title || "Campus Item")}</p>
                             </button>
-                            <p class="text-amber-400 font-extrabold text-sm mt-1">GH₵${esc(String(item.price ?? 0))}</p>
+                            ${(() => {
+                              const cartSaleActive = isSaleActiveForPost(item);
+                              const cartDisplayPrice = cartSaleActive ? item.original_price : item.price;
+                              return `<div class="flex items-baseline gap-1.5 mt-1">
+                                <span class="text-amber-400 font-extrabold text-sm sale-live-price" ${cartSaleActive ? `data-sale-ends="${escAttr(item.sale_ends_at)}" data-regular-price="${escAttr(String(item.price ?? 0))}"` : ""}>GH₵${esc(String(cartDisplayPrice ?? 0))}</span>
+                                ${cartSaleActive ? `<span class="sale-strike-price text-slate-500 text-[11px] line-through" data-sale-ends="${escAttr(item.sale_ends_at)}">GH₵${esc(String(item.price ?? 0))}</span>` : ""}
+                              </div>`;
+                            })()}
                             ${item.user_name ? `<p class="text-slate-400 text-[11px] truncate mt-1">Seller: ${esc(item.user_name)}</p>` : ""}
                         </div>
                         <button onclick="window.toggleCartItem('${escAttr(item.id)}')" class="w-9 h-9 rounded-full bg-slate-950 border border-slate-800 text-red-400 shrink-0 active:scale-95 transition" aria-label="Remove saved item">
@@ -11044,15 +11194,31 @@ window.handlePostSubmission = async function () {
     originalPriceRaw &&
     (isNaN(parsedOriginalPrice) || parsedOriginalPrice < 0)
   ) {
-    showToast("Flash sale original price can't be negative.");
+    showToast("Flash sale price can't be negative.");
     return;
   }
   if (parsedOriginalPrice !== null && parsedOriginalPrice > 1000000) {
-    showToast("That original price seems too high — please double-check it.");
+    showToast("That flash sale price seems too high — please double-check it.");
     return;
   }
   if (flashSaleEnabled && !saleEndsRaw) {
     showToast("Please set an end time for your flash sale, or turn it off.");
+    return;
+  }
+  // A flash sale with no real discount is exactly what produced a post
+  // that shows a running countdown timer but never appears in the Deals
+  // tab and never shows a struck-through price — nothing else in the
+  // app treats a sale as "live" unless the flash sale price is
+  // genuinely lower than the listing price, so this must be required at
+  // the same point, not just silently accepted.
+  if (
+    flashSaleEnabled &&
+    saleEndsRaw &&
+    (parsedOriginalPrice === null || parsedOriginalPrice >= Number(price))
+  ) {
+    showToast(
+      "Set a flash sale price lower than your listing price to run a flash sale.",
+    );
     return;
   }
   const saleEndsIso = saleEndsRaw ? new Date(saleEndsRaw).toISOString() : null;
@@ -13338,10 +13504,23 @@ window.openDM = async function (
 // unambiguous and never collides with a person typing a normal message
 // that happens to start with the same characters.
 async function sendPostSharePreview(postContext) {
+  // Captures whatever price a buyer would actually pay at the moment of
+  // sharing (the flash sale price if one's genuinely live right now,
+  // otherwise the regular price) — a chat message is a snapshot of what
+  // was true when it was sent, not a live-updating storefront card, so
+  // this deliberately doesn't keep re-checking after the fact.
+  const shareSaleActive =
+    postContext.originalPrice != null &&
+    Number(postContext.originalPrice) > 0 &&
+    Number(postContext.originalPrice) < Number(postContext.price || 0) &&
+    !!postContext.saleEndsAt &&
+    new Date(postContext.saleEndsAt).getTime() > Date.now();
   const payload = {
     id: postContext.id,
     title: postContext.title || "Listing",
-    price: postContext.price ?? 0,
+    price: shareSaleActive
+      ? Number(postContext.originalPrice)
+      : (postContext.price ?? 0),
     image: postContext.image || "",
     type: postContext.type || "product",
   };
@@ -14311,6 +14490,20 @@ window.openMakeOfferModal = function (postId) {
   if (!post) return;
   if (post.userId === currentUserData.id) return; // can't offer on your own listing
 
+  // Same "is there a genuinely live flash sale right now" rule as
+  // everywhere else — an offer should default to what a buyer would
+  // actually pay right now, not the regular price if a cheaper flash
+  // sale price is currently active.
+  const offerSaleActive =
+    post.originalPrice != null &&
+    Number(post.originalPrice) > 0 &&
+    Number(post.originalPrice) < Number(post.price || 0) &&
+    !!post.saleEndsAt &&
+    new Date(post.saleEndsAt).getTime() > Date.now();
+  const offerEffectivePrice = offerSaleActive
+    ? Number(post.originalPrice)
+    : Number(post.price || 0);
+
   let modal = document.getElementById("make-offer-modal");
   if (!modal) {
     modal = document.createElement("div");
@@ -14324,11 +14517,11 @@ window.openMakeOfferModal = function (postId) {
         <div class="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-sm p-5 space-y-4">
             <div>
                 <h3 class="text-white font-black text-sm uppercase tracking-wider">Make an Offer</h3>
-                <p class="text-slate-500 text-xs mt-1 truncate">${esc(post.title)} · Listed at GH₵${esc(String(post.price))}</p>
+                <p class="text-slate-500 text-xs mt-1 truncate">${esc(post.title)} · Listed at GH₵${esc(String(offerEffectivePrice))}</p>
             </div>
             <div>
                 <label class="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1.5 block">Your offer (GH₵)</label>
-                <input type="number" inputmode="decimal" min="0" id="offerAmountInput" value="${escAttr(String(post.price))}" class="w-full bg-slate-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white" />
+                <input type="number" inputmode="decimal" min="0" id="offerAmountInput" value="${escAttr(String(offerEffectivePrice))}" class="w-full bg-slate-800/70 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white" />
             </div>
             <div>
                 <label class="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1.5 block">Note (optional)</label>
