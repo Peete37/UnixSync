@@ -3188,7 +3188,20 @@ window.navigateTo = function (viewId, btn = null) {
   if (viewId === "profile") {
     const gate = document.getElementById("profile-auth-gate");
     const content = document.getElementById("profile-content");
-    if (!currentUserData) {
+    // Bug fix: this used to decide sign-in state purely from
+    // currentUserData, which is still null for a brief window on every
+    // refresh (before the auth observer has resolved a restored
+    // session) — so navigating straight back to a previously-open
+    // Profile tab on reload forced the sign-in gate on screen, then the
+    // auth observer flipped it to the real signed-in profile a moment
+    // later. That's the flash. Now, while auth hasn't resolved yet,
+    // this leaves both gate and content exactly as they already are
+    // (both hidden on a fresh load) instead of asserting "signed out" —
+    // the auth observer (which does know for sure) settles it for real
+    // once it fires, same as it already does after sign-in/sign-out.
+    if (!isAuthInitialized) {
+      // leave as-is; auth observer will set the correct state shortly
+    } else if (!currentUserData) {
       gate?.classList.remove("hidden");
       content?.classList.add("hidden");
     } else {
@@ -3201,7 +3214,11 @@ window.navigateTo = function (viewId, btn = null) {
   if (viewId === "dms") {
     const gate = document.getElementById("dms-auth-gate");
     const content = document.getElementById("dms-content");
-    if (!currentUserData) {
+    // Same fix as the Profile tab above — don't assert signed-out state
+    // before auth has actually resolved.
+    if (!isAuthInitialized) {
+      // leave as-is; auth observer will set the correct state shortly
+    } else if (!currentUserData) {
       gate?.classList.remove("hidden");
       content?.classList.add("hidden");
     } else {
