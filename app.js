@@ -12826,14 +12826,14 @@ window.openPublicProfile = async function (userId) {
                 <div><span class="stat-value">${postsRes.data?.length || 0}</span><span class="stat-label">Posts</span></div>
                 <div onclick="window.openFollowListModal('${escAttr(userId)}', 'followers')" class="cursor-pointer active:opacity-70 transition"><span class="stat-value">${followersRes.count || 0}</span><span class="stat-label">Followers</span></div>
                 <div onclick="window.openFollowListModal('${escAttr(userId)}', 'following')" class="cursor-pointer active:opacity-70 transition"><span class="stat-value">${followingRes.count || 0}</span><span class="stat-label">Following</span></div>
-                ${completedSalesRes.count ? `<div><span class="stat-value">${completedSalesRes.count}</span><span class="stat-label">Sold</span></div>` : ""}
+                ${completedSalesRes.count && isOwnProfileView ? `<div><span class="stat-value">${completedSalesRes.count}</span><span class="stat-label">Sold</span></div>` : ""}
             </div>
 
             <div class="flex gap-2 mb-5">
                 ${
                   isOwnProfileView
                     ? `<button
-                    onclick="window.closePublicProfile(); window.navigateTo('profile');"
+                    onclick="if (typeof window.closeDetailModal === 'function') window.closeDetailModal(); window.closePublicProfile(); window.navigateTo('profile');"
                     class="flex-1 bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
                 >
                     <i class="fas fa-pen mr-1.5"></i>Edit Profile
