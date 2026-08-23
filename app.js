@@ -15269,6 +15269,30 @@ window.close2faSettingsSheet = function (fromPop = false) {
 };
 
 // ─── 21. AUTH OBSERVER ───────────────────────────────────────────────────────
+// Bug fix: the nav Profile avatar used to only get set once the real
+// auth event resolved — which, since that's an async round trip to
+// Supabase (even just to restore an already-valid local session),
+// meant every single refresh showed the static "Sign In" icon, then a
+// generic person icon, then finally the real avatar a moment later.
+// This paints the real avatar synchronously from the same
+// campus_market_last_known_user snapshot the offline path already
+// relies on, immediately on script load — no network wait. The auth
+// observer below still runs as normal and corrects this (to signed-out,
+// or to a different/updated avatar) once it resolves for real; this is
+// just what shows in the meantime instead of the sign-in/generic flash.
+try {
+  const earlyCachedUser = JSON.parse(
+    localStorage.getItem("campus_market_last_known_user") || "null",
+  );
+  if (earlyCachedUser) {
+    const earlyMetadata = earlyCachedUser.user_metadata || {};
+    setNavProfileAvatar(
+      earlyMetadata.avatar_url ||
+        `https://ui-avatars.com/api/?name=${encodeURIComponent(earlyMetadata.full_name || "User")}`,
+    );
+  }
+} catch (_) {}
+
 if (activeAuthChange) {
   activeAuthChange(async (user) => {
     // Bug fix: previously ANY auth event while offline was skipped
