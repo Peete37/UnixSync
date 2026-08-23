@@ -2470,6 +2470,12 @@ window.saveOnboarding = async function () {
     currentUserData.region = region;
 
     applyLocationToUI(institution, region);
+    try {
+      localStorage.setItem(
+        "campus_market_last_known_location",
+        JSON.stringify({ institution, region }),
+      );
+    } catch (_) {}
     document.getElementById("onboarding-modal")?.remove();
 
     // The person just set their institution for the first time —
@@ -15265,6 +15271,24 @@ if (activeAuthChange) {
           document.getElementById("dms-auth-gate")?.classList.add("hidden");
           document.getElementById("dms-content")?.classList.remove("hidden");
 
+          // Restore last known institution/region too so the offline
+          // cold-boot path doesn't leave the profile UI showing nothing
+          // for these — mirrors campus_market_last_known_user above.
+          try {
+            const cachedLocation = JSON.parse(
+              localStorage.getItem("campus_market_last_known_location") ||
+                "null",
+            );
+            if (cachedLocation?.institution || cachedLocation?.region) {
+              currentUserData.institution = cachedLocation.institution || "";
+              currentUserData.region = cachedLocation.region || "";
+              applyLocationToUI(
+                cachedLocation.institution || "",
+                cachedLocation.region || "",
+              );
+            }
+          } catch (_) {}
+
           isAuthInitialized = true;
           return;
         }
@@ -15336,7 +15360,7 @@ if (activeAuthChange) {
       const nameEl = document.getElementById("profile-ui-name");
 
       try {
-        const { data: savedUserRow } = await supabase
+        const { data: savedUserRow, error: savedUserRowError } = await supabase
           .from("profiles")
           .select("avatar, institution, region, is_verified")
           .eq("id", user.id)
@@ -15391,7 +15415,41 @@ if (activeAuthChange) {
             });
         }
 
-        if (
+        // Bug fix: this used to treat ANY missing institution/region as
+        // "this person hasn't onboarded yet" and pop the welcome modal —
+        // including when the profiles fetch above simply failed (offline,
+        // flaky connection, slow network on refresh). supabase-js doesn't
+        // throw on a network failure here, it resolves with
+        // { data: null, error }, so savedUserRow was null and this fell
+        // straight into injectOnboardingModal() for an already-onboarded
+        // person. That's what caused the onboarding modal to flash on
+        // refresh / while offline, then get removed a moment later once
+        // a follow-up auth event succeeded (see the `.remove()` above).
+        // Now a failed/offline fetch falls back to the last known-good
+        // institution/region instead of assuming onboarding is needed,
+        // and the welcome modal only shows when we've actually confirmed
+        // (via a successful query) that those fields are empty.
+        if (savedUserRowError || !navigator.onLine) {
+          console.warn(
+            "Profile fetch for onboarding check failed (offline or network issue) — not treating as unboarded:",
+            savedUserRowError,
+          );
+          let cachedLocation = null;
+          try {
+            cachedLocation = JSON.parse(
+              localStorage.getItem("campus_market_last_known_location") ||
+                "null",
+            );
+          } catch (_) {}
+          if (cachedLocation?.institution || cachedLocation?.region) {
+            currentUserData.institution = cachedLocation.institution || "";
+            currentUserData.region = cachedLocation.region || "";
+            applyLocationToUI(
+              cachedLocation.institution || "",
+              cachedLocation.region || "",
+            );
+          }
+        } else if (
           !savedUserRow ||
           !savedUserRow.institution ||
           !savedUserRow.region
@@ -15404,6 +15462,15 @@ if (activeAuthChange) {
             savedUserRow.institution || "",
             savedUserRow.region || "",
           );
+          try {
+            localStorage.setItem(
+              "campus_market_last_known_location",
+              JSON.stringify({
+                institution: savedUserRow.institution || "",
+                region: savedUserRow.region || "",
+              }),
+            );
+          } catch (_) {}
         }
       } catch (err) {
         console.warn("User doc sync bypassed (using local auth state):", err);
