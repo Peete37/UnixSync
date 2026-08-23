@@ -4599,14 +4599,22 @@ function _initAvatarLongPress() {
   const copyImageBtn = document.getElementById("copyImageBtn");
   const downloadImageBtn = document.getElementById("downloadImageBtn");
 
-  if (!profileAvatar || !avatarModal || !modalAvatarImg) return;
-
-  function openAvatarModal(src) {
+  // Exposed globally so any avatar in the app can reuse this same
+  // shared preview modal (tap-to-view), not just the long-press-only
+  // one on your own profile edit screen below.
+  window.openAvatarPreview = function (src) {
+    if (!avatarModal || !modalAvatarImg) return;
     modalAvatarImg.src = src;
     avatarModal.classList.remove("hidden");
     pushUiState("avatar-modal", () => {
       avatarModal.classList.add("hidden");
     });
+  };
+
+  if (!profileAvatar || !avatarModal || !modalAvatarImg) return;
+
+  function openAvatarModal(src) {
+    window.openAvatarPreview(src);
   }
   function closeAvatarModalFn() {
     avatarModal.classList.add("hidden");
@@ -13660,6 +13668,35 @@ function subscribeConversationsList() {
     .subscribe();
 }
 
+// Bug fix: a mobile browser backgrounding the tab (screen lock, app
+// switch, long idle) can silently kill the Realtime WebSocket behind
+// currentConversationsChan without the app ever finding out — the
+// variable stays truthy, so openInboxView()'s "already subscribed,
+// just re-render the cache" fast path kept trusting a connection that
+// wasn't actually receiving anything anymore. That's what made a new
+// chat only ever show up after a full page reload instead of live —
+// the reload was the only thing that re-created the subscription.
+// Re-fetching for real every time the tab becomes visible again (on
+// top of, not instead of, the realtime channel) means a message that
+// arrived while backgrounded shows up as soon as you come back,
+// whether or not that WebSocket quietly died in the meantime.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  if (!currentUserData) return;
+  (async () => {
+    try {
+      const { data } = await supabase
+        .from("conversations")
+        .select("*")
+        .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
+        .order("last_message_at", { ascending: false });
+      conversationsCache = data || [];
+      if (!activeConversationId) renderInboxList();
+      updateDmUnreadBadge();
+    } catch (_) {}
+  })();
+});
+
 // Opens (or creates) a conversation and renders the WhatsApp-style thread view.
 
 window.openDMUserSearch = function () {
@@ -13963,14 +14000,22 @@ function renderChatThreadShell() {
   const content = document.getElementById("dms-content");
   if (!content || !activeConversationPeer) return;
 
+  // Fix: the sticky "Inbox" title in the app's top bar stays visible
+  // the whole time you're on the DMs tab, including once you've
+  // drilled into a specific thread — which already has its own
+  // back+avatar+name header row right below it. Hide the redundant
+  // title (and the space it reserves) while a thread is open;
+  // closeDMThread() below restores it when you back out to the list.
+  document.getElementById("header-page-title")?.classList.add("hidden");
+
   content.innerHTML = `
-        <div class="flex flex-col" style="height: calc(100vh - 220px);">
+        <div id="chat-thread-panel" class="flex flex-col">
             <div class="flex items-center gap-3 pb-3 border-b border-slate-800/60 mb-3">
                 <button onclick="window.closeDMThread()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 text-slate-300 active:scale-90 transition shrink-0">
                     <i class="fas fa-arrow-left text-xs"></i>
                 </button>
-                <img src="${esc(activeConversationPeer.avatar)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(activeConversationPeer.name)}'" class="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0" alt="">
-                <div class="min-w-0">
+                <img src="${esc(activeConversationPeer.avatar)}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(activeConversationPeer.name)}'" onclick="window.openAvatarPreview(this.src)" class="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0 cursor-pointer" alt="">
+                <div class="min-w-0 cursor-pointer" onclick="window.openPublicProfile('${escAttr(activeConversationPeer.id)}')">
                     <p class="text-white font-bold text-sm truncate">${esc(activeConversationPeer.name)}</p>
                     <p id="chat-typing-status" class="text-amber-400 text-[10px] font-semibold h-3.5"></p>
                 </div>
@@ -13997,7 +14042,32 @@ function renderChatThreadShell() {
                 </button>
             </div>
         </div>`;
+
+  _syncChatPanelHeight();
 }
+
+// Bug fix: this panel used to get a hardcoded `height: calc(100vh -
+// 220px)` inline style. #dms-content isn't full-viewport/fixed — it's
+// a normal in-flow block sitting below whatever chrome (top bar,
+// safe-area insets, etc.) is already above it on the page, so "100vh
+// minus one guessed constant" had no reliable relationship to the
+// actual space left on screen. That guess was wrong by roughly the
+// amount of chrome the -220px constant didn't account for, which is
+// what left the whole header+messages+input cluster floating with a
+// dead gap below the input instead of reaching the bottom nav. This
+// measures the real remaining space instead of guessing it.
+function _syncChatPanelHeight() {
+  const panel = document.getElementById("chat-thread-panel");
+  if (!panel) return;
+  const bottomNav = document.querySelector(".bottom-nav-container");
+  const navH = bottomNav ? bottomNav.getBoundingClientRect().height : 0;
+  const top = panel.getBoundingClientRect().top;
+  const available = window.innerHeight - top - navH - 16;
+  panel.style.height = `${Math.max(320, available)}px`;
+}
+window.addEventListener("resize", () => {
+  if (document.getElementById("chat-thread-panel")) _syncChatPanelHeight();
+});
 
 // Enter sends the message (matching every mainstream chat app); Shift+Enter
 // inserts a normal newline instead, so a longer message can actually be
@@ -14609,6 +14679,9 @@ window.sendChatMessage = async function () {
 
 window.closeDMThread = function (fromPop = false) {
   unsubscribeActiveThread();
+  // Restore the top-bar "Inbox" title that renderChatThreadShell()
+  // hides while a thread is open.
+  document.getElementById("header-page-title")?.classList.remove("hidden");
   openInboxView();
   if (!fromPop) popUiState("dm-thread");
 };
