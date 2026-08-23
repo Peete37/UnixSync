@@ -977,6 +977,18 @@ const MAX_VIDEO_DURATION_SECONDS = 30;
 // phone's hardware/gesture back button closes them one layer at a time
 // instead of exiting/backgrounding the app.
 const _uiStack = [];
+// Feed-tab back trail, separate from top-level view history: when someone
+// walks All -> Reels -> Following -> Deals, the phone's native back
+// gesture should step Deals -> Following -> Reels -> All before the app
+// gets anywhere near its exit confirmation. Restores don't seed this
+// trail — a cold-open directly onto Reels/Deals still gets one back to
+// All via the popstate fallback below, but only explicit in-session tab
+// switches grow the trail.
+const _feedTabHistory = [];
+// Prevents a tab change triggered BY the popstate handler from pushing a
+// brand-new browser-history entry right back on top of the one the person
+// just popped.
+let _isFeedTabNavInProgress = false;
 // Counts history entries that were consumed programmatically (by
 // popUiState below, when a layer is closed via its own X/back-arrow
 // button rather than the phone's back gesture) so the popstate handler
@@ -1044,72 +1056,57 @@ window.addEventListener("popstate", () => {
   }
 
   // Highest priority: a still-open overlay (modal/sheet/DM thread).
-  // Close it first, leave the underlying view alone.
+  // Close it first, leave the underlying view alone. The browser just
+  // popped back to whatever state sat underneath this layer already,
+  // so there's nothing to re-push here — just mirror that pop in the
+  // app's own UI stack.
   if (_uiStack.length > 0) {
     const top = _uiStack.pop();
     try {
       top.close(true);
     } catch (_) {}
-    if (_uiStack.length > 0) {
-      try {
-        history.pushState({ uiLayer: _uiStack[_uiStack.length - 1].id }, "");
-      } catch (_) {}
-    }
-    // We handled the back-press ourselves; don't also navigate views.
-    try {
-      history.pushState({ uiView: "keep" }, "");
-    } catch (_) {}
     return;
   }
 
-  // No overlays open: walk back through prior top-level views. The stack
-  // records viewId so we can call navigateTo() with the previous one.
+  // No overlays open: walk back through prior top-level views. The real
+  // browser history now gets one entry per user-driven navigateTo(), so
+  // the phone's own back gesture can unwind Feed -> Profile -> DMs etc.
   if (_viewHistory.length > 1) {
-    // Drop the current view (last entry) and pop the one before it.
     _viewHistory.pop();
     const prev = _viewHistory[_viewHistory.length - 1];
     if (prev) {
-      const insideProgrammaticNav = true;
-      window._isViewNavInProgress = insideProgrammaticNav;
+      window._isViewNavInProgress = true;
       try {
         window.navigateTo(prev);
       } finally {
         window._isViewNavInProgress = false;
       }
     }
-    try {
-      history.pushState(
-        { uiView: _viewHistory[_viewHistory.length - 1] || "base" },
-        "",
-      );
-    } catch (_) {}
     return;
   }
 
-  // Feed sub-tabs (All/Products/Services/Reels/Deals/Following) never
-  // pushed their own history entries — filterFeed() is a pure client-
-  // side re-render, so switching tabs left no trace for back to walk
-  // through. That meant landing on, say, Reels or Products and hitting
-  // back skipped straight to the exit-confirmation sequence below,
-  // instead of returning to All first like every other app's back
-  // gesture does with its default/home tab. Only applies once the
-  // view-history stack above is already exhausted (i.e. we're
-  // genuinely on the base Feed view, not mid-navigation elsewhere) —
-  // and only fires while actually on the feed view, so it doesn't
-  // interfere with Explore/Profile/DMs/Cart at all.
+  // Feed sub-tabs keep their own explicit trail now, so back walks the
+  // actual in-session tab order until it bottoms out on All. If the app
+  // cold-opened directly onto a restored non-All tab, the trail is empty;
+  // in that case, one back still lands on All before exit confirmation.
+  const feedContainer = document.getElementById("feed-container");
+  const isFeedVisible =
+    feedContainer && !feedContainer.classList.contains("hidden");
   if (
-    document.getElementById("feed-container") &&
-    !document.getElementById("feed-container").classList.contains("hidden") &&
+    isFeedVisible &&
     typeof currentFeedType !== "undefined" &&
-    currentFeedType !== "all"
+    (_feedTabHistory.length > 0 || currentFeedType !== "all")
   ) {
-    window.filterFeed(
-      "all",
-      document.querySelector('.feed-tab-btn[data-tab="all"]'),
+    const prevTab = _feedTabHistory.length > 0 ? _feedTabHistory.pop() : "all";
+    const prevBtn = document.querySelector(
+      `.feed-tab-btn[data-tab="${prevTab}"]`,
     );
+    _isFeedTabNavInProgress = true;
     try {
-      history.pushState({ uiFeedTab: "all" }, "");
-    } catch (_) {}
+      window.filterFeed(prevTab, prevBtn);
+    } finally {
+      _isFeedTabNavInProgress = false;
+    }
     return;
   }
 
@@ -1335,11 +1332,14 @@ function popUiState(id) {
   }
 }
 
-// Seed one base history entry so the first back-press when nothing is open
-// behaves like a normal app (doesn't feel broken), while genuinely letting
-// the browser/app handle exit navigation once the stack is empty.
+// Seed one base history entry plus one throwaway guard entry above it so
+// the VERY first phone back gesture on a freshly-opened home screen fires
+// popstate inside this document (letting the app walk tabs/views or show
+// exit confirmation) instead of immediately leaving the app with no chance
+// to handle it.
 try {
   history.replaceState({ uiLayer: "base" }, "");
+  history.pushState({ uiExitGuard: true }, "");
 } catch (_) {}
 
 // ─── 4. UTILITIES ─────────────────────────────────────────────────────────────
@@ -3079,6 +3079,9 @@ window.navigateTo = function (viewId, btn = null) {
       // Cap so the stack never grows unbounded if someone calls
       // navigateTo() programmatically many times in a row.
       if (_viewHistory.length > 8) _viewHistory.shift();
+      try {
+        history.pushState({ uiView: viewId }, "");
+      } catch (_) {}
     }
   }
 
@@ -3421,12 +3424,23 @@ window.openDetail = async function (postId, fromBack = false) {
   _currentDetailPostId = postId;
 
   modal.classList.remove("hidden");
-  // Pair with the --_bodyScrollLocks counter in closeDetailModal: bump
-  // the lock on open so nested modals (e.g. a rates dialog from inside
-  // the detail view) still bleed-scroll lock correctly. Mirrors the
-  // pair++/-- pattern used elsewhere in the file.
-  _bodyScrollLocks++;
-  document.body.style.overflow = "hidden";
+  // Pair with the --_bodyScrollLocks counter in closeDetailModal: only
+  // bump the lock on a genuine closed->open transition. Fix: this used
+  // to run unconditionally on every call, including the drill-in case
+  // (already open, just switching to a different post) and the
+  // refresh-in-place case (Manage Listing calls openDetail(id, true) on
+  // an already-open modal just to repaint it with fresh data after a
+  // save — no close ever happens to release that extra lock). Either
+  // one silently inflated the counter with no matching release, and
+  // once it's inflated above what a single real close brings back to
+  // zero, document.body.style.overflow stays "hidden" permanently —
+  // exactly the "page scrolling seized after setting a flash sale"
+  // symptom, since saving from Manage Listing while that post's detail
+  // was open is exactly this refresh-in-place path.
+  if (!wasOpen) {
+    _bodyScrollLocks++;
+    document.body.style.overflow = "hidden";
+  }
   // Fix: keep aria-hidden in sync with .hidden so assistive tech knows
   // the modal is visible when the class is removed, and gone when added.
   modal.setAttribute("aria-hidden", "false");
@@ -9770,11 +9784,30 @@ window.deletePost = function (postId) {
 let followingFeedIds = []; // cached so loadMore doesn't need to re-fetch the follows list every page
 
 async function loadFollowingFeed() {
-  if (!currentUserData) return;
-  const myGeneration = _feedLoadGeneration;
-
   const feed = document.getElementById("posts-feed");
   if (!feed) return;
+
+  // Fix: this returned before ever touching the feed grid when signed
+  // out, leaving whatever the PREVIOUS tab had rendered still sitting
+  // there — so switching to Following while signed out (or mid
+  // sign-in) silently showed stale content from All/Products/etc.,
+  // looking like Following was somehow pulling in posts from people
+  // you don't even follow. Following inherently needs an account to
+  // mean anything, so this now clears the grid and prompts sign-in
+  // instead of leaving it untouched.
+  if (!currentUserData) {
+    feed.classList.remove("grid-mode", "reels-mode");
+    pauseAllReelVideos();
+    feed.innerHTML = `
+        <div class="text-center py-16 space-y-3">
+            <p class="text-4xl">👥</p>
+            <p class="font-bold text-white">Sign in to see who you follow</p>
+            <p class="text-slate-500 text-xs">Posts from people you follow show up here once you're signed in.</p>
+            <button onclick="window.openLoginModal ? window.openLoginModal() : window.navigateTo('profile')" class="mt-2 inline-flex items-center gap-2 bg-amber-400 text-black font-black px-4 py-2.5 rounded-xl text-[11px] uppercase tracking-wider active:scale-[0.98] transition">Sign In</button>
+        </div>`;
+    return;
+  }
+  const myGeneration = _feedLoadGeneration;
 
   feed.classList.remove("grid-mode", "reels-mode");
   pauseAllReelVideos();
@@ -10509,9 +10542,22 @@ window.filterFeed = function (type, clickedBtn = null) {
   if (!isAuthInitialized) return;
 
   const previousType = currentFeedType;
+  const isTabChange = previousType !== type;
   currentFeedType = type;
   _feedLoadGeneration++;
   _prefetchedFeedPage = null; // belonged to whichever tab was active before this switch
+
+  if (isTabChange && !_isFeedTabNavInProgress) {
+    if (type === "all") {
+      _feedTabHistory.length = 0;
+    } else {
+      _feedTabHistory.push(previousType || "all");
+      if (_feedTabHistory.length > 16) _feedTabHistory.shift();
+    }
+    try {
+      history.pushState({ uiFeedTab: type }, "");
+    } catch (_) {}
+  }
 
   syncFeedTabBodyClasses(type);
 
@@ -15426,7 +15472,12 @@ if (activeAuthChange) {
         const savedTabBtn = document.querySelector(
           `.feed-tab-btn[onclick*="'${currentFeedType}'"]`,
         );
-        window.filterFeed(currentFeedType, savedTabBtn);
+        _isFeedTabNavInProgress = true;
+        try {
+          window.filterFeed(currentFeedType, savedTabBtn);
+        } finally {
+          _isFeedTabNavInProgress = false;
+        }
         try {
           loadProfileStats();
         } catch (_) {}
