@@ -744,14 +744,26 @@ body {
   top: 8px;
   height: 42px;
   border-radius: 999px;
-  background: radial-gradient(circle at 50% 0%, rgba(251,191,36,.12), transparent 68%);
+  background: radial-gradient(
+    circle at 50% 0%,
+    rgba(251, 191, 36, 0.12),
+    transparent 68%
+  );
   pointer-events: none;
   z-index: -1;
 }
-.site-header .header-row { position: relative; }
-.site-header .feed-tabs-scroll { padding: 4px 2px 6px; }
-.site-header .feed-tab-btn { text-shadow: 0 1px 8px rgba(0,0,0,.8); }
-.site-header .feed-tab-btn.border-amber-400 { text-shadow: 0 0 12px rgba(251,191,36,.45); }
+.site-header .header-row {
+  position: relative;
+}
+.site-header .feed-tabs-scroll {
+  padding: 4px 2px 6px;
+}
+.site-header .feed-tab-btn {
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.8);
+}
+.site-header .feed-tab-btn.border-amber-400 {
+  text-shadow: 0 0 12px rgba(251, 191, 36, 0.45);
+}
 
 /* Settings is a true drill-down panel rather than another section in Profile. */
 #profile-subview-settings.settings-panel-open {
@@ -759,7 +771,8 @@ body {
   inset: 0;
   z-index: 80;
   overflow-y: auto;
-  padding: max(12px, env(safe-area-inset-top, 0px)) 16px calc(110px + env(safe-area-inset-bottom, 0px));
+  padding: max(12px, env(safe-area-inset-top, 0px)) 16px
+    calc(110px + env(safe-area-inset-bottom, 0px));
   background: #0b0f1a;
 }
 #profile-subview-settings.settings-panel-open .settings-subscreen-header {
@@ -775,7 +788,9 @@ body {
   overflow-x: auto;
   padding: 4px 0 1px;
 }
-#mediaPreviewStrip:empty { display: none; }
+#mediaPreviewStrip:empty {
+  display: none;
+}
 #mediaPreviewStrip .attached-preview {
   position: relative;
   width: 58px;
@@ -783,18 +798,22 @@ body {
   flex: 0 0 58px;
   border-radius: 12px;
   overflow: hidden;
-  border: 1px solid rgba(251,191,36,.45);
+  border: 1px solid rgba(251, 191, 36, 0.45);
   background: #020617;
 }
 #mediaPreviewStrip img,
-#mediaPreviewStrip video { width: 100%; height: 100%; object-fit: cover; }
+#mediaPreviewStrip video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 #mediaPreviewStrip .attached-preview-badge {
   position: absolute;
   left: 4px;
   bottom: 4px;
   padding: 2px 4px;
   border-radius: 5px;
-  background: rgba(0,0,0,.7);
+  background: rgba(0, 0, 0, 0.7);
   color: #fbbf24;
   font-size: 8px;
   font-weight: 900;
@@ -805,15 +824,35 @@ body {
   display: none;
   gap: 8px;
   padding: 10px;
-  border: 1px solid rgba(251,191,36,.2);
+  border: 1px solid rgba(251, 191, 36, 0.2);
   border-radius: 14px;
-  background: rgba(251,191,36,.05);
+  background: rgba(251, 191, 36, 0.05);
 }
-#videoTrimControls.is-visible { display: grid; }
-#videoTrimControls input[type="range"] { width: 100%; accent-color: #fbbf24; }
-#videoTrimControls .trim-row { display: grid; grid-template-columns: 42px 1fr 42px; align-items: center; gap: 8px; }
-#videoTrimControls .trim-label { color: #94a3b8; font-size: 9px; text-transform: uppercase; font-weight: 800; }
-#videoTrimControls .trim-value { color: #fbbf24; font-size: 10px; font-weight: 900; text-align: right; }
+#videoTrimControls.is-visible {
+  display: grid;
+}
+#videoTrimControls input[type="range"] {
+  width: 100%;
+  accent-color: #fbbf24;
+}
+#videoTrimControls .trim-row {
+  display: grid;
+  grid-template-columns: 42px 1fr 42px;
+  align-items: center;
+  gap: 8px;
+}
+#videoTrimControls .trim-label {
+  color: #94a3b8;
+  font-size: 9px;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+#videoTrimControls .trim-value {
+  color: #fbbf24;
+  font-size: 10px;
+  font-weight: 900;
+  text-align: right;
+}
 
 /* Reels keeps its intentionally full-screen overlay treatment. */
 .site-header.header-reels-mode {
@@ -1344,6 +1383,7 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
+  height: 72vh;
   max-height: 72vh;
   background: #0b1220;
   padding: 0;
