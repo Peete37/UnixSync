@@ -2513,6 +2513,28 @@ function applyLocationToUI(institution, region) {
   if (locationEl) locationEl.textContent = `${institution} · ${region}`;
 }
 
+// Shows the signed-in user's own avatar in the bottom nav's Profile
+// tab (and its desktop equivalent) instead of a generic person icon —
+// same click handler as before, just an <img> in place of the <i>.
+function setNavProfileAvatar(avatarUrl) {
+  const navBtn = document.getElementById("auth-profile-nav");
+  if (navBtn) {
+    navBtn.innerHTML = `<img src="${escAttr(avatarUrl)}" class="nav-avatar-img" alt="" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?name=U';"><span class="text-[10px] uppercase font-bold tracking-wider">Profile</span>`;
+    navBtn.onclick = function (e) {
+      e.stopPropagation();
+      window.navigateTo("profile", navBtn);
+    };
+  }
+  const navBtnDesktop = document.getElementById("auth-profile-nav-desktop");
+  if (navBtnDesktop) {
+    navBtnDesktop.innerHTML = `<img src="${escAttr(avatarUrl)}" class="nav-avatar-img" alt="" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?name=U';"><span>Profile</span>`;
+    navBtnDesktop.onclick = function (e) {
+      e.stopPropagation();
+      window.navigateTo("profile", navBtnDesktop);
+    };
+  }
+}
+
 // ─── 6. AUTH ACTIONS ──────────────────────────────────────────────────────────
 window.login = async function () {
   try {
@@ -3907,7 +3929,7 @@ window.openManageListingSheet = async function (postId) {
             <div>
                 <label for="managePrice" class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Listing price (GH₵)</label>
                 <p class="text-[10px] text-slate-500 mb-1.5">Change your listing price without re-uploading. Saving marks the post as new in the feed.</p>
-                <input type="text" inputmode="decimal" id="managePrice" data-original-value="${esc(String(post.price ?? 0))}" placeholder="0.00" oninput="window._formatPriceInput(this)" value="${esc(Number(post.price ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+                <input type="text" inputmode="decimal" id="managePrice" autocomplete="off" data-original-value="${esc(String(post.price ?? 0))}" placeholder="0.00" oninput="window._formatPriceInput(this)" value="${esc(Number(post.price ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
             <label class="flex items-center justify-between p-3 bg-slate-900 rounded-xl border border-slate-800 cursor-pointer">
@@ -3919,12 +3941,12 @@ window.openManageListingSheet = async function (postId) {
             <div>
                 <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Flash sale price</label>
                 <p class="text-[10px] text-slate-500 mb-1.5">Set a lower price for the sale — your listing price above stays crossed out next to it, and everything reverts automatically once the timer ends.</p>
-                <input type="text" inputmode="decimal" id="manageOriginalPrice" data-original-value="${post.original_price != null ? esc(String(post.original_price)) : ""}" oninput="window._formatPriceInput(this)" value="${post.original_price != null ? esc(Number(post.original_price).toLocaleString("en-US", { maximumFractionDigits: 2 })) : ""}" placeholder="e.g. ${esc((Number(post.price || 0) * 0.8).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+                <input type="text" inputmode="decimal" id="manageOriginalPrice" autocomplete="off" data-original-value="${post.original_price != null ? esc(String(post.original_price)) : ""}" oninput="window._formatPriceInput(this)" value="${post.original_price != null ? esc(Number(post.original_price).toLocaleString("en-US", { maximumFractionDigits: 2 })) : ""}" placeholder="e.g. ${esc((Number(post.price || 0) * 0.8).toLocaleString("en-US", { maximumFractionDigits: 2 }))}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
             <div>
                 <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1 tracking-widest">Flash sale ends (optional)</label>
-                <input type="datetime-local" id="manageSaleEndsAt" data-original-value="${saleEndsValue}" value="${saleEndsValue}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
+                <input type="datetime-local" id="manageSaleEndsAt" autocomplete="off" data-original-value="${saleEndsValue}" value="${saleEndsValue}" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white focus:outline-none focus:border-amber-400 transition text-sm">
             </div>
 
             ${
@@ -3939,6 +3961,47 @@ window.openManageListingSheet = async function (postId) {
                 Save Changes
             </button>
         </div>`;
+
+  // Bug fix: this modal reuses the same input ids ("manageSaleEndsAt"
+  // etc.) every time it's opened for any post, with no
+  // autocomplete="off" until this fix. Mobile browsers (Chrome/Safari)
+  // can silently restore a previously-typed value into a field that
+  // matches an id/name they've seen before, AFTER the value attribute
+  // above has already been set — overwriting the real, freshly-loaded
+  // sale_ends_at with a stale leftover value the person never
+  // re-entered. _saveManageListing only rewrites the flash-sale fields
+  // when they differ from data-original-value, so a silent autofill
+  // swap here looked exactly like "the user changed this" and wrote
+  // that stale time back to the database — which is what was making
+  // the flash-sale countdown jump around across saves. autocomplete=
+  // "off" (added above) stops most of this at the source; forcing the
+  // real values back in on the next frame, after any autofill pass has
+  // had a chance to run, closes the rest of the gap.
+  requestAnimationFrame(() => {
+    const priceEl = document.getElementById("managePrice");
+    const origPriceEl = document.getElementById("manageOriginalPrice");
+    const saleEndsEl = document.getElementById("manageSaleEndsAt");
+    if (priceEl && priceEl.value !== priceEl.dataset.originalValue) {
+      priceEl.value = Number(post.price ?? 0).toLocaleString("en-US", {
+        maximumFractionDigits: 2,
+      });
+    }
+    if (
+      origPriceEl &&
+      origPriceEl.value.replace(/,/g, "") !==
+        (origPriceEl.dataset.originalValue || "")
+    ) {
+      origPriceEl.value =
+        post.original_price != null
+          ? Number(post.original_price).toLocaleString("en-US", {
+              maximumFractionDigits: 2,
+            })
+          : "";
+    }
+    if (saleEndsEl && saleEndsEl.value !== saleEndsValue) {
+      saleEndsEl.value = saleEndsValue;
+    }
+  });
 };
 
 window.closeManageListingSheet = function (fromPop = false) {
@@ -11987,7 +12050,7 @@ async function loadProfileStats() {
 
     const activeSinceEl = document.getElementById("profile-ui-active-since");
     if (activeSinceEl && bioRes.data?.created_at) {
-      activeSinceEl.textContent = `On campus since ${formatMonthYear(bioRes.data.created_at)}`;
+      activeSinceEl.textContent = formatMonthYear(bioRes.data.created_at);
       activeSinceEl.classList.remove("hidden");
     }
 
@@ -12654,7 +12717,9 @@ window.openPublicProfile = async function (userId) {
         .eq("follower_id", userId),
       supabase
         .from("posts")
-        .select("id, title, media_url, thumbnail_url, media_type, price")
+        .select(
+          "id, title, media_url, thumbnail_url, media_type, price, user_name, user_avatar, institution",
+        )
         .eq("user_id", userId)
         .eq("is_archived", false)
         .order("created_at", { ascending: false }),
@@ -12668,7 +12733,7 @@ window.openPublicProfile = async function (userId) {
         : Promise.resolve({ data: null }),
       supabase
         .from("profiles")
-        .select("bio, major, interests, created_at")
+        .select("name, avatar, bio, major, interests, created_at")
         .eq("id", userId)
         .maybeSingle(),
       // Seller trust metric (doc: "a count of successful sales... is a
@@ -12685,16 +12750,21 @@ window.openPublicProfile = async function (userId) {
         .not("sold_at", "is", null),
     ]);
 
-    // The name/institution/avatar aren't stored anywhere queryable by
-    // user id alone (profiles are keyed by auth, not duplicated per
-    // post) — the most recent post from this person is a reliable,
-    // already-available source for display info without needing a
-    // separate profiles-table fetch.
+    // Bug fix: this select never included user_name/user_avatar/
+    // institution at all, so every public profile view fell straight to
+    // the "Student" placeholder + generic avatar regardless of who was
+    // actually being viewed. Now sourced for real from the person's most
+    // recent post, falling back to their profiles-table name/avatar for
+    // the (rarer) case of someone with zero posts.
     const latestPost = postsRes.data?.[0];
     const displayName =
-      latestPost?.user_name || blockedUserNames[idKey(userId)] || "Student";
+      latestPost?.user_name ||
+      profileRowRes.data?.name ||
+      blockedUserNames[idKey(userId)] ||
+      "Student";
     const avatarUrl =
       latestPost?.user_avatar ||
+      profileRowRes.data?.avatar ||
       `https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(displayName)}`;
     const institution = latestPost?.institution || "";
     const isFollowing = !!isFollowingRes?.data;
@@ -12749,8 +12819,8 @@ window.openPublicProfile = async function (userId) {
                         .join("")}</div>`
                     : ""
                 }
-                ${profileRowRes.data?.created_at ? `<p class="text-slate-600 text-[10px] mt-1.5">On campus since ${esc(formatMonthYear(profileRowRes.data.created_at))}</p>` : ""}
-                <div id="public-profile-rating-block" class="flex flex-col items-center mt-2">
+                ${profileRowRes.data?.created_at ? `<p class="text-slate-600 text-[10px] mt-1.5 mb-0">${esc(formatMonthYear(profileRowRes.data.created_at))}</p>` : ""}
+                <div id="public-profile-rating-block" class="flex flex-col items-center mt-1">
                     ${renderRatingBlockInner(userId, ratingSummary)}
                 </div>
             </div>
@@ -12797,7 +12867,7 @@ window.openPublicProfile = async function (userId) {
                     onclick="window.blockUser('${escAttr(userId)}', '${escAttr(displayName)}')"
                     class="w-full text-red-400 text-xs font-bold uppercase tracking-wider py-3"
                 >
-                    <i class="fas fa-user-slash mr-1.5"></i> Block ${esc(displayName)}
+                    <i class="fas fa-user-slash mr-1.5"></i> Block this user
                 </button>
             `
                 : ""
@@ -15252,25 +15322,10 @@ if (activeAuthChange) {
           // will run for real the next time a real sign-in event fires
           // once connectivity actually returns.
           const cachedMetadata = cached.user_metadata || {};
-          const authProfileNavOffline =
-            document.getElementById("auth-profile-nav");
-          if (authProfileNavOffline) {
-            authProfileNavOffline.innerHTML = `<i class="fas fa-user text-lg"></i><span class="text-[10px] uppercase font-bold tracking-wider">Profile</span>`;
-            authProfileNavOffline.onclick = function (e) {
-              e.stopPropagation();
-              window.navigateTo("profile", authProfileNavOffline);
-            };
-          }
-          const authProfileNavDesktopOffline = document.getElementById(
-            "auth-profile-nav-desktop",
-          );
-          if (authProfileNavDesktopOffline) {
-            authProfileNavDesktopOffline.innerHTML = `<i class="fas fa-user"></i><span>Profile</span>`;
-            authProfileNavDesktopOffline.onclick = function (e) {
-              e.stopPropagation();
-              window.navigateTo("profile", authProfileNavDesktopOffline);
-            };
-          }
+          const cachedNavAvatar =
+            cachedMetadata.avatar_url ||
+            `https://ui-avatars.com/api/?name=${encodeURIComponent(cachedMetadata.full_name || "User")}`;
+          setNavProfileAvatar(cachedNavAvatar);
           const avatarElOffline = document.getElementById("profile-ui-avatar");
           const nameElOffline = document.getElementById("profile-ui-name");
           if (avatarElOffline)
@@ -15392,6 +15447,7 @@ if (activeAuthChange) {
 
         if (avatarEl) avatarEl.src = savedAvatar;
         if (nameEl) nameEl.textContent = metadata.full_name || "Campus Student";
+        setNavProfileAvatar(savedAvatar);
 
         window.initProfileSelects();
 

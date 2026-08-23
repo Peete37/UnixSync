@@ -1621,6 +1621,21 @@ body {
   transition: color 0.15s;
 }
 
+.nav-avatar-img {
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  object-fit: cover;
+  border: 1.5px solid #64748b;
+  transition: border-color 0.15s;
+}
+.bottom-nav button.nav-active .nav-avatar-img {
+  border-color: #fbbf24;
+}
+.bottom-nav button:hover .nav-avatar-img {
+  border-color: #94a3b8;
+}
+
 .bottom-nav button:hover i,
 .bottom-nav button:hover span {
   color: #94a3b8;
