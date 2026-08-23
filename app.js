@@ -3378,19 +3378,14 @@ window.closeCampusSettingsPanel = function () {
 
 window.openUserDashboard = function (userId) {
   if (!userId) return;
-  if (currentUserData && idKey(userId) === idKey(currentUserData.id)) {
-    // Fix: navigateTo('profile') switches which container is visible
-    // underneath, but tapping "Provider" on your own listing happens
-    // from INSIDE the still-open detail modal — so the profile view
-    // was rendering behind it with nothing on screen ever changing.
-    // Close any overlay that could be sitting on top before navigating.
-    if (typeof window.closeDetailModal === "function")
-      window.closeDetailModal();
-    if (typeof window.closePublicProfile === "function")
-      window.closePublicProfile();
-    window.navigateTo("profile");
-    return;
-  }
+  // Changed: tapping "Provider" used to jump straight to your own
+  // private editable Profile tab (closing whatever you were looking
+  // at). Now it opens the same read-only profile card everyone else
+  // sees when they tap your posts, so you can actually view your own
+  // profile the way buyers do instead of only ever seeing the edit
+  // screen. The edit screen is still just as reachable via the
+  // Profile tab in the bottom nav — this only changes what tapping
+  // your own name/avatar on a post does.
   window.openPublicProfile(userId);
 };
 
@@ -12769,6 +12764,8 @@ window.openPublicProfile = async function (userId) {
     const institution = latestPost?.institution || "";
     const isFollowing = !!isFollowingRes?.data;
     const isBlocked = blockedUserIds.has(idKey(userId));
+    const isOwnProfileView =
+      !!currentUserData && idKey(userId) === idKey(currentUserData.id);
     const ratingSummary = await fetchSellerRatingSummary(userId);
     const isVerified = await isUserVerified(userId);
 
@@ -12833,7 +12830,15 @@ window.openPublicProfile = async function (userId) {
             </div>
 
             <div class="flex gap-2 mb-5">
-                <button
+                ${
+                  isOwnProfileView
+                    ? `<button
+                    onclick="window.closePublicProfile(); window.navigateTo('profile');"
+                    class="flex-1 bg-amber-400 text-black font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
+                >
+                    <i class="fas fa-pen mr-1.5"></i>Edit Profile
+                </button>`
+                    : `<button
                     onclick="toggleFollow('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}'); window._refreshPublicProfileFollowState('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}')"
                     class="flex-1 font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95 ${isFollowing ? "bg-slate-800 border border-slate-700 text-white" : "bg-amber-400 text-black"}"
                 >
@@ -12844,7 +12849,8 @@ window.openPublicProfile = async function (userId) {
                     class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
                 >
                     Message
-                </button>
+                </button>`
+                }
             </div>
 
             <div class="grid grid-cols-3 gap-2 mb-6">
@@ -12861,7 +12867,7 @@ window.openPublicProfile = async function (userId) {
             </div>
 
             ${
-              !isBlocked
+              !isBlocked && !isOwnProfileView
                 ? `
                 <button
                     onclick="window.blockUser('${escAttr(userId)}', '${escAttr(displayName)}')"
