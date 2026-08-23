@@ -187,10 +187,10 @@ self.addEventListener("push", (event) => {
   try {
     payload = event.data ? event.data.json() : {};
   } catch (_) {
-    payload = { title: "CampusMarket", body: event.data?.text() || "" };
+    payload = { title: "Unix-Sync", body: event.data?.text() || "" };
   }
 
-  const title = payload.title || "CampusMarket";
+  const title = payload.title || "Unix-Sync";
   const options = {
     body: payload.body || "",
     icon: "./icon-192.png",

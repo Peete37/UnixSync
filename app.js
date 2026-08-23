@@ -2393,7 +2393,7 @@ function injectOnboardingModal() {
         <div class="bg-slate-900 border border-slate-700 rounded-3xl p-6 w-full max-w-sm space-y-5">
             <div class="text-center space-y-1">
                 <p class="text-2xl">🎓</p>
-                <h2 class="text-white font-black text-lg uppercase tracking-tight">Welcome to CampusMarket</h2>
+                <h2 class="text-white font-black text-lg uppercase tracking-tight">Welcome to Unix-Sync</h2>
                 <p class="text-slate-400 text-xs">Tell us where you study so we can personalise your feed</p>
             </div>
             <div class="space-y-3">
@@ -5869,7 +5869,7 @@ window.likePost = async function (postId, btn) {
 };
 
 window.sharePost = function (postId, title) {
-  const text = `Check out "${title}" on CampusMarket!`;
+  const text = `Check out "${title}" on Unix-Sync!`;
   if (navigator.share) {
     // Fix: navigator.share used to silently swallow every error path
     // (rejected promise, user dismissal, browser quota, etc.) so the
@@ -5930,11 +5930,11 @@ window.shareProfile = function () {
     return;
   }
   const name =
-    currentUserData.user_metadata?.full_name || "my CampusMarket profile";
+    currentUserData.user_metadata?.full_name || "my Unix-Sync profile";
   const url = new URL(window.location.href);
   url.search = "";
   url.searchParams.set("u", currentUserData.id);
-  const text = `Check out ${name} on CampusMarket!`;
+  const text = `Check out ${name} on Unix-Sync!`;
 
   const fallbackCopy = () => {
     if (navigator.clipboard?.writeText) {
@@ -12220,7 +12220,7 @@ const INFO_SHEET_CONTENT = {
             <h4>How it's used</h4>
             <p>Your posts and profile are shown to other students on your campus (or nationwide, if you switch off campus scope). Direct messages are only visible to you and the other person in the conversation.</p>
             <h4>What we don't do</h4>
-            <p>CampusMarket doesn't sell your data to advertisers, and doesn't share your contact details with anyone outside a conversation you've started yourself.</p>
+            <p>Unix-Sync doesn't sell your data to advertisers, and doesn't share your contact details with anyone outside a conversation you've started yourself.</p>
             <h4>Your choices</h4>
             <p>You can edit your display name and campus at any time from this Settings tab. Deleting your account removes your posts, comments, and profile information.</p>
             <h4>Questions</h4>
@@ -12231,7 +12231,7 @@ const INFO_SHEET_CONTENT = {
     title: "Help & Support",
     render: () => `
             <h4>Buying or selling</h4>
-            <p>Tap Contact Seller on any listing to open a direct message with the person who posted it. Prices and availability are set by the student posting, not by CampusMarket.</p>
+            <p>Tap Contact Seller on any listing to open a direct message with the person who posted it. Prices and availability are set by the student posting, not by Unix-Sync.</p>
             <h4>Reporting a problem</h4>
             <p>Open the listing or message you want to report and use the options menu (⋯) to send a report. A team member reviews every report.</p>
             <h4>Account issues</h4>
@@ -12512,7 +12512,7 @@ window.openWhySeeingPost = function (posterId, isSuggested) {
   } else if (isFollowed) {
     reasonHtml = `<p>You're seeing this because you <strong class="text-white">follow</strong> this seller.</p>`;
   } else {
-    reasonHtml = `<p>You're seeing this because it's a <strong class="text-white">recent listing</strong> on CampusMarket. Posts you're more likely to be interested in — based on recency and engagement — are shown higher in your feed.</p>`;
+    reasonHtml = `<p>You're seeing this because it's a <strong class="text-white">recent listing</strong> on Unix-Sync. Posts you're more likely to be interested in — based on recency and engagement — are shown higher in your feed.</p>`;
   }
 
   titleEl.textContent = "Why you're seeing this post";
@@ -13198,7 +13198,7 @@ window.confirmDeleteAccount = function () {
   showConfirmDialog({
     title: "Delete your account?",
     message:
-      "This removes your posts, comments, profile info, and your account itself from CampusMarket. This can't be undone.",
+      "This removes your posts, comments, profile info, and your account itself from Unix-Sync. This can't be undone.",
     confirmLabel: "Delete Account",
     danger: true,
     requireText: "DELETE",
@@ -16043,8 +16043,8 @@ window.shareSelectedGridItems = function () {
   const lines = items.map((d) => `• ${d.title} — GH₵${d.price ?? 0}`);
   const intro =
     items.length === 1
-      ? `Check out "${items[0].title}" on CampusMarket!`
-      : `Check out these ${items.length} listings on CampusMarket!`;
+      ? `Check out "${items[0].title}" on Unix-Sync!`
+      : `Check out these ${items.length} listings on Unix-Sync!`;
   const shareText = `${intro}\n${lines.join("\n")}\n${window.location.href}`;
 
   if (navigator.share) {
@@ -16052,7 +16052,7 @@ window.shareSelectedGridItems = function () {
     // user-cancel (AbortError, silent) from real failure (log +
     // clipboard fallback toast) so multi-select share never appears
     // to do nothing on tap.
-    navigator.share({ title: "CampusMarket", text: shareText }).then(
+    navigator.share({ title: "Unix-Sync", text: shareText }).then(
       () => showToast("Shared! ✓"),
       (err) => {
         if (err?.name === "AbortError") return;

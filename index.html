@@ -295,7 +295,10 @@
                  collapsing to the left edge with a bare gap where the
                  title should be, so this fills that gap with the
                  current view's name instead of leaving it empty. -->
-            <p id="header-page-title" class="hidden flex-1 text-sm font-black text-white tracking-wide"></p>
+            <p
+              id="header-page-title"
+              class="hidden flex-1 text-sm font-black text-white tracking-wide"
+            ></p>
 
             <div
               id="feed-tabs"
@@ -680,7 +683,7 @@
                 Saved Items
               </h2>
               <p class="text-slate-400 text-xs">
-                Everything you've bookmarked across CampusMarket lives here.
+                Everything you've bookmarked across Unix-Sync lives here.
               </p>
             </div>
             <div id="cart-items-wrapper" class="space-y-3"></div>
@@ -976,12 +979,12 @@
                     <div class="settings-hero" aria-hidden="true">
                       <div class="settings-hero-glow"></div>
                       <div class="settings-hero-content">
-                        <span class="settings-hero-eyebrow">CampusMarket</span>
+                        <span class="settings-hero-eyebrow">Unix-Sync</span>
                         <span class="settings-hero-title"
                           >Settings &amp; Preferences</span
                         >
                         <span class="settings-hero-sub" id="settingsHeroSub"
-                          >Personalise how CampusMarket looks and behaves for
+                          >Personalise how Unix-Sync looks and behaves for
                           you.</span
                         >
                       </div>
@@ -1105,7 +1108,7 @@
                     </div>
 
                     <p class="text-center text-slate-600 text-[10px] pt-1 pb-2">
-                      CampusMarket v1.0 · Ghana
+                      Unix-Sync v1.0 · Ghana
                     </p>
                   </div>
 
@@ -1856,9 +1859,9 @@
                 class="hidden mt-2 space-y-2 p-3 bg-slate-900/60 rounded-xl border border-slate-800"
               >
                 <p class="text-[10px] text-slate-500">
-                  Shows a lower flash-sale price with a countdown until it
-                  ends — your listing then automatically reverts to the
-                  regular price above, no editing needed.
+                  Shows a lower flash-sale price with a countdown until it ends
+                  — your listing then automatically reverts to the regular price
+                  above, no editing needed.
                 </p>
                 <div>
                   <label
@@ -2296,13 +2299,10 @@
             </button>
           </div>
           <p class="text-xs text-slate-400 leading-relaxed">
-            Enter the email on your account and we'll send a link to reset
-            your password.
+            Enter the email on your account and we'll send a link to reset your
+            password.
           </p>
-          <form
-            onsubmit="window.submitForgotPassword(event)"
-            class="space-y-4"
-          >
+          <form onsubmit="window.submitForgotPassword(event)" class="space-y-4">
             <div>
               <label
                 for="forgot-password-email"
@@ -2348,7 +2348,10 @@
           class="bg-[#0b1220] border border-white/10 rounded-[2rem] p-7 w-full max-w-sm space-y-6 shadow-2xl"
         >
           <div class="flex items-center justify-between">
-            <h2 id="set-password-modal-title" class="text-lg font-black text-white">
+            <h2
+              id="set-password-modal-title"
+              class="text-lg font-black text-white"
+            >
               Set New Password
             </h2>
             <button
@@ -2612,13 +2615,15 @@
             // PASSWORD_RECOVERY listener (see the script block further
             // down) catches the person landing back here via the link
             // in their email and prompts them to set a new password.
-            const { error } = await supabase.auth.resetPasswordForEmail(
-              email,
-              { redirectTo: window.location.origin + window.location.pathname },
-            );
+            const { error } = await supabase.auth.resetPasswordForEmail(email, {
+              redirectTo: window.location.origin + window.location.pathname,
+            });
             if (error) throw error;
           } catch (err) {
-            console.error("[Forgot Password] resetPasswordForEmail failed:", err);
+            console.error(
+              "[Forgot Password] resetPasswordForEmail failed:",
+              err,
+            );
             // Deliberately still shows success below even on error —
             // see the comment on the modal itself: confirming or
             // denying that an email has an account here is an
