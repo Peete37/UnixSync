@@ -1198,6 +1198,24 @@ document.addEventListener(
     // Never hijack a swipe while any overlay (detail modal, sheet, DM
     // thread, etc.) is open above the feed.
     if (_uiStack.length > 0) return;
+    // Bug fix: a swipe starting right at the screen edge is exactly the
+    // zone iOS Safari and most Android browsers reserve for their own
+    // native "swipe from edge to go back" gesture. Starting our tab-swipe
+    // there let both fire — the browser's real edge-swipe was
+    // consuming/confusing the back-history stack behind our JS
+    // (history.pushState) logic in filterFeed(), which is what made a
+    // later hardware/gesture back press behave as if there was nothing
+    // left to unwind and close the app outright, even after switching
+    // through several tabs. Ignoring swipe-starts within this margin
+    // leaves that zone entirely to the browser's own gesture, the way
+    // native apps keep a safe edge margin for exactly this reason.
+    const EDGE_EXCLUSION_PX = 28;
+    if (
+      e.touches[0].clientX < EDGE_EXCLUSION_PX ||
+      e.touches[0].clientX > window.innerWidth - EDGE_EXCLUSION_PX
+    ) {
+      return;
+    }
     _swipeStartX = e.touches[0].clientX;
     _swipeStartY = e.touches[0].clientY;
     _swipeStartTime = Date.now();
@@ -1412,6 +1430,18 @@ function escAttr(str) {
 function setEl(id, val) {
   const el = document.getElementById(id);
   if (el) el.textContent = val;
+}
+
+// Bug fix: every price shown on a card/detail/cart/DM anywhere in the
+// app was interpolated as a raw String(d.price) — e.g. "GH₵7000" — with
+// no thousands separator, even though Create/Manage Listing's own
+// price inputs DO show one as you type. Only the input formatting
+// existed; the actual displayed price everywhere else never used it.
+// This is the one shared formatter both now go through.
+function formatGHS(amount) {
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return "0";
+  return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 // Lightweight registry mapping postId -> { id, title, price, image, type }.
@@ -1823,8 +1853,8 @@ function renderDealsStripCard(id, d) {
             </div>
             <p class="text-[11px] text-slate-300 mt-1 truncate">${esc(d.title)}</p>
             <div class="flex items-baseline gap-1.5">
-                <p class="text-xs font-black text-amber-400">GH₵${esc(String(d.original_price ?? 0))}</p>
-                <p class="text-[10px] text-slate-500 line-through">GH₵${esc(String(d.price || 0))}</p>
+                <p class="text-xs font-black text-amber-400">GH₵${formatGHS(d.original_price ?? 0)}</p>
+                <p class="text-[10px] text-slate-500 line-through">GH₵${formatGHS(d.price || 0)}</p>
             </div>
         </div>`;
 }
@@ -2134,7 +2164,7 @@ setInterval(() => {
     if (!endsAt) return;
     if (!countdownText(endsAt)) {
       const regular = el.getAttribute("data-regular-price");
-      if (regular != null) el.textContent = `GH₵${regular}`;
+      if (regular != null) el.textContent = `GH₵${formatGHS(regular)}`;
       el.removeAttribute("data-sale-ends");
       el.removeAttribute("data-regular-price");
     }
@@ -3188,6 +3218,17 @@ window.navigateTo = function (viewId, btn = null) {
       ?.classList.remove("header-reels-mode");
   }
 
+  // Safety net: renderChatThreadShell() hides the bottom nav while a
+  // chat thread is open and closeDMThread() is what normally restores
+  // it — but navigateTo() is the one function guaranteed to run on
+  // every possible way of leaving a view (including back-gesture paths
+  // that don't go through closeDMThread), so it un-hides the nav here
+  // too. Reels' own scroll handler re-hides it on the feed as needed,
+  // so this is safe to always run.
+  document
+    .querySelector(".bottom-nav-container")
+    ?.classList.remove("bottom-nav-hidden");
+
   // Fix: feed-tab-all/feed-tab-grid on <body> (desktop column width +
   // right-rail visibility) previously only got set/cleared by
   // filterFeed(), never by navigateTo() — so switching away from the
@@ -3655,8 +3696,8 @@ window.openDetail = async function (postId, fromBack = false) {
                 <div class="flex items-start justify-between gap-4 -mt-1">
                     <div class="flex items-baseline gap-2 flex-wrap">
                         ${isSoldDetail ? `<span class="bg-slate-800 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] px-2.5 py-1 rounded-full border border-slate-700">Sold</span>` : ""}
-                        <span class="text-amber-400 font-black text-3xl leading-none${hasDiscountDetail ? " sale-live-price" : ""}" ${hasDiscountDetail ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPriceDetail || 0))}</span>
-                        ${hasDiscountDetail ? `<span class="sale-strike-price text-slate-500 text-base line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
+                        <span class="text-amber-400 font-black text-3xl leading-none${hasDiscountDetail ? " sale-live-price" : ""}" ${hasDiscountDetail ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${formatGHS(displayPriceDetail || 0)}</span>
+                        ${hasDiscountDetail ? `<span class="sale-strike-price text-slate-500 text-base line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${formatGHS(d.price || 0)}</span>` : ""}
                         ${!isSoldDetail && saleActiveDetail ? `<span class="sale-countdown-badge bg-rose-500/90 text-white text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full" data-sale-ends="${escAttr(d.sale_ends_at)}">${esc(countdownText(d.sale_ends_at))}</span>` : ""}
                     </div>
                     <button onclick="window.openPostOptionsMenu('${escAttr(d.id)}', ${isOwn ? "true" : "false"}, '${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-slate-400 hover:text-white transition px-1 shrink-0">
@@ -8121,7 +8162,7 @@ function renderFeedCard(id, d, options = {}) {
 
         <div class="px-3 pb-1">
             <div class="flex items-baseline gap-2 flex-wrap">
-                <span class="text-amber-400 font-black text-sm">GH₵${esc(String(d.price || 0))}</span>
+                <span class="text-amber-400 font-black text-sm">GH₵${formatGHS(d.price || 0)}</span>
                 <span class="text-[10px] text-slate-500 uppercase font-semibold">${esc(d.type) || "product"}</span>
             </div>
             <p class="text-white text-[13px] font-semibold mt-0.5 leading-snug line-clamp-2">${esc(d.title)}</p>
@@ -8244,8 +8285,8 @@ function renderFeedMasonryCard(id, d, options = {}) {
                 : ""
             }
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2.5 pt-6 pb-2 flex items-baseline gap-1.5">
-                <span class="text-amber-400 font-black text-xs${hasDiscount ? " sale-live-price" : ""}" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
+                <span class="text-amber-400 font-black text-xs${hasDiscount ? " sale-live-price" : ""}" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${formatGHS(displayPrice || 0)}</span>
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${formatGHS(d.price || 0)}</span>` : ""}
             </div>
         </div>
         <div class="px-2.5 py-2">
@@ -8316,8 +8357,8 @@ function renderProductGridCard(id, d) {
                 <i class="${bookmarkClass} text-xs"></i>
             </button>
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-2 pt-5 pb-1.5 flex items-baseline gap-1.5">
-                <span class="text-amber-400 font-black text-[11px]${hasDiscount ? " sale-live-price" : ""}" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[9px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
+                <span class="text-amber-400 font-black text-[11px]${hasDiscount ? " sale-live-price" : ""}" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${formatGHS(displayPrice || 0)}</span>
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[9px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${formatGHS(d.price || 0)}</span>` : ""}
             </div>
         </div>
         <div class="p-2">
@@ -8429,8 +8470,8 @@ function renderServiceGridCard(id, d) {
                 <i class="fas fa-bolt text-[9px]"></i> Service
             </div>
             <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/85 to-transparent px-3 pt-6 pb-2 flex items-baseline gap-1.5">
-                <span class="text-amber-400 font-black text-sm${hasDiscount ? " sale-live-price" : ""}" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${esc(String(displayPrice || 0))}</span>
-                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${esc(String(d.price || 0))}</span>` : ""}
+                <span class="text-amber-400 font-black text-sm${hasDiscount ? " sale-live-price" : ""}" ${hasDiscount ? `data-sale-ends="${escAttr(d.sale_ends_at)}" data-regular-price="${escAttr(String(d.price || 0))}"` : ""}>GH₵${formatGHS(displayPrice || 0)}</span>
+                ${hasDiscount ? `<span class="sale-strike-price text-slate-400 text-[10px] line-through" data-sale-ends="${escAttr(d.sale_ends_at)}">GH₵${formatGHS(d.price || 0)}</span>` : ""}
             </div>
         </div>
         <div class="p-3">
@@ -8939,7 +8980,7 @@ function renderReelCard(id, d, lazy = false) {
                 <p class="text-white font-bold text-sm leading-tight truncate">${esc(d.user_name) || "Student"}</p>
             </div>
             <p class="text-white text-sm font-semibold leading-snug line-clamp-2">${esc(d.title)}</p>
-            <p class="text-amber-400 font-black text-sm mt-1">GH₵${esc(String(d.price || 0))}</p>
+            <p class="text-amber-400 font-black text-sm mt-1">GH₵${formatGHS(d.price || 0)}</p>
             ${
               isOwnPost
                 ? `<button disabled class="mt-2 flex items-center gap-1.5 bg-slate-900/80 border border-white/10 text-slate-500 font-extrabold py-2 px-4 rounded-xl text-[11px] uppercase tracking-wider cursor-not-allowed w-fit">Your Listing</button>`
@@ -9459,8 +9500,8 @@ function buildCartListMarkup() {
                                 ? item.original_price
                                 : item.price;
                               return `<div class="flex items-baseline gap-1.5 mt-1">
-                                <span class="text-amber-400 font-extrabold text-sm${cartSaleActive ? " sale-live-price" : ""}" ${cartSaleActive ? `data-sale-ends="${escAttr(item.sale_ends_at)}" data-regular-price="${escAttr(String(item.price ?? 0))}"` : ""}>GH₵${esc(String(cartDisplayPrice ?? 0))}</span>
-                                ${cartSaleActive ? `<span class="sale-strike-price text-slate-500 text-[11px] line-through" data-sale-ends="${escAttr(item.sale_ends_at)}">GH₵${esc(String(item.price ?? 0))}</span>` : ""}
+                                <span class="text-amber-400 font-extrabold text-sm${cartSaleActive ? " sale-live-price" : ""}" ${cartSaleActive ? `data-sale-ends="${escAttr(item.sale_ends_at)}" data-regular-price="${escAttr(String(item.price ?? 0))}"` : ""}>GH₵${formatGHS(cartDisplayPrice ?? 0)}</span>
+                                ${cartSaleActive ? `<span class="sale-strike-price text-slate-500 text-[11px] line-through" data-sale-ends="${escAttr(item.sale_ends_at)}">GH₵${formatGHS(item.price ?? 0)}</span>` : ""}
                               </div>`;
                             })()}
                             ${item.user_name ? `<p class="text-slate-400 text-[11px] truncate mt-1">Seller: ${esc(item.user_name)}</p>` : ""}
@@ -14008,6 +14049,15 @@ function renderChatThreadShell() {
   // closeDMThread() below restores it when you back out to the list.
   document.getElementById("header-page-title")?.classList.add("hidden");
 
+  // Requested: hide the bottom nav entirely while a thread is open,
+  // like Instagram/WhatsApp do — the message input sits right at the
+  // bottom of the screen instead of stacked above a nav bar you can't
+  // use anyway while typing. .bottom-nav-hidden is the same class the
+  // Reels feed already uses for this. closeDMThread() restores it.
+  document
+    .querySelector(".bottom-nav-container")
+    ?.classList.add("bottom-nav-hidden");
+
   content.innerHTML = `
         <div id="chat-thread-panel" class="flex flex-col">
             <div class="flex items-center gap-3 pb-3 border-b border-slate-800/60 mb-3">
@@ -14060,7 +14110,14 @@ function _syncChatPanelHeight() {
   const panel = document.getElementById("chat-thread-panel");
   if (!panel) return;
   const bottomNav = document.querySelector(".bottom-nav-container");
-  const navH = bottomNav ? bottomNav.getBoundingClientRect().height : 0;
+  // .bottom-nav-hidden only translates the nav off-screen (it stays in
+  // the layout, so its own height doesn't change) — treat it as 0 here
+  // or the panel would still leave a gap the size of the now-invisible
+  // nav bar at the bottom, instead of actually reaching the edge.
+  const navH =
+    bottomNav && !bottomNav.classList.contains("bottom-nav-hidden")
+      ? bottomNav.getBoundingClientRect().height
+      : 0;
   const top = panel.getBoundingClientRect().top;
   const available = window.innerHeight - top - navH - 16;
   panel.style.height = `${Math.max(320, available)}px`;
@@ -14258,7 +14315,7 @@ function renderPostSharePreviewBubble(payload, isMe, createdAt, msg) {
                             ${payload.type === "skill" ? "Shared Service" : "Shared Listing"}
                         </p>
                         <p class="text-xs font-bold ${isMe ? "text-white" : "text-white"} truncate">${esc(payload.title)}</p>
-                        <p class="text-amber-400 font-black text-xs">GH₵${esc(String(payload.price))}</p>
+                        <p class="text-amber-400 font-black text-xs">GH₵${formatGHS(payload.price)}</p>
                     </div>
                 </div>
                 <p class="text-[9px] ${isMe ? "text-black/40" : "text-slate-500"} mt-1.5 text-right">${esc(formatClockTime(createdAt))}</p>
@@ -14305,7 +14362,7 @@ function renderOfferBubble(payload, isMe, createdAt, msg) {
                 <p class="text-[9px] uppercase tracking-widest font-bold ${isMe ? "text-amber-500" : "text-slate-500"}">
                     <i class="fas fa-hand-holding-dollar mr-1"></i>Offer on ${esc(payload.title)}
                 </p>
-                <p class="text-white font-black text-lg mt-1">GH₵${esc(String(payload.amount))}</p>
+                <p class="text-white font-black text-lg mt-1">GH₵${formatGHS(payload.amount)}</p>
                 ${payload.note ? `<p class="text-slate-300 text-xs mt-1">${esc(payload.note)}</p>` : ""}
                 ${statusChip}
                 ${actionButtons}
@@ -14679,9 +14736,12 @@ window.sendChatMessage = async function () {
 
 window.closeDMThread = function (fromPop = false) {
   unsubscribeActiveThread();
-  // Restore the top-bar "Inbox" title that renderChatThreadShell()
-  // hides while a thread is open.
+  // Restore the top-bar "Inbox" title and the bottom nav that
+  // renderChatThreadShell() hides while a thread is open.
   document.getElementById("header-page-title")?.classList.remove("hidden");
+  document
+    .querySelector(".bottom-nav-container")
+    ?.classList.remove("bottom-nav-hidden");
   openInboxView();
   if (!fromPop) popUiState("dm-thread");
 };
@@ -14961,7 +15021,7 @@ window.openMakeOfferModal = function (postId) {
         <div class="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-sm p-5 space-y-4">
             <div>
                 <h3 class="text-white font-black text-sm uppercase tracking-wider">Make an Offer</h3>
-                <p class="text-slate-500 text-xs mt-1 truncate">${esc(post.title)} · Listed at GH₵${esc(String(offerEffectivePrice))}</p>
+                <p class="text-slate-500 text-xs mt-1 truncate">${esc(post.title)} · Listed at GH₵${formatGHS(offerEffectivePrice)}</p>
             </div>
             <div>
                 <label class="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1.5 block">Your offer (GH₵)</label>
@@ -15084,7 +15144,7 @@ window._submitOffer = async function (postId) {
     await supabase
       .from("conversations")
       .update({
-        last_message: `💰 Offer: GH₵${amount}`,
+        last_message: `💰 Offer: GH₵${formatGHS(amount)}`,
         last_message_at: new Date().toISOString(),
         last_sender: currentUserData.id,
       })
@@ -16118,7 +16178,7 @@ function renderPublicGridItem(id, post) {
             : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${thumbUrl || fallbackImage}" alt="" loading="lazy">`
         }
         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
-            <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
+            <p class="text-[10px] text-white font-black truncate w-full">GH₵${formatGHS(d.price || 0)}</p>
         </div>
     </div>`;
 }
@@ -16170,7 +16230,7 @@ function renderGridItem(id, post) {
             : `<img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="${thumbUrl || fallbackImage}" alt="" loading="lazy">`
         }
         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end p-2">
-            <p class="text-[10px] text-white font-black truncate w-full">GH₵${d.price || 0}</p>
+            <p class="text-[10px] text-white font-black truncate w-full">GH₵${formatGHS(d.price || 0)}</p>
         </div>
         ${
           d.scheduled_for && new Date(d.scheduled_for).getTime() > Date.now()
@@ -16334,7 +16394,9 @@ window.shareSelectedGridItems = function () {
     return;
   }
 
-  const lines = items.map((d) => `• ${d.title} — GH₵${d.price ?? 0}`);
+  const lines = items.map(
+    (d) => `• ${d.title} — GH₵${formatGHS(d.price ?? 0)}`,
+  );
   const intro =
     items.length === 1
       ? `Check out "${items[0].title}" on Unix-Sync!`
