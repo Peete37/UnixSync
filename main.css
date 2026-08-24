@@ -1886,6 +1886,18 @@ main {
   padding-bottom: 100px;
 }
 
+/* Fix: this padding is meant to clear the fixed bottom-nav-container so
+   feed/profile/explore content isn't hidden behind it. It was unconditional,
+   so it also applied while a DM chat thread is open — even though the nav
+   is hidden and #chat-thread-panel already gets an exact JS-measured height
+   for the remaining space. That left 100px of extra reserved space below
+   the panel, pushing total content past the viewport and making the whole
+   page (not just the message list) scrollable, dragging the input bar along
+   with it. renderChatThreadShell()/closeDMThread() toggle this class. */
+main.chat-thread-open {
+  padding-bottom: 0;
+}
+
 .bottom-nav-hidden {
   transform: translateY(100%);
 }

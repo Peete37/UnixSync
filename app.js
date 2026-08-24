@@ -3228,6 +3228,7 @@ window.navigateTo = function (viewId, btn = null) {
   document
     .querySelector(".bottom-nav-container")
     ?.classList.remove("bottom-nav-hidden");
+  document.querySelector("main")?.classList.remove("chat-thread-open");
 
   // Fix: feed-tab-all/feed-tab-grid on <body> (desktop column width +
   // right-rail visibility) previously only got set/cleared by
@@ -14058,6 +14059,12 @@ function renderChatThreadShell() {
     .querySelector(".bottom-nav-container")
     ?.classList.add("bottom-nav-hidden");
 
+  // Pairs with the CSS fix for main's unconditional 100px bottom padding
+  // (meant to clear the nav bar) — that padding was still reserved here
+  // even with the nav hidden, adding dead space below the panel and
+  // making the whole page scroll instead of just #chat-messages.
+  document.querySelector("main")?.classList.add("chat-thread-open");
+
   content.innerHTML = `
         <div id="chat-thread-panel" class="flex flex-col">
             <div class="flex items-center gap-3 pb-3 border-b border-slate-800/60 mb-3">
@@ -14742,6 +14749,7 @@ window.closeDMThread = function (fromPop = false) {
   document
     .querySelector(".bottom-nav-container")
     ?.classList.remove("bottom-nav-hidden");
+  document.querySelector("main")?.classList.remove("chat-thread-open");
   openInboxView();
   if (!fromPop) popUiState("dm-thread");
 };
