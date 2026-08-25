@@ -3758,15 +3758,18 @@ window.openDetail = async function (postId, fromBack = false) {
                 </div>
                 <div id="comment-list-${escAttr(d.id)}" class="comments-scroll-area"></div>
                 <div class="comments-input-row flex items-center gap-1.5">
-                    <input
-                        type="text"
-                        inputmode="text"
-                        maxlength="500"
-                        placeholder="Add a comment…"
-                        class="comment-input-field flex-1 bg-white/10 border border-white/20 text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none focus:border-amber-400 transition"
-                        oninput="window._syncCommentSendState('${escAttr(d.id)}', this)"
-                        onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(d.id)}', this)"
-                    >
+                    <div class="relative flex-1">
+                        <input
+                            type="text"
+                            inputmode="text"
+                            maxlength="500"
+                            placeholder="Add a comment…"
+                            class="comment-input-field w-full bg-white/10 border border-white/20 text-white text-xs rounded-xl pl-2.5 pr-16 py-2 focus:outline-none focus:border-amber-400 transition"
+                            oninput="window._syncCommentSendState('${escAttr(d.id)}', this)"
+                            onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(d.id)}', this)"
+                        >
+                        ${renderCommentInputExtras(escAttr(d.id))}
+                    </div>
                     <button id="cancel-reply-${escAttr(d.id)}" onclick="window.cancelCommentReply('${escAttr(d.id)}', this)" class="hidden text-[10px] text-white/60 hover:text-white px-1">✕</button>
                     <button
                         id="comment-send-${escAttr(d.id)}"
@@ -6211,6 +6214,136 @@ function getCommentCancelBtn(postId, sourceEl = null) {
   );
 }
 
+// Shared markup for the @ and emoji buttons that sit inside every
+// comment input pill (feed card, Reels sheet, detail page) — one
+// function instead of three copies so all three stay visually and
+// behaviorally identical, matching the Instagram/TikTok-style comment
+// bar with @ + emoji icons inside the input itself.
+function renderCommentInputExtras(id) {
+  return `
+        <div class="comment-input-extras absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2.5">
+            <button type="button" onclick="window._insertCommentMention('${id}', this)" class="text-white/50 hover:text-amber-400 active:scale-90 transition w-5 h-5 flex items-center justify-center text-xs" aria-label="Mention someone">
+                <i class="fas fa-at"></i>
+            </button>
+            <button type="button" onclick="window._toggleCommentEmojiPicker('${id}', this)" class="text-white/50 hover:text-amber-400 active:scale-90 transition w-5 h-5 flex items-center justify-center text-sm" aria-label="Add emoji">
+                <i class="far fa-smile"></i>
+            </button>
+        </div>`;
+}
+
+// Curated set for the comment emoji picker — common reaction/expression
+// emoji, not exhaustive. QUICK_REACT_EMOJIS (message bubble reactions)
+// is a separate, smaller set used for a different purpose, so this is
+// intentionally its own list rather than reusing/extending that one.
+const COMMENT_EMOJI_SET = [
+  "😀",
+  "😂",
+  "🥰",
+  "😍",
+  "😊",
+  "😉",
+  "😎",
+  "🤔",
+  "😢",
+  "😭",
+  "😮",
+  "😅",
+  "🙌",
+  "👏",
+  "🙏",
+  "🔥",
+  "💯",
+  "❤️",
+  "👍",
+  "👎",
+  "🎉",
+  "✨",
+  "💀",
+  "😴",
+];
+
+let _openCommentEmojiPicker = null;
+
+// Inserts "@" at the caret (or appends it) and focuses the input, so
+// tapping the button behaves the way typing "@" yourself would. This is
+// deliberately just the character insert — a full tap-to-search/select
+// mention-autocomplete would need a user-lookup query wired in and is a
+// separate, larger feature to scope out before building.
+window._insertCommentMention = function (postId, btnEl) {
+  const input = getCommentInputEl(postId, btnEl);
+  if (!input) return;
+  _insertTextAtCaret(input, "@");
+  window._syncCommentSendState(postId, input);
+};
+
+window._toggleCommentEmojiPicker = function (postId, btnEl) {
+  if (_openCommentEmojiPicker) {
+    const existing = _openCommentEmojiPicker;
+    _openCommentEmojiPicker = null;
+    existing.remove();
+    if (existing.dataset.forBtn === btnEl.dataset.pickerId) return;
+  }
+
+  const input = getCommentInputEl(postId, btnEl);
+  const extras = btnEl.closest(".comment-input-extras");
+  const wrapper = extras?.parentElement;
+  if (!input || !wrapper) return;
+
+  const pickerId = `picker-${Date.now()}`;
+  btnEl.dataset.pickerId = pickerId;
+
+  const picker = document.createElement("div");
+  picker.className = "comment-emoji-picker";
+  picker.dataset.forBtn = pickerId;
+  picker.innerHTML = COMMENT_EMOJI_SET.map(
+    (emoji) =>
+      `<button type="button" class="comment-emoji-picker-item" onclick="window._insertCommentEmoji('${postId}', '${emoji}', this)">${emoji}</button>`,
+  ).join("");
+
+  wrapper.appendChild(picker);
+  _openCommentEmojiPicker = picker;
+
+  // Close on an outside tap, same convention as the app's other
+  // dismissable popovers — deferred registration so the opening click
+  // that's still bubbling right now doesn't immediately close it.
+  setTimeout(() => {
+    document.addEventListener("click", _dismissCommentEmojiPicker, {
+      once: true,
+    });
+  }, 0);
+};
+
+function _dismissCommentEmojiPicker() {
+  if (_openCommentEmojiPicker) {
+    _openCommentEmojiPicker.remove();
+    _openCommentEmojiPicker = null;
+  }
+}
+
+window._insertCommentEmoji = function (postId, emoji, itemEl) {
+  const input = getCommentInputEl(postId, itemEl);
+  if (input) {
+    _insertTextAtCaret(input, emoji);
+    window._syncCommentSendState(postId, input);
+  }
+  _dismissCommentEmojiPicker();
+};
+
+// Inserts text at the current caret position (or appends it if the
+// input never had focus/a caret position yet), then restores focus and
+// places the caret right after the inserted text — so tapping @ or an
+// emoji multiple times keeps building the message in place rather than
+// always jumping back to the end.
+function _insertTextAtCaret(inputEl, text) {
+  const start = inputEl.selectionStart ?? inputEl.value.length;
+  const end = inputEl.selectionEnd ?? inputEl.value.length;
+  inputEl.value =
+    inputEl.value.slice(0, start) + text + inputEl.value.slice(end);
+  inputEl.focus();
+  const caret = start + text.length;
+  inputEl.setSelectionRange(caret, caret);
+}
+
 function updateCommentCountUI(postId, count) {
   commentCountCache[postId] = count;
   document
@@ -8183,15 +8316,18 @@ function renderFeedCard(id, d, options = {}) {
 
         <div id="comments-${escAttr(id)}" class="hidden px-3 pb-3 space-y-2 border-t border-slate-800/60 pt-2">
             <div class="flex items-center gap-1.5">
-                <input
-                    type="text"
-                    inputmode="text"
-                    maxlength="500"
-                    placeholder="Add a comment…"
-                    class="comment-input-field flex-1 bg-slate-800/80 border border-slate-700/50 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 transition"
-                    oninput="window._syncCommentSendState('${escAttr(id)}', this)"
-                    onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
-                >
+                <div class="relative flex-1">
+                    <input
+                        type="text"
+                        inputmode="text"
+                        maxlength="500"
+                        placeholder="Add a comment…"
+                        class="comment-input-field w-full bg-slate-800/80 border border-slate-700/50 text-white text-xs rounded-xl pl-2.5 pr-16 py-1.5 focus:outline-none focus:border-amber-400 transition"
+                        oninput="window._syncCommentSendState('${escAttr(id)}', this)"
+                        onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
+                    >
+                    ${renderCommentInputExtras(escAttr(id))}
+                </div>
                 <button id="cancel-reply-${escAttr(id)}" onclick="window.cancelCommentReply('${escAttr(id)}', this)" class="hidden text-[10px] text-slate-500 hover:text-white px-1">✕</button>
                 <button
                     id="comment-send-${escAttr(id)}"
@@ -9007,15 +9143,18 @@ function renderReelCard(id, d, lazy = false) {
             </div>
             <div id="comment-list-${escAttr(id)}" class="comments-scroll-area"></div>
             <div class="comments-input-row flex items-center gap-1.5">
-                <input
-                    type="text"
-                    inputmode="text"
-                    maxlength="500"
-                    placeholder="Add a comment…"
-                    class="comment-input-field flex-1 bg-white/10 border border-white/20 text-white text-xs rounded-xl px-2.5 py-2 focus:outline-none focus:border-amber-400 transition"
-                    oninput="window._syncCommentSendState('${escAttr(id)}', this)"
-                    onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
-                >
+                <div class="relative flex-1">
+                    <input
+                        type="text"
+                        inputmode="text"
+                        maxlength="500"
+                        placeholder="Add a comment…"
+                        class="comment-input-field w-full bg-white/10 border border-white/20 text-white text-xs rounded-xl pl-2.5 pr-16 py-2 focus:outline-none focus:border-amber-400 transition"
+                        oninput="window._syncCommentSendState('${escAttr(id)}', this)"
+                        onkeydown="if(event.key==='Enter') window.submitCommentFromInput('${escAttr(id)}', this)"
+                    >
+                    ${renderCommentInputExtras(escAttr(id))}
+                </div>
                 <button id="cancel-reply-${escAttr(id)}" onclick="window.cancelCommentReply('${escAttr(id)}', this)" class="hidden text-[10px] text-white/60 hover:text-white px-1">✕</button>
                 <button
                     id="comment-send-${escAttr(id)}"
@@ -14126,12 +14265,36 @@ function _syncChatPanelHeight() {
       ? bottomNav.getBoundingClientRect().height
       : 0;
   const top = panel.getBoundingClientRect().top;
-  const available = window.innerHeight - top - navH - 16;
+  // Bug fix: this used to measure against window.innerHeight, which on
+  // most mobile browsers stays the LAYOUT viewport height and does not
+  // shrink when the on-screen keyboard opens (only the visual viewport
+  // does). That mismatch is exactly what produced the dead black gap
+  // between the message input and the keyboard in the screenshot — the
+  // panel kept sizing itself for space the keyboard was now covering.
+  // window.visualViewport.height tracks the keyboard in real time, so
+  // prefer it when the browser supports it (all modern mobile browsers
+  // do) and fall back to innerHeight otherwise.
+  const vv = window.visualViewport;
+  const viewportH = vv ? vv.height + vv.offsetTop : window.innerHeight;
+  const available = viewportH - top - navH - 16;
   panel.style.height = `${Math.max(320, available)}px`;
 }
 window.addEventListener("resize", () => {
   if (document.getElementById("chat-thread-panel")) _syncChatPanelHeight();
 });
+// visualViewport fires its own 'resize' (keyboard open/close) and
+// 'scroll' (keyboard nudging the visible area, common on Android) events
+// that window's 'resize' above does not reliably catch on mobile — both
+// need to be covered so the panel keeps hugging the keyboard exactly
+// instead of leaving/reintroducing the gap as it opens and closes.
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", () => {
+    if (document.getElementById("chat-thread-panel")) _syncChatPanelHeight();
+  });
+  window.visualViewport.addEventListener("scroll", () => {
+    if (document.getElementById("chat-thread-panel")) _syncChatPanelHeight();
+  });
+}
 
 // Enter sends the message (matching every mainstream chat app); Shift+Enter
 // inserts a normal newline instead, so a longer message can actually be
@@ -15932,6 +16095,16 @@ let lastScrollY = window.scrollY;
 window.addEventListener(
   "scroll",
   () => {
+    // Bug fix: this listener used to run unconditionally, so any page
+    // scroll (including the reflow a mobile keyboard triggers while a
+    // DM thread is open) would unhide the bottom nav — even though
+    // renderChatThreadShell() deliberately hid it and #chat-thread-panel
+    // already reserves the exact space for a nav-less layout. That's
+    // what made the tab bar reappear over an open chat thread. Bail out
+    // entirely while a thread is open; closeDMThread() is what's
+    // responsible for restoring the nav once the thread actually closes.
+    if (document.getElementById("chat-thread-panel")) return;
+
     const bottomNav = document.querySelector(".bottom-nav-container");
     const header = document.getElementById("site-header");
     const currentScrollY = window.scrollY;

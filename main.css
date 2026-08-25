@@ -1446,6 +1446,42 @@ body {
   background: #0b1220;
 }
 
+/* Small popup grid for the @/emoji buttons inside the comment input
+   pill — anchored to the input's own wrapper (position: relative) so it
+   floats just above the pill regardless of which of the three comment
+   surfaces (feed card, Reels sheet, detail page) it's opened from. */
+.comment-emoji-picker {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 2px;
+  width: 208px;
+  padding: 8px;
+  background: #0f172a;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  max-height: 168px;
+  overflow-y: auto;
+}
+.comment-emoji-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  font-size: 18px;
+  line-height: 1;
+  border-radius: 8px;
+  transition: background 0.12s ease;
+}
+.comment-emoji-picker-item:active {
+  background: rgba(251, 191, 36, 0.15);
+}
+
 /* Backdrop behind the comment sheet — click to dismiss */
 .comments-backdrop {
   position: fixed;
