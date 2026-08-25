@@ -1446,42 +1446,6 @@ body {
   background: #0b1220;
 }
 
-/* Small popup grid for the @/emoji buttons inside the comment input
-   pill — anchored to the input's own wrapper (position: relative) so it
-   floats just above the pill regardless of which of the three comment
-   surfaces (feed card, Reels sheet, detail page) it's opened from. */
-.comment-emoji-picker {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
-  z-index: 30;
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 2px;
-  width: 208px;
-  padding: 8px;
-  background: #0f172a;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 14px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-  max-height: 168px;
-  overflow-y: auto;
-}
-.comment-emoji-picker-item {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  font-size: 18px;
-  line-height: 1;
-  border-radius: 8px;
-  transition: background 0.12s ease;
-}
-.comment-emoji-picker-item:active {
-  background: rgba(251, 191, 36, 0.15);
-}
-
 /* Backdrop behind the comment sheet — click to dismiss */
 .comments-backdrop {
   position: fixed;
@@ -1932,6 +1896,45 @@ main {
    with it. renderChatThreadShell()/closeDMThread() toggle this class. */
 main.chat-thread-open {
   padding-bottom: 0;
+}
+
+/* Bug fix: #dms-content and #profile-content sit in a `space-y-*`
+   container right after their own `-auth-gate` sibling
+   (#dms-auth-gate / #profile-auth-gate). Tailwind's space-y applies
+   margin-top to any element preceded by ANOTHER element in the DOM —
+   it has no idea that gate sibling is `display: none`, so the margin
+   still applied even though there was nothing visible above it to
+   space away from. That's what was opening up an extra, unintended
+   gap above the Inbox/Profile cards that doesn't exist on any other
+   tab. The gate and content are never shown at the same time (one
+   always replaces the other), so content genuinely never needs that
+   top margin — safe to zero it unconditionally. */
+#dms-content,
+#profile-content {
+  margin-top: 0 !important;
+}
+
+/* Bug fix: #chat-thread-panel used to be a normal in-flow block, so its
+   on-screen position depended on wherever the page (body) happened to
+   be scrolled — any page scroll while a thread was open (elastic
+   bounce, the keyboard's own focus-scroll, etc.) dragged the whole
+   header+messages+input cluster along with it, which is what made the
+   composer look like it was scrolling with the page. position: fixed
+   takes it out of document flow entirely so body scroll can no longer
+   move it — top/height are still set from JS (_syncChatPanelHeight),
+   since the space depends on the real header height and the keyboard.
+   max-width/margin match the same 448px-centered convention already
+   used by .site-header and .bottom-nav so it lines up with them. */
+.chat-thread-fixed {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 45;
+  max-width: 448px;
+  margin: 0 auto;
+  padding: 0 16px env(safe-area-inset-bottom, 0px);
+  background: #020617;
+  box-sizing: border-box;
 }
 
 .bottom-nav-hidden {

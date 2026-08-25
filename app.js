@@ -1266,15 +1266,13 @@ document.addEventListener(
     if (nextIndex < 0 || nextIndex >= _swipeTabOrder.length) return;
 
     const nextTab = _swipeTabOrder[nextIndex];
-    const btn = document.querySelector(`.feed-tab-btn[data-tab="${nextTab}"]`);
+    const btn = document.querySelector(
+      `.feed-tab-btn[data-tab="${nextTab}"]`,
+    );
     if (!btn) return;
     hapticTap(10);
     window.filterFeed(nextTab, btn);
-    btn.scrollIntoView({
-      behavior: "smooth",
-      inline: "center",
-      block: "nearest",
-    });
+    btn.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
   },
   { passive: true },
 );
@@ -2104,9 +2102,7 @@ function isSaleActiveForPost(d) {
 // read this instead of d.price directly, since d.price alone ignores an
 // active sale.
 function getEffectivePrice(d) {
-  return isSaleActiveForPost(d)
-    ? Number(d.original_price)
-    : Number(d.price || 0);
+  return isSaleActiveForPost(d) ? Number(d.original_price) : Number(d.price || 0);
 }
 
 // Renders a flash-sale end time as a countdown string. Days-out sales
@@ -3117,6 +3113,19 @@ function setNavHighlight(btn, viewId) {
 }
 
 window.navigateTo = function (viewId, btn = null) {
+  // Fix: refreshing the page always dropped you back on the Feed/All
+  // tab, even if you'd been sitting on DMs or Profile — nothing
+  // remembered which tab you were actually on, so a hard reload had no
+  // way to restore it. Every real tab switch (not internal calls like
+  // the search bar routing through 'explore') records itself here;
+  // _restoreLastViewOnce() (near the auth boot handler) reads it back
+  // exactly once per app load.
+  if (["feed", "explore", "dms", "profile", "cart"].includes(viewId)) {
+    try {
+      localStorage.setItem("campus_market_last_view", viewId);
+    } catch (_) {}
+  }
+
   // Fix: the header search bar (and its results) used to stay open on
   // screen after switching tabs — the only thing that closed it was
   // tapping the search icon a second time. Closing it here means
@@ -4545,14 +4554,28 @@ window.handleAvatarUpload = async function (inputEl) {
     // user_avatar across ALL of the person's existing posts whenever
     // they change their avatar, so past and future posts both show
     // the current photo.
+    //
+    // Real bug found here: supabase-js's .update() does NOT throw when
+    // Row Level Security silently blocks the write — it just resolves
+    // normally with { data: null, error: {...} }. This code never
+    // looked at that `error`, so a blocked update looked identical to
+    // a successful one: no exception, catch block never ran, and the
+    // "Avatar updated everywhere! ✓" toast fired regardless of whether
+    // anything actually got written. Destructuring and checking
+    // `error` explicitly (like the rest of the app already does for
+    // every other insert/update) is what actually surfaces a genuine
+    // RLS rejection instead of masking it as silent success.
+    let postsBackfillOk = true;
     try {
-      await supabase
+      const { error: postsBackfillErr } = await supabase
         .from("posts")
         .update({ user_avatar: dynamicUrl })
         .eq("user_id", currentUserData.id);
+      if (postsBackfillErr) throw postsBackfillErr;
     } catch (backfillErr) {
-      console.warn(
-        "Avatar backfill onto existing posts failed (non-fatal):",
+      postsBackfillOk = false;
+      console.error(
+        "Avatar backfill onto existing posts failed:",
         backfillErr,
       );
     }
@@ -4562,15 +4585,19 @@ window.handleAvatarUpload = async function (inputEl) {
     // the moment each comment was posted, so old comments kept
     // showing a stale photo forever while only brand-new comments got
     // the current one. Same backfill, same table-agnostic reasoning,
-    // just a different table.
+    // just a different table — and the same silent-RLS-failure bug
+    // fixed above applies here too, now checked the same way.
+    let commentsBackfillOk = true;
     try {
-      await supabase
+      const { error: commentsBackfillErr } = await supabase
         .from("comments")
         .update({ user_avatar: dynamicUrl })
         .eq("user_id", currentUserData.id);
+      if (commentsBackfillErr) throw commentsBackfillErr;
     } catch (backfillErr) {
-      console.warn(
-        "Avatar backfill onto existing comments failed (non-fatal):",
+      commentsBackfillOk = false;
+      console.error(
+        "Avatar backfill onto existing comments failed:",
         backfillErr,
       );
     }
@@ -4591,7 +4618,18 @@ window.handleAvatarUpload = async function (inputEl) {
         img.src = dynamicUrl;
       });
 
-    showToast("Avatar updated everywhere! ✓");
+    showToast(
+      postsBackfillOk && commentsBackfillOk
+        ? "Avatar updated everywhere! ✓"
+        : "Avatar updated, but couldn't sync to your older " +
+            [
+              !postsBackfillOk && "posts",
+              !commentsBackfillOk && "comments",
+            ]
+              .filter(Boolean)
+              .join(" or ") +
+            " — check the Supabase RLS UPDATE policy for that table.",
+    );
   } catch (err) {
     console.error("Avatar upload error:", err);
     if (previewEl) {
@@ -6225,44 +6263,11 @@ function renderCommentInputExtras(id) {
             <button type="button" onclick="window._insertCommentMention('${id}', this)" class="text-white/50 hover:text-amber-400 active:scale-90 transition w-5 h-5 flex items-center justify-center text-xs" aria-label="Mention someone">
                 <i class="fas fa-at"></i>
             </button>
-            <button type="button" onclick="window._toggleCommentEmojiPicker('${id}', this)" class="text-white/50 hover:text-amber-400 active:scale-90 transition w-5 h-5 flex items-center justify-center text-sm" aria-label="Add emoji">
+            <button type="button" onclick="window._focusCommentEmoji('${id}', this)" class="text-white/50 hover:text-amber-400 active:scale-90 transition w-5 h-5 flex items-center justify-center text-sm" aria-label="Add emoji">
                 <i class="far fa-smile"></i>
             </button>
         </div>`;
 }
-
-// Curated set for the comment emoji picker — common reaction/expression
-// emoji, not exhaustive. QUICK_REACT_EMOJIS (message bubble reactions)
-// is a separate, smaller set used for a different purpose, so this is
-// intentionally its own list rather than reusing/extending that one.
-const COMMENT_EMOJI_SET = [
-  "😀",
-  "😂",
-  "🥰",
-  "😍",
-  "😊",
-  "😉",
-  "😎",
-  "🤔",
-  "😢",
-  "😭",
-  "😮",
-  "😅",
-  "🙌",
-  "👏",
-  "🙏",
-  "🔥",
-  "💯",
-  "❤️",
-  "👍",
-  "👎",
-  "🎉",
-  "✨",
-  "💀",
-  "😴",
-];
-
-let _openCommentEmojiPicker = null;
 
 // Inserts "@" at the caret (or appends it) and focuses the input, so
 // tapping the button behaves the way typing "@" yourself would. This is
@@ -6276,63 +6281,25 @@ window._insertCommentMention = function (postId, btnEl) {
   window._syncCommentSendState(postId, input);
 };
 
-window._toggleCommentEmojiPicker = function (postId, btnEl) {
-  if (_openCommentEmojiPicker) {
-    const existing = _openCommentEmojiPicker;
-    _openCommentEmojiPicker = null;
-    existing.remove();
-    if (existing.dataset.forBtn === btnEl.dataset.pickerId) return;
-  }
-
+// Requested change: no more in-app emoji grid — it never looked or
+// behaved quite like a real picker (see screenshot). This just focuses
+// the comment input so the phone's own keyboard comes up, the same as
+// tapping the field directly — from there the person uses their
+// keyboard's own emoji/smiley key (visible in their screenshot) exactly
+// like they would in any other app's comment box, instead of this app
+// trying to reproduce a picker.
+window._focusCommentEmoji = function (postId, btnEl) {
   const input = getCommentInputEl(postId, btnEl);
-  const extras = btnEl.closest(".comment-input-extras");
-  const wrapper = extras?.parentElement;
-  if (!input || !wrapper) return;
-
-  const pickerId = `picker-${Date.now()}`;
-  btnEl.dataset.pickerId = pickerId;
-
-  const picker = document.createElement("div");
-  picker.className = "comment-emoji-picker";
-  picker.dataset.forBtn = pickerId;
-  picker.innerHTML = COMMENT_EMOJI_SET.map(
-    (emoji) =>
-      `<button type="button" class="comment-emoji-picker-item" onclick="window._insertCommentEmoji('${postId}', '${emoji}', this)">${emoji}</button>`,
-  ).join("");
-
-  wrapper.appendChild(picker);
-  _openCommentEmojiPicker = picker;
-
-  // Close on an outside tap, same convention as the app's other
-  // dismissable popovers — deferred registration so the opening click
-  // that's still bubbling right now doesn't immediately close it.
-  setTimeout(() => {
-    document.addEventListener("click", _dismissCommentEmojiPicker, {
-      once: true,
-    });
-  }, 0);
-};
-
-function _dismissCommentEmojiPicker() {
-  if (_openCommentEmojiPicker) {
-    _openCommentEmojiPicker.remove();
-    _openCommentEmojiPicker = null;
-  }
-}
-
-window._insertCommentEmoji = function (postId, emoji, itemEl) {
-  const input = getCommentInputEl(postId, itemEl);
-  if (input) {
-    _insertTextAtCaret(input, emoji);
-    window._syncCommentSendState(postId, input);
-  }
-  _dismissCommentEmojiPicker();
+  if (!input) return;
+  input.focus();
+  const len = input.value.length;
+  input.setSelectionRange(len, len);
 };
 
 // Inserts text at the current caret position (or appends it if the
 // input never had focus/a caret position yet), then restores focus and
-// places the caret right after the inserted text — so tapping @ or an
-// emoji multiple times keeps building the message in place rather than
+// places the caret right after the inserted text — so tapping @
+// multiple times keeps building the message in place rather than
 // always jumping back to the end.
 function _insertTextAtCaret(inputEl, text) {
   const start = inputEl.selectionStart ?? inputEl.value.length;
@@ -9636,9 +9603,7 @@ function buildCartListMarkup() {
                             </button>
                             ${(() => {
                               const cartSaleActive = isSaleActiveForPost(item);
-                              const cartDisplayPrice = cartSaleActive
-                                ? item.original_price
-                                : item.price;
+                              const cartDisplayPrice = cartSaleActive ? item.original_price : item.price;
                               return `<div class="flex items-baseline gap-1.5 mt-1">
                                 <span class="text-amber-400 font-extrabold text-sm${cartSaleActive ? " sale-live-price" : ""}" ${cartSaleActive ? `data-sale-ends="${escAttr(item.sale_ends_at)}" data-regular-price="${escAttr(String(item.price ?? 0))}"` : ""}>GH₵${formatGHS(cartDisplayPrice ?? 0)}</span>
                                 ${cartSaleActive ? `<span class="sale-strike-price text-slate-500 text-[11px] line-through" data-sale-ends="${escAttr(item.sale_ends_at)}">GH₵${formatGHS(item.price ?? 0)}</span>` : ""}
@@ -13869,7 +13834,9 @@ document.addEventListener("visibilitychange", () => {
       const { data } = await supabase
         .from("conversations")
         .select("*")
-        .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
+        .or(
+          `user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`,
+        )
         .order("last_message_at", { ascending: false });
       conversationsCache = data || [];
       if (!activeConversationId) renderInboxList();
@@ -14205,7 +14172,7 @@ function renderChatThreadShell() {
   document.querySelector("main")?.classList.add("chat-thread-open");
 
   content.innerHTML = `
-        <div id="chat-thread-panel" class="flex flex-col">
+        <div id="chat-thread-panel" class="flex flex-col chat-thread-fixed">
             <div class="flex items-center gap-3 pb-3 border-b border-slate-800/60 mb-3">
                 <button onclick="window.closeDMThread()" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800 text-slate-300 active:scale-90 transition shrink-0">
                     <i class="fas fa-arrow-left text-xs"></i>
@@ -14242,29 +14209,38 @@ function renderChatThreadShell() {
   _syncChatPanelHeight();
 }
 
-// Bug fix: this panel used to get a hardcoded `height: calc(100vh -
-// 220px)` inline style. #dms-content isn't full-viewport/fixed — it's
-// a normal in-flow block sitting below whatever chrome (top bar,
-// safe-area insets, etc.) is already above it on the page, so "100vh
-// minus one guessed constant" had no reliable relationship to the
-// actual space left on screen. That guess was wrong by roughly the
-// amount of chrome the -220px constant didn't account for, which is
-// what left the whole header+messages+input cluster floating with a
-// dead gap below the input instead of reaching the bottom nav. This
-// measures the real remaining space instead of guessing it.
+// Bug fix: the panel used to be a normal in-flow block, so its position
+// on screen depended on wherever the page (body) happened to be
+// scrolled to — if anything caused even a small page scroll while a
+// thread was open (elastic bounce, the keyboard's own focus-scroll,
+// etc.), the whole header+messages+input cluster would drift with it
+// instead of staying pinned, which is what made the composer look like
+// it was "scrolling with the page." .chat-thread-fixed (below, in CSS)
+// takes the panel out of document flow entirely with position: fixed,
+// so from here on it's anchored to the real viewport and body scroll
+// simply can't move it — same as how Instagram/WhatsApp's own chat
+// screens are never part of the page's normal scroll. This function's
+// job becomes purely: tell the now-independent panel exactly where its
+// top and height should be (which still has to be JS-measured, since
+// that space depends on the real header height and the keyboard).
 function _syncChatPanelHeight() {
   const panel = document.getElementById("chat-thread-panel");
   if (!panel) return;
+  const header = document.querySelector(".site-header");
+  const top = header ? header.getBoundingClientRect().bottom : 0;
+  panel.style.top = `${Math.max(0, top)}px`;
+
   const bottomNav = document.querySelector(".bottom-nav-container");
-  // .bottom-nav-hidden only translates the nav off-screen (it stays in
-  // the layout, so its own height doesn't change) — treat it as 0 here
-  // or the panel would still leave a gap the size of the now-invisible
-  // nav bar at the bottom, instead of actually reaching the edge.
+  // Defensive only — renderChatThreadShell() always hides the nav while
+  // a thread is open, and the scroll-listener fix keeps it hidden, so
+  // this should always read 0. Kept as a fallback in case something
+  // else on the page adds the nav back without going through the
+  // normal close path.
   const navH =
     bottomNav && !bottomNav.classList.contains("bottom-nav-hidden")
       ? bottomNav.getBoundingClientRect().height
       : 0;
-  const top = panel.getBoundingClientRect().top;
+
   // Bug fix: this used to measure against window.innerHeight, which on
   // most mobile browsers stays the LAYOUT viewport height and does not
   // shrink when the on-screen keyboard opens (only the visual viewport
@@ -14276,7 +14252,7 @@ function _syncChatPanelHeight() {
   // do) and fall back to innerHeight otherwise.
   const vv = window.visualViewport;
   const viewportH = vv ? vv.height + vv.offsetTop : window.innerHeight;
-  const available = viewportH - top - navH - 16;
+  const available = viewportH - top - navH;
   panel.style.height = `${Math.max(320, available)}px`;
 }
 window.addEventListener("resize", () => {
@@ -15734,6 +15710,32 @@ if (activeAuthChange) {
       window.updateAuthButton(user);
     }
 
+    // Fix (continued from navigateTo()'s side of this): actually apply
+    // the remembered tab, once, right after the first real auth
+    // resolution of this page load — early enough that it doesn't
+    // wait on the slower profile/avatar fetch below, but not before we
+    // at least know whether anyone's signed in (dms/profile need
+    // that to decide gate-vs-content). Guarded by a flag rather than
+    // an unconditional call because onAuthStateChange can legitimately
+    // re-fire later in the session (token refresh, etc.) — re-running
+    // this on one of those later firings would yank the person back to
+    // an old tab uninvited while they're actively using the app.
+    if (!window.__initialViewRestored) {
+      window.__initialViewRestored = true;
+      try {
+        const savedView = localStorage.getItem("campus_market_last_view");
+        // dms/profile only restored for someone actually signed in —
+        // otherwise a visitor who's never logged in (or has since
+        // signed out) would land straight on a "sign in required"
+        // gate instead of the normal browsable feed, which is worse
+        // than the tab-reset behavior this is fixing.
+        const needsAuth = savedView === "dms" || savedView === "profile";
+        if (savedView && savedView !== "feed" && (!needsAuth || user)) {
+          window.navigateTo(savedView);
+        }
+      } catch (_) {}
+    }
+
     if (user) {
       const metadata = user.user_metadata || {};
       // Mark first successful auth so the auto-login-popup below can
@@ -15766,11 +15768,12 @@ if (activeAuthChange) {
       const nameEl = document.getElementById("profile-ui-name");
 
       try {
-        const { data: savedUserRow, error: savedUserRowError } = await supabase
-          .from("profiles")
-          .select("avatar, institution, region, is_verified")
-          .eq("id", user.id)
-          .maybeSingle();
+        const { data: savedUserRow, error: savedUserRowError } =
+          await supabase
+            .from("profiles")
+            .select("avatar, institution, region, is_verified")
+            .eq("id", user.id)
+            .maybeSingle();
         const savedAvatar =
           savedUserRow?.avatar ||
           metadata.avatar_url ||
@@ -16575,9 +16578,7 @@ window.shareSelectedGridItems = function () {
     return;
   }
 
-  const lines = items.map(
-    (d) => `• ${d.title} — GH₵${formatGHS(d.price ?? 0)}`,
-  );
+  const lines = items.map((d) => `• ${d.title} — GH₵${formatGHS(d.price ?? 0)}`);
   const intro =
     items.length === 1
       ? `Check out "${items[0].title}" on Unix-Sync!`
