@@ -12,9 +12,13 @@
          (i.e. most of the feed) zoomed the entire app. Locking the
          viewport here removes that entirely rather than leaving a
          half-working "zoom some things" feature in place. -->
+    <!-- viewport-fit=cover: lets content extend into curved screen
+         corners / behind the home indicator instead of stopping at a
+         safe rectangle, and is required for env(safe-area-inset-*) to
+         report real values on some engines. -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <title>Unix-Sync</title>
     <!-- Unix-sync is intentionally always-dark — it never offered a

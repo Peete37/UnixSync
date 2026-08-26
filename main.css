@@ -88,6 +88,7 @@ body {
 /* Eliminate the blue tap overlay flash on mobile browsers */
 body {
   -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
 }
 
 /* Zoom is disabled app-wide (see index.html's viewport meta:
@@ -101,6 +102,9 @@ body {
    media included (see scopeZoomToMedia() in app.js). */
 html {
   touch-action: pan-x pan-y;
+  /* Disables the native pull-to-refresh gesture (real full-page
+     reload) without affecting normal pan scrolling. */
+  overscroll-behavior-y: none;
 }
 
 /* Desktop sidebar nav is hidden by default on every screen size — the
