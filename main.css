@@ -1914,6 +1914,25 @@ main.chat-thread-open {
   margin-top: 0 !important;
 }
 
+/* Requested: tighten the space between the sticky header and the first
+   card on every tab except Reels. `main`'s own pt-4 (16px) is left as
+   the fallback default (still applies to Reels), and each tab's own
+   already-existing body class opts it into the smaller value instead —
+   feed-tab-all/feed-tab-grid/feed-tab-deals (syncFeedTabBodyClasses)
+   cover every Feed sub-tab except Reels, which manages its own
+   immersive full-bleed header separately via header-reels-mode and was
+   never part of this request. profile-tab/dms-tab/explore-tab/cart-tab
+   are toggled the same way in navigateTo(). */
+body.profile-tab main,
+body.dms-tab main,
+body.explore-tab main,
+body.cart-tab main,
+body.feed-tab-all main,
+body.feed-tab-grid main,
+body.feed-tab-deals main {
+  padding-top: 4px;
+}
+
 /* Bug fix: #chat-thread-panel used to be a normal in-flow block, so its
    on-screen position depended on wherever the page (body) happened to
    be scrolled — any page scroll while a thread was open (elastic

@@ -3319,6 +3319,12 @@ window.navigateTo = function (viewId, btn = null) {
     );
   }
   document.body.classList.toggle("profile-tab", viewId === "profile");
+  // Same idea as profile-tab above, just for the other two views where
+  // the header-to-content gap needed closing — see the matching CSS
+  // rule for what this actually changes.
+  document.body.classList.toggle("dms-tab", viewId === "dms");
+  document.body.classList.toggle("explore-tab", viewId === "explore");
+  document.body.classList.toggle("cart-tab", viewId === "cart");
 
   clearNavHighlights();
   setNavHighlight(btn, viewId);
@@ -10832,6 +10838,24 @@ function syncFeedTabBodyClasses(type) {
   document.body.classList.toggle("feed-tab-grid", isGridTab);
   document.body.classList.toggle("feed-tab-deals", type === "deals");
 }
+
+// Fix: the CSS rule that tightens the header-to-content gap on Feed
+// (see body.feed-tab-* in main.css) depends on these same classes —
+// but until now they were only ever set from inside navigateTo()/
+// filterFeed(), i.e. only once the person actually switched tabs. On a
+// fresh page load, Feed is visible by default without either of those
+// ever having run yet (the raw HTML has no `hidden` class on
+// feed-container to begin with), so body had none of these classes on
+// first paint and the gap only closed itself retroactively after the
+// first tap. This module-scope function isn't reachable from the
+// separate classic <script> in index-18.html (module top-level
+// declarations aren't exposed on window the way classic-script ones
+// are), so it's called once here instead, right after boot, using
+// whatever tab currentFeedType already resolved to (including a
+// restored saved tab) — matching exactly what will actually render.
+document.addEventListener("DOMContentLoaded", () => {
+  syncFeedTabBodyClasses(currentFeedType);
+});
 
 // ─── 15. FILTERING ────────────────────────────────────────────────────────────
 window.filterFeed = function (type, clickedBtn = null) {
