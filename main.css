@@ -752,6 +752,22 @@ body {
   pointer-events: none;
   z-index: -1;
 }
+/* Requested: remove the glow specifically on the same tabs the
+   header-gap tightening above was just done for (Profile, DMs,
+   Explore, Cart, and every Feed sub-tab except Reels) — reusing those
+   exact same body classes so this always matches whatever "the tabs
+   we've just finished" ends up meaning as that set changes. Reels
+   keeps it untouched; its own header-reels-mode layout was never part
+   of this. */
+body.profile-tab .site-header::before,
+body.dms-tab .site-header::before,
+body.explore-tab .site-header::before,
+body.cart-tab .site-header::before,
+body.feed-tab-all .site-header::before,
+body.feed-tab-grid .site-header::before,
+body.feed-tab-deals .site-header::before {
+  display: none;
+}
 .site-header .header-row {
   position: relative;
 }
@@ -1930,7 +1946,7 @@ body.cart-tab main,
 body.feed-tab-all main,
 body.feed-tab-grid main,
 body.feed-tab-deals main {
-  padding-top: 4px;
+  padding-top: 0;
 }
 
 /* Bug fix: #chat-thread-panel used to be a normal in-flow block, so its
