@@ -193,8 +193,19 @@ self.addEventListener("push", (event) => {
   const title = payload.title || "Unix-Sync";
   const options = {
     body: payload.body || "",
-    icon: "./icon-192.png",
-    badge: "./icon-192.png",
+    // Bug fix: this pointed at ./icon-192.png, a root-level file that
+    // was never actually confirmed to exist (it was a guess when this
+    // was first added) — the real manifest.json only has icon/S2.png
+    // (192x192) and icon/S4.png (512x512), inside an icon/ subfolder
+    // with different filenames entirely. A 404 here doesn't break the
+    // notification — showNotification() still fires with a blank/
+    // browser-default icon — but it does mean the app's actual icon
+    // never showed up. icon/S2.png is the closest match to the old
+    // 192x192 intent; badge stays small/monochrome-friendly so reusing
+    // the same 192 asset is fine (badges render tiny and tinted by the
+    // OS regardless of the source image's own colors).
+    icon: "./icon/S2.png",
+    badge: "./icon/S2.png",
     data: { url: payload.url || "./" },
   };
 

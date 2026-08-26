@@ -243,7 +243,6 @@ let currentFeedType = _validFeedTabs.includes(_savedFeedTab)
   ? _savedFeedTab
   : "all"; // tracks active tab: all | reels | following | product | skill | deals
 let _feedLoadGeneration = 0;
-let _lastRenderedFeedGeneration = -1;
 
 // ─── CAMPUS SCOPE STATE ────────────────────────────────────────────────────────
 // Previously institution/region were pure display metadata — every tab
@@ -1044,7 +1043,7 @@ const EXIT_CONFIRM_PRESSES_REQUIRED = 2;
 let _exitConfirmPresses = 0;
 let _exitConfirmTimer = null;
 
-window.addEventListener("popstate", () => {
+window.addEventListener("popstate", (event) => {
   // A layer that was closed manually (X/back-arrow button) already
   // consumed its own history entry via popUiState's history.back()
   // call below — this popstate is that call catching up, not a real
@@ -1068,44 +1067,87 @@ window.addEventListener("popstate", () => {
     return;
   }
 
-  // No overlays open: walk back through prior top-level views. The real
-  // browser history now gets one entry per user-driven navigateTo(), so
-  // the phone's own back gesture can unwind Feed -> Profile -> DMs etc.
-  if (_viewHistory.length > 1) {
-    _viewHistory.pop();
-    const prev = _viewHistory[_viewHistory.length - 1];
-    if (prev) {
-      window._isViewNavInProgress = true;
-      try {
-        window.navigateTo(prev);
-      } finally {
-        window._isViewNavInProgress = false;
-      }
+  // Bug fix: this used to walk two SEPARATE trails (_viewHistory for
+  // top-level tabs, _feedTabHistory for feed sub-tabs) in a fixed
+  // priority — view-history always checked first, feed-tab-history
+  // second — regardless of which kind of navigation actually happened
+  // most recently. But both trails were pushing onto the exact same
+  // real browser history timeline, interleaved in whatever order the
+  // person actually navigated in. Checking a fixed priority instead of
+  // that real order is what caused two different bugs: (1) a back-press
+  // right after swiping through several feed tabs could jump straight
+  // to an old Profile/DMs visit from earlier in the session instead of
+  // stepping back through the tabs just swiped through, and (2) with no
+  // stale _viewHistory to (wrongly) catch it first, a feed-tab
+  // back-press could instead fall all the way through to the exit
+  // confirmation, closing the app, because the fixed-priority walk
+  // wasn't actually looking at what the very next entry back was.
+  //
+  // The fix: every entry this app pushes is already tagged with what
+  // it represents (uiFeedTab / uiView / uiLayer) — event.state on a
+  // popstate IS the entry the browser just landed on, so reading it
+  // directly restores exactly whatever was actually there, in the
+  // exact order it was really visited, with no separate bookkeeping
+  // needed to get that order right.
+  const state = event.state;
+
+  if (state && state.uiFeedTab) {
+    const btn = document.querySelector(
+      `.feed-tab-btn[data-tab="${state.uiFeedTab}"]`,
+    );
+    _isFeedTabNavInProgress = true;
+    try {
+      window.filterFeed(state.uiFeedTab, btn);
+    } finally {
+      _isFeedTabNavInProgress = false;
     }
     return;
   }
 
-  // Feed sub-tabs keep their own explicit trail now, so back walks the
-  // actual in-session tab order until it bottoms out on All. If the app
-  // cold-opened directly onto a restored non-All tab, the trail is empty;
-  // in that case, one back still lands on All before exit confirmation.
+  if (state && state.uiView) {
+    window._isViewNavInProgress = true;
+    try {
+      window.navigateTo(state.uiView);
+    } finally {
+      window._isViewNavInProgress = false;
+    }
+    return;
+  }
+
+  // No app-specific tag on this entry — either the very first,
+  // pre-app history entry (created before this app ever called
+  // pushState), or an exit-guard placeholder from the block below.
+  // Same baseline guarantee every branch above already gives: land on
+  // Feed/All before a genuine exit is ever considered, rather than
+  // jumping straight to exit-confirmation from wherever this happens
+  // to be.
   const feedContainer = document.getElementById("feed-container");
   const isFeedVisible =
     feedContainer && !feedContainer.classList.contains("hidden");
+
   if (
     isFeedVisible &&
     typeof currentFeedType !== "undefined" &&
-    (_feedTabHistory.length > 0 || currentFeedType !== "all")
+    currentFeedType !== "all"
   ) {
-    const prevTab = _feedTabHistory.length > 0 ? _feedTabHistory.pop() : "all";
-    const prevBtn = document.querySelector(
-      `.feed-tab-btn[data-tab="${prevTab}"]`,
-    );
     _isFeedTabNavInProgress = true;
     try {
-      window.filterFeed(prevTab, prevBtn);
+      window.filterFeed(
+        "all",
+        document.querySelector('.feed-tab-btn[data-tab="all"]'),
+      );
     } finally {
       _isFeedTabNavInProgress = false;
+    }
+    return;
+  }
+
+  if (!isFeedVisible) {
+    window._isViewNavInProgress = true;
+    try {
+      window.navigateTo("feed");
+    } finally {
+      window._isViewNavInProgress = false;
     }
     return;
   }
@@ -1266,13 +1308,15 @@ document.addEventListener(
     if (nextIndex < 0 || nextIndex >= _swipeTabOrder.length) return;
 
     const nextTab = _swipeTabOrder[nextIndex];
-    const btn = document.querySelector(
-      `.feed-tab-btn[data-tab="${nextTab}"]`,
-    );
+    const btn = document.querySelector(`.feed-tab-btn[data-tab="${nextTab}"]`);
     if (!btn) return;
     hapticTap(10);
     window.filterFeed(nextTab, btn);
-    btn.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+    btn.scrollIntoView({
+      behavior: "smooth",
+      inline: "center",
+      block: "nearest",
+    });
   },
   { passive: true },
 );
@@ -2102,7 +2146,9 @@ function isSaleActiveForPost(d) {
 // read this instead of d.price directly, since d.price alone ignores an
 // active sale.
 function getEffectivePrice(d) {
-  return isSaleActiveForPost(d) ? Number(d.original_price) : Number(d.price || 0);
+  return isSaleActiveForPost(d)
+    ? Number(d.original_price)
+    : Number(d.price || 0);
 }
 
 // Renders a flash-sale end time as a countdown string. Days-out sales
@@ -2806,8 +2852,27 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
       }
     }
 
-    if (myGeneration >= _lastRenderedFeedGeneration) {
-      _lastRenderedFeedGeneration = myGeneration;
+    // Bug fix: this used to check `myGeneration >= _lastRenderedFeedGeneration`
+    // — a "highest generation rendered so far" tracker meant to stop an
+    // older fetch from clobbering a newer one that already finished. But
+    // it did nothing to stop an older fetch from rendering when it's
+    // simply the FIRST one to reach this point — which happens easily on
+    // a fast swipe-through (All -> Services -> Following in quick
+    // succession): Services' subscribeFeed() call can still be sitting in
+    // its own awaits (the saves/likes reconciliation above) when
+    // Following's loadFollowingFeed() finishes and renders first. Since
+    // loadFollowingFeed() never touches _lastRenderedFeedGeneration at
+    // all, Services' late fetch then reaches here, sees
+    // myGeneration >= _lastRenderedFeedGeneration is still true, and
+    // overwrites the DOM with Services content — while the tab UI still
+    // says Following. That's exactly what "swiped to Following, saw
+    // Services" was. The fix is the same strict check already used
+    // everywhere else in this file (see line ~2708 above, and
+    // loadFollowingFeed/loadTrendingFeed): only render if this fetch's
+    // generation is still the CURRENT one, full stop — no fetch that's
+    // been superseded by ANY subsequent tab switch is allowed to paint
+    // the screen, regardless of arrival order.
+    if (myGeneration === _feedLoadGeneration) {
       renderFeedFromCache();
     }
   } catch (err) {
@@ -4574,10 +4639,7 @@ window.handleAvatarUpload = async function (inputEl) {
       if (postsBackfillErr) throw postsBackfillErr;
     } catch (backfillErr) {
       postsBackfillOk = false;
-      console.error(
-        "Avatar backfill onto existing posts failed:",
-        backfillErr,
-      );
+      console.error("Avatar backfill onto existing posts failed:", backfillErr);
     }
 
     // Fix: comments have the exact same denormalized-snapshot problem
@@ -4622,10 +4684,7 @@ window.handleAvatarUpload = async function (inputEl) {
       postsBackfillOk && commentsBackfillOk
         ? "Avatar updated everywhere! ✓"
         : "Avatar updated, but couldn't sync to your older " +
-            [
-              !postsBackfillOk && "posts",
-              !commentsBackfillOk && "comments",
-            ]
+            [!postsBackfillOk && "posts", !commentsBackfillOk && "comments"]
               .filter(Boolean)
               .join(" or ") +
             " — check the Supabase RLS UPDATE policy for that table.",
@@ -9603,7 +9662,9 @@ function buildCartListMarkup() {
                             </button>
                             ${(() => {
                               const cartSaleActive = isSaleActiveForPost(item);
-                              const cartDisplayPrice = cartSaleActive ? item.original_price : item.price;
+                              const cartDisplayPrice = cartSaleActive
+                                ? item.original_price
+                                : item.price;
                               return `<div class="flex items-baseline gap-1.5 mt-1">
                                 <span class="text-amber-400 font-extrabold text-sm${cartSaleActive ? " sale-live-price" : ""}" ${cartSaleActive ? `data-sale-ends="${escAttr(item.sale_ends_at)}" data-regular-price="${escAttr(String(item.price ?? 0))}"` : ""}>GH₵${formatGHS(cartDisplayPrice ?? 0)}</span>
                                 ${cartSaleActive ? `<span class="sale-strike-price text-slate-500 text-[11px] line-through" data-sale-ends="${escAttr(item.sale_ends_at)}">GH₵${formatGHS(item.price ?? 0)}</span>` : ""}
@@ -13834,9 +13895,7 @@ document.addEventListener("visibilitychange", () => {
       const { data } = await supabase
         .from("conversations")
         .select("*")
-        .or(
-          `user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`,
-        )
+        .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
         .order("last_message_at", { ascending: false });
       conversationsCache = data || [];
       if (!activeConversationId) renderInboxList();
@@ -15768,12 +15827,11 @@ if (activeAuthChange) {
       const nameEl = document.getElementById("profile-ui-name");
 
       try {
-        const { data: savedUserRow, error: savedUserRowError } =
-          await supabase
-            .from("profiles")
-            .select("avatar, institution, region, is_verified")
-            .eq("id", user.id)
-            .maybeSingle();
+        const { data: savedUserRow, error: savedUserRowError } = await supabase
+          .from("profiles")
+          .select("avatar, institution, region, is_verified")
+          .eq("id", user.id)
+          .maybeSingle();
         const savedAvatar =
           savedUserRow?.avatar ||
           metadata.avatar_url ||
@@ -16578,7 +16636,9 @@ window.shareSelectedGridItems = function () {
     return;
   }
 
-  const lines = items.map((d) => `• ${d.title} — GH₵${formatGHS(d.price ?? 0)}`);
+  const lines = items.map(
+    (d) => `• ${d.title} — GH₵${formatGHS(d.price ?? 0)}`,
+  );
   const intro =
     items.length === 1
       ? `Check out "${items[0].title}" on Unix-Sync!`
