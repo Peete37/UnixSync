@@ -807,7 +807,11 @@ window.addEventListener("popstate", (event) => {
   const isFeedVisible =
     feedContainer && !feedContainer.classList.contains("hidden");
 
-  if (isFeedVisible && typeof currentFeedType !== "undefined" && currentFeedType !== "all") {
+  if (
+    isFeedVisible &&
+    typeof currentFeedType !== "undefined" &&
+    currentFeedType !== "all"
+  ) {
     _isFeedTabNavInProgress = true;
     try {
       window.filterFeed(
@@ -946,13 +950,15 @@ document.addEventListener(
     if (nextIndex < 0 || nextIndex >= _swipeTabOrder.length) return;
 
     const nextTab = _swipeTabOrder[nextIndex];
-    const btn = document.querySelector(
-      `.feed-tab-btn[data-tab="${nextTab}"]`,
-    );
+    const btn = document.querySelector(`.feed-tab-btn[data-tab="${nextTab}"]`);
     if (!btn) return;
     hapticTap(10);
     window.filterFeed(nextTab, btn);
-    btn.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+    btn.scrollIntoView({
+      behavior: "smooth",
+      inline: "center",
+      block: "nearest",
+    });
   },
   { passive: true },
 );
@@ -981,18 +987,41 @@ function _ptrIndicatorEl() {
   return el;
 }
 
+// Refreshes whichever feed sub-tab is actually active via filterFeed()
+// itself - it already knows to route "following"/"trending" to their own
+// loaders and everything else through subscribeFeed(). Calling
+// subscribeFeed() directly here (as an earlier version did) bypassed that
+// routing and always fetched the generic all-posts bucket regardless of
+// tab, which is what caused Following to show the same content as All.
+async function _ptrRefreshFeed() {
+  _feedBucketCache.clear();
+  const btn = document.querySelector(
+    `.feed-tab-btn[data-tab="${currentFeedType}"]`,
+  );
+  filterFeed(currentFeedType, btn);
+  // filterFeed() doesn't return a promise tied to its internal fetch
+  // completing, so this just keeps the spinner up briefly instead of
+  // vanishing before anything's actually loaded.
+  await new Promise((r) => setTimeout(r, 500));
+}
+
 function _ptrTarget() {
   const feedContainer = document.getElementById("feed-container");
-  if (
-    feedContainer &&
-    !feedContainer.classList.contains("hidden") &&
-    currentFeedType !== "reels"
-  ) {
+  const feedVisible =
+    feedContainer && !feedContainer.classList.contains("hidden");
+
+  if (feedVisible && currentFeedType === "reels") {
+    const posts = document.getElementById("posts-feed");
     return {
-      refresh: async () => {
-        _feedBucketCache.clear();
-        await subscribeFeed();
-      },
+      scrollTop: () => posts?.scrollTop ?? 0,
+      refresh: _ptrRefreshFeed,
+    };
+  }
+  if (feedVisible) {
+    return {
+      scrollTop: () =>
+        (document.scrollingElement || document.documentElement).scrollTop,
+      refresh: _ptrRefreshFeed,
     };
   }
   const dmsContainer = document.getElementById("dms-container");
@@ -1001,7 +1030,11 @@ function _ptrTarget() {
     !dmsContainer.classList.contains("hidden") &&
     !document.getElementById("chat-thread-panel")
   ) {
-    return { refresh: refreshInboxList };
+    return {
+      scrollTop: () =>
+        (document.scrollingElement || document.documentElement).scrollTop,
+      refresh: refreshInboxList,
+    };
   }
   return null;
 }
@@ -1011,9 +1044,8 @@ document.addEventListener(
   (e) => {
     if (_ptrActive || e.touches.length !== 1) return;
     if (_uiStack.length > 0) return;
-    if ((document.scrollingElement || document.documentElement).scrollTop > 0)
-      return;
-    if (!_ptrTarget()) return;
+    const startTarget = _ptrTarget();
+    if (!startTarget || startTarget.scrollTop() > 0) return;
     _ptrStartY = e.touches[0].clientY;
     _ptrPulling = true;
   },
@@ -1025,11 +1057,8 @@ document.addEventListener(
   (e) => {
     if (!_ptrPulling || _ptrActive || e.touches.length !== 1) return;
     const dy = e.touches[0].clientY - _ptrStartY;
-    if (
-      dy <= 0 ||
-      (document.scrollingElement || document.documentElement).scrollTop > 0 ||
-      !_ptrTarget()
-    ) {
+    const moveTarget = _ptrTarget();
+    if (dy <= 0 || !moveTarget || moveTarget.scrollTop() > 0) {
       _ptrPulling = false;
       _ptrIndicatorEl().style.transform = `translateY(${PTR_HIDDEN_Y}px)`;
       return;
@@ -1731,7 +1760,9 @@ function isSaleActiveForPost(d) {
 }
 // The price a buyer actually pays right now.
 function getEffectivePrice(d) {
-  return isSaleActiveForPost(d) ? Number(d.original_price) : Number(d.price || 0);
+  return isSaleActiveForPost(d)
+    ? Number(d.original_price)
+    : Number(d.price || 0);
 }
 
 // Renders a flash-sale end time as a countdown string.
@@ -3753,10 +3784,7 @@ window.handleAvatarUpload = async function (inputEl) {
       if (postsBackfillErr) throw postsBackfillErr;
     } catch (backfillErr) {
       postsBackfillOk = false;
-      console.error(
-        "Avatar backfill onto existing posts failed:",
-        backfillErr,
-      );
+      console.error("Avatar backfill onto existing posts failed:", backfillErr);
     }
 
     // Fix: comments have the exact same denormalized-snapshot problem as posts did (see above).
@@ -3792,10 +3820,7 @@ window.handleAvatarUpload = async function (inputEl) {
       postsBackfillOk && commentsBackfillOk
         ? "Avatar updated everywhere! ✓"
         : "Avatar updated, but couldn't sync to your older " +
-            [
-              !postsBackfillOk && "posts",
-              !commentsBackfillOk && "comments",
-            ]
+            [!postsBackfillOk && "posts", !commentsBackfillOk && "comments"]
               .filter(Boolean)
               .join(" or ") +
             " — check the Supabase RLS UPDATE policy for that table.",
@@ -8069,7 +8094,9 @@ function buildCartListMarkup() {
                             </button>
                             ${(() => {
                               const cartSaleActive = isSaleActiveForPost(item);
-                              const cartDisplayPrice = cartSaleActive ? item.original_price : item.price;
+                              const cartDisplayPrice = cartSaleActive
+                                ? item.original_price
+                                : item.price;
                               return `<div class="flex items-baseline gap-1.5 mt-1">
                                 <span class="text-amber-400 font-extrabold text-sm${cartSaleActive ? " sale-live-price" : ""}" ${cartSaleActive ? `data-sale-ends="${escAttr(item.sale_ends_at)}" data-regular-price="${escAttr(String(item.price ?? 0))}"` : ""}>GH₵${formatGHS(cartDisplayPrice ?? 0)}</span>
                                 ${cartSaleActive ? `<span class="sale-strike-price text-slate-500 text-[11px] line-through" data-sale-ends="${escAttr(item.sale_ends_at)}">GH₵${formatGHS(item.price ?? 0)}</span>` : ""}
@@ -11756,9 +11783,7 @@ document.addEventListener("visibilitychange", () => {
       const { data } = await supabase
         .from("conversations")
         .select("*")
-        .or(
-          `user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`,
-        )
+        .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
         .order("last_message_at", { ascending: false });
       conversationsCache = data || [];
       if (!activeConversationId) renderInboxList();
@@ -13413,12 +13438,11 @@ if (activeAuthChange) {
       const nameEl = document.getElementById("profile-ui-name");
 
       try {
-        const { data: savedUserRow, error: savedUserRowError } =
-          await supabase
-            .from("profiles")
-            .select("avatar, institution, region, is_verified")
-            .eq("id", user.id)
-            .maybeSingle();
+        const { data: savedUserRow, error: savedUserRowError } = await supabase
+          .from("profiles")
+          .select("avatar, institution, region, is_verified")
+          .eq("id", user.id)
+          .maybeSingle();
         const savedAvatar =
           savedUserRow?.avatar ||
           metadata.avatar_url ||
@@ -14053,7 +14077,9 @@ window.shareSelectedGridItems = function () {
     return;
   }
 
-  const lines = items.map((d) => `• ${d.title} — GH₵${formatGHS(d.price ?? 0)}`);
+  const lines = items.map(
+    (d) => `• ${d.title} — GH₵${formatGHS(d.price ?? 0)}`,
+  );
   const intro =
     items.length === 1
       ? `Check out "${items[0].title}" on Unix-Sync!`

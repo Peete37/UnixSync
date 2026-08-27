@@ -1264,6 +1264,7 @@ body.feed-tab-deals .site-header::before {
   width: 100%;
   max-width: 100%;
   z-index: 30;
+  overscroll-behavior-y: contain;
 }
 
 /* Profile post viewer: tapping a grid post on any profile opens this
