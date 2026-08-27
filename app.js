@@ -9,20 +9,7 @@ import {
 // ─── 2. CONSTANTS ─────────────────────────────────────────────────────────────
 const FEED_PAGE_SIZE = 15; // posts per page for infinite scroll (was a single hard cap of 30 with no way to see more)
 
-// Fix: allCachedPosts had no ceiling at all — every continuous scroll
-// session just kept concatenating more pages onto it forever. Two
-// compounding problems from that: (1) every tab switch re-filters and
-// rebuilds its ENTIRE grid from this one shared array, so that got
-// slower the longer a session went on, regardless of which tab —
-// matches "freezes on all tabs, not just video"; (2) the Following
-// tab's own pagination (see loadNextFollowingPage) does a FULL
-// re-render on every single page load, not an incremental append, so
-// that path got slower on every scroll within itself too, not just
-// on tab switches. Capping how many posts one continuous session
-// accumulates bounds both — once hit, infinite scroll stops with a
-// "you've reached the end for now" message rather than pretending
-// there's nothing left; switching tabs or refreshing starts a clean
-// session under the cap again.
+// Fix: allCachedPosts had no ceiling at all.
 const FEED_SESSION_CAP = 300;
 const FEED_LIMIT = FEED_PAGE_SIZE; // kept for any code that still references the old name
 const SEARCH_LIMIT = 100;
@@ -50,15 +37,7 @@ const FEED_SELECT_COLUMNS = [
   "created_at",
 ].join(", ");
 
-// Prefers the small thumbnail_url over the full-size media_url — this is
-// the fix for the Cached Egress overage: every grid tile (Saved Items,
-// Profile grid, Archived Posts, public profile grid — all roughly
-// 48-150px on screen) was loading the same full 1600px listing photo
-// used in the full-size detail carousel. Falls back to the first
-// media_url for posts created before thumbnail_url existed (it'll be
-// null/empty for those), so nothing breaks for older posts — they just
-// don't get the bandwidth savings retroactively, same as the original
-// photo-compression fix only applying to new uploads.
+// Prefers the small thumbnail_url over the full-size media_url.
 function pickThumbnailUrl(post) {
   const parseFirst = (raw) => {
     if (!raw) return "";
@@ -77,11 +56,7 @@ const FEED_DECAY_HALF_LIFE_HOURS = 72;
 const FEED_DECAY_ENGAGEMENT_WEIGHT = 0.18;
 const SAVED_ALERTS_KEY = "campus_market_saved_alerts";
 const ALERT_NOTIFIED_POSTS_KEY = "campus_market_alert_notified_posts";
-// Fix: counter for open modals that lock body scroll, so overlapping modals
-// (e.g. detail view opened while confirmation sheet is still up) only
-// release the lock on the LAST close. Without this, a confirm dialog
-// followed by a detail open/close could free scroll under the dialog.
-// Bug-hunting pass — declared at top so every open/close path can ++/-- it.
+// Fix: counter for open modals that lock body scroll, so overlapping modals (e.g.
 let _bodyScrollLocks = 0;
 const DEFAULT_SAFE_SWAP_ZONES = {
   default: [
@@ -201,27 +176,10 @@ let currentFeedChan = null;
 let currentCommentsChan = null;
 let allCachedPosts = [];
 let isAuthInitialized = false;
-// Fix: Supabase's onAuthStateChange can legitimately fire more than once
-// for a single page load (INITIAL_SESSION, then SIGNED_IN, sometimes
-// TOKEN_REFRESHED) — every one of those events used to re-run the ENTIRE
-// signed-in boot sequence below (re-fetching the profile, re-syncing
-// blocked users, and critically, re-calling filterFeed -> subscribeFeed,
-// which re-ran the whole likes-table sync and re-subscribed to
-// realtime). Confirmed directly in the Network tab: a single refresh
-// produced SIX separate GET requests to the likes table and THREE
-// duplicate-key 409 Conflicts on POST to likes, all within about a
-// second of each other — exactly what repeated boot runs would produce.
-// This flag ensures the expensive one-time boot work only ever runs
-// once per real page load, regardless of how many auth events fire.
+// Fix: Supabase's onAuthStateChange can legitimately fire more than once for a single page load (INITIAL_SESSION, then SIGNED_IN, sometimes TOKEN_REFRESHED).
 let hasBootedFeedForSession = false;
 let isOnline = navigator.onLine;
-// Fix: this used to be hardcoded to 'all', so any refresh silently
-// bounced the person back to the All tab no matter what they were
-// viewing (Reels, Products, Services, Following). Restoring it from
-// localStorage here means the boot sequence below (which calls
-// filterFeed(currentFeedType, ...)) naturally lands back on the right
-// tab. Falls back to 'all' for first-ever visits or an unrecognized
-// stored value.
+// Fix: this used to be hardcoded to 'all', so any refresh silently bounced the person back to the All tab no matter what they were viewing (Reels, Products, Services, Following).
 const _validFeedTabs = [
   "all",
   "reels",
@@ -230,14 +188,7 @@ const _validFeedTabs = [
   "skill",
   "deals",
 ];
-// Fix: this was reading from localStorage, which survives even a full
-// app close/reopen — so whichever tab (e.g. Products) was open when the
-// person last left the app stayed "stuck" forever, always opening there
-// instead of the All feed. sessionStorage still remembers the tab while
-// actively navigating around within one visit (switching tabs, opening a
-// post and coming back), but clears once the app/tab is actually closed
-// — the "opens on the wrong tab after being away for a while" symptom
-// only happens with localStorage, not sessionStorage.
+// Fix: this was reading from localStorage, which survives even a full app close/reopen.
 const _savedFeedTab = sessionStorage.getItem("campus_market_feed_tab");
 let currentFeedType = _validFeedTabs.includes(_savedFeedTab)
   ? _savedFeedTab
@@ -245,24 +196,10 @@ let currentFeedType = _validFeedTabs.includes(_savedFeedTab)
 let _feedLoadGeneration = 0;
 
 // ─── CAMPUS SCOPE STATE ────────────────────────────────────────────────────────
-// Previously institution/region were pure display metadata — every tab
-// showed every post from every campus mixed together nationwide, which
-// defeats the point of a *campus* marketplace (a Legon student browsing
-// past a fridge for sale in Tamale they can't realistically go pick up).
-// Now the All/Products/Services tabs default to "mine" — the signed-in
-// person's own institution — with an easy one-tap switch to "everywhere"
-// Three-tier feed scope: 'institution' (the person's own campus, the
-// tightest/default view) -> 'region' (their wider region, e.g. all of
-// Greater Accra) -> 'everywhere' (nationwide, no scope at all). Each tier
-// is explicit and persisted, rather than silently auto-expanding — the
-// person always knows which one they're looking at and chose to move to
-// a wider one themselves, whether via the banner toggle or the
-// end-of-feed "want to see more?" prompt.
+// Previously institution/region were pure display metadata.
 const _validCampusScopes = ["institution", "region", "everywhere"];
 const _savedCampusScope = localStorage.getItem("campus_market_scope");
-// 'mine' was the old value from before region scoping existed — treat it
-// as 'institution' so anyone's existing saved preference still maps
-// sensibly instead of silently resetting.
+// 'mine' was the old value from before region scoping existed.
 let currentCampusScope =
   _savedCampusScope === "mine"
     ? "institution"
@@ -271,44 +208,13 @@ let currentCampusScope =
       : "institution";
 
 // ─── PAGINATION STATE ─────────────────────────────────────────────────────────
-// Fix: the feed previously had a single hard cap (FEED_LIMIT posts) with
-// no way to see anything older — once a tab had more than 30 listings,
-// the rest were simply invisible forever. Now each tab tracks its own
-// "base filter" (the type condition, independent of how many posts are
-// currently loaded) plus how many pages have been loaded and whether more
-// exist, so scrolling to the bottom can fetch the next page instead of
-// just... stopping.
+// Fix: the feed previously had a single hard cap (FEED_LIMIT posts) with no way to see anything older.
 let currentFeedBaseFilter = null; // function(query) -> query, applies only the tab's type condition
-// Fix: switching between tabs that query the exact same underlying data
-// (All/Products/Deals all fetch every post, unfiltered by type — only
-// Services and Reels apply a real DB-level filter) used to always show
-// a skeleton and re-fetch/re-sync everything from scratch, even for a
-// same-signature switch a second later. Other apps don't reload on
-// every tab tap; they only refetch when the data actually could have
-// changed.
-//
-// Keyed by "query signature" (see computeFeedSignature) rather than a
-// single last-loaded slot — a single slot only helped when re-tapping
-// the SAME tab twice in a row; ping-ponging between two different tabs
-// (e.g. All <-> Reels) evicted it every time. A small per-signature map
-// lets each tab keep its own short-lived cache independently.
-//
-// Fix: a fetch that gets superseded by an even-faster subsequent tab
-// switch (see the _feedLoadGeneration guard in subscribeFeed) used to
-// bail out before ever recording anything here — so switching tabs
-// FASTER than the network round-trip (exactly "move through tabs really
-// really quickly") meant this cache could never actually populate,
-// defeating the whole point. subscribeFeed now stores into this map
-// unconditionally, keyed by the signature it was fetching for (passed
-// in directly as a parameter, not read back off a shared mutable
-// variable, which would itself be racy under overlapping in-flight
-// fetches) — even a "losing" fetch's data is still perfectly good for
-// whenever that tab comes up again.
+// Fix: switching between tabs that query the exact same underlying data (All/Products/Deals all fetch every post, unfiltered by type.
 const _feedBucketCache = new Map(); // signature -> { posts, feedLoadedCount, feedHasMore, feedCursor, loadedAt }
 const FEED_CACHE_REUSE_TTL_MS = 25000;
 function _feedSignatureBucket(type) {
-  // All/Products/Deals share one identical unfiltered query; Services
-  // and Reels each apply their own distinct DB-level filter.
+  // All/Products/Deals share one identical unfiltered query.
   return type === "skill" ? "skill" : type === "reels" ? "reels" : "shared";
 }
 function computeFeedSignature(type) {
@@ -329,56 +235,19 @@ let followingFeedCursor = null;
 
 // DM state
 let currentConversationsChan = null;
-// Fix: opening the DMs tab always showed "Loading chats..." and
-// re-fetched from scratch, even seconds after you'd just left it — the
-// conversations-list realtime channel actually stays subscribed for the
-// entire signed-in session (it's only torn down on sign-out/reconnect,
-// not on navigating away from DMs), so conversationsCache is already
-// kept fresh in the background the whole time you're elsewhere in the
-// app. As long as that channel is still alive, a repeat visit can skip
-// straight to rendering what's already cached instead of reloading.
+// Fix: opening the DMs tab always showed "Loading chats..." and re-fetched from scratch, even seconds after you'd just left it.
 let _inboxLoadedOnce = false;
 let currentMessagesChan = null;
 let activeConversationId = null;
 let activeConversationPeer = null; // { id, name, avatar }
 // Full message objects for the currently-open thread, keyed by id (string).
-// Lets the message action sheet (react/forward/delete) look up a message's
-// real data from just the id stored in its bubble's data-message-id
-// attribute, instead of re-fetching or re-parsing the DOM.
 let _activeThreadMessagesById = new Map();
 // Offer state for the currently-open thread, keyed by offers.id (string).
-// Separate from messages because an offer's status changes over time
-// (pending -> accepted/declined) while the message that announced it
-// never does — see renderOfferBubble.
 let _activeThreadOffersById = new Map();
 let conversationsCache = [];
 
 // ─── SESSION MANAGEMENT ────────────────────────────────────────────────────
-// Three requirements live here:
-//   1. Session expiration on a defined timeline — an ABSOLUTE timeout
-//      (signed out after N days no matter how active), on top of
-//      Supabase's own JWT expiry. (An idle/inactivity timeout used to
-//      also live here — removed: 45 minutes of no taps/scrolls was
-//      signing people out of a casual browsing app mid-session for no
-//      real security benefit this app needs. The absolute timeout below,
-//      the device limit, and instant revocation already cover the
-//      actual risk — a stolen/forgotten session staying valid forever.)
-//   2. A concurrent-session limit — tracked in a `user_sessions` table
-//      (see session-management-migration.sql, run once in the Supabase
-//      SQL editor) since the client SDK has no built-in concept of "how
-//      many other devices am I logged into right now."
-//   3. Instant revocation — "sign out my other devices" from Settings.
-//
-// IMPORTANT, stated plainly rather than glossed over: user_sessions is a
-// COOPERATIVE signal, not a cryptographic one. A real device running this
-// real app sees a revoke via Realtime and signs itself out within about a
-// second. That alone does not invalidate the underlying Supabase refresh
-// token at the server. For the actual hard guarantee — the thing that
-// stops a raw stolen token from working at all, even outside this app —
-// signOutOtherSessions() below ALSO calls Supabase's own native
-// supabase.auth.signOut({ scope: 'others' }), which really does invalidate
-// those tokens server-side. Both layers matter; don't remove either one
-// thinking the other covers it.
+// Three requirements live here: 1. Session expiration on a defined timeline.
 const SESSION_ABSOLUTE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000; // 7 days since login
 const SESSION_HEARTBEAT_MS = 10 * 60 * 1000; // keep-alive interval — see note below
 const SESSION_EXPIRY_CHECK_MS = 60 * 1000;
@@ -394,10 +263,7 @@ function _newSessionId() {
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-// Reads the current device's session id, minting one if this is the first
-// time we've checked (e.g. a session that predates this feature shipping).
-// Does NOT reset the absolute-timeout clock — see startNewDeviceSession()
-// for that, which only runs on an actual fresh sign-in.
+// Reads the current device's session id, minting one if this is the first time we've checked (e.g.
 function getDeviceSessionId() {
   let id = localStorage.getItem("campus_market_session_id");
   if (!id) {
@@ -413,9 +279,7 @@ function getDeviceSessionId() {
   return id;
 }
 
-// Call this at the moment of an actual fresh sign-in (not a page refresh
-// of an already-signed-in session) — mints a brand new session id and
-// resets the absolute-timeout clock to right now.
+// Call this at the moment of an actual fresh sign-in (not a page refresh of an already-signed-in session).
 function startNewDeviceSession() {
   const id = _newSessionId();
   const now = String(Date.now());
@@ -440,9 +304,7 @@ function guessDeviceLabel() {
   return `${browser} · ${isMobile ? "Mobile" : "Desktop"}`;
 }
 
-// Registers this device as an active session and enforces the concurrent
-// limit by soft-revoking the oldest session(s) beyond MAX_CONCURRENT_SESSIONS.
-// Best-effort by design — session tracking must never block sign-in itself.
+// Registers this device as an active session and enforces the concurrent limit by soft-revoking the oldest session(s) beyond MAX_CONCURRENT_SESSIONS.
 async function registerDeviceSession() {
   if (!currentUserData?.id) return;
   const sessionId = getDeviceSessionId();
@@ -471,9 +333,7 @@ async function registerDeviceSession() {
     if (!activeSessions || activeSessions.length <= MAX_CONCURRENT_SESSIONS)
       return;
 
-    // Over the limit: soft-revoke the oldest excess. Sorted ascending
-    // by created_at, so this device (the most recent) is never among
-    // the ones removed.
+    // Over the limit: soft-revoke the oldest excess.
     const excessIds = activeSessions
       .slice(0, activeSessions.length - MAX_CONCURRENT_SESSIONS)
       .map((s) => s.id);
@@ -488,11 +348,7 @@ async function registerDeviceSession() {
   }
 }
 
-// "Sign out my other devices." Marks every other session row revoked
-// (fast, cooperative — other open tabs react within ~1s via Realtime)
-// and calls Supabase's native scope:'others' sign-out for the real
-// server-enforced guarantee, in case one of those devices is offline
-// right now and won't see the Realtime event until it reconnects.
+// "Sign out my other devices." Marks every other session row revoked (fast, cooperative.
 window.signOutOtherSessions = async function () {
   if (!currentUserData?.id) {
     showToast("Sign in first.");
@@ -519,13 +375,7 @@ window.signOutOtherSessions = async function () {
 
 function startSessionHeartbeat() {
   stopSessionHeartbeat();
-  // Was every 60s originally — cut to every 10 minutes. The only thing
-  // last_seen_at is actually used for is deciding which rows are "stale"
-  // in the 90-day cleanup query (user-sessions-migration.sql), which
-  // doesn't need minute-level precision. At 60s, every signed-in tab
-  // open in the background was writing to the database 1,440 times a
-  // day for no benefit; at 10 minutes it's 144 — same usefulness, a
-  // tenth of the database write volume.
+  // Was every 60s originally — cut to every 10 minutes.
   sessionHeartbeatTimer = setInterval(async () => {
     if (!currentUserData?.id || !isOnline) return;
     try {
@@ -546,11 +396,7 @@ function stopSessionHeartbeat() {
   }
 }
 
-// Absolute expiry, checked on an interval rather than a single setTimeout
-// — a laptop that sleeps pauses JS timers but not the wall clock, so a
-// periodic check against a real timestamp catches the true elapsed time
-// whenever the tab wakes back up, instead of firing early or (worse)
-// never firing at all.
+// Absolute expiry, checked on an interval rather than a single setTimeout.
 function startSessionExpiryWatch() {
   stopSessionExpiryWatch();
   sessionIdleCheckTimer = setInterval(() => {
@@ -573,10 +419,7 @@ function stopSessionExpiryWatch() {
   }
 }
 
-// Realtime listener: if this exact session gets marked revoked — by
-// signOutOtherSessions() on another device, or by the concurrent-limit
-// enforcement in registerDeviceSession() bumping it off — sign out
-// immediately instead of waiting for the next heartbeat or API call.
+// Realtime listener: if this exact session gets marked revoked.
 function startSessionRevokeListener() {
   stopSessionRevokeListener();
   if (!currentUserData?.id) return;
@@ -610,9 +453,7 @@ function stopSessionRevokeListener() {
 }
 
 // ─── PERFORMANCE TRACKING ───────────────────────────────────────────────────
-// Fire-and-forget, same pattern as the audit log above — a failed perf
-// write must never affect the actual page. See perf-tracking-migration.sql
-// for the table this writes to and ready-made queries to view the data.
+// Fire-and-forget, same pattern as the audit log above.
 async function trackPerf(eventName, durationMs) {
   try {
     await supabase.from("perf_events").insert({
@@ -622,14 +463,11 @@ async function trackPerf(eventName, durationMs) {
       user_id: currentUserData?.id || null,
     });
   } catch (_) {
-    // Telemetry failing silently is correct here — never surface this
-    // to the person using the app.
+    // Telemetry failing silently is correct here.
   }
 }
 
-// Real page load timing, from the browser's own Navigation Timing API —
-// not a hand-rolled timer, so it reflects what actually happened (DNS,
-// TLS, download, DOM parse) rather than just "script start to script end."
+// Real page load timing, from the browser's own Navigation Timing API.
 window.addEventListener("load", () => {
   try {
     const nav = performance.getEntriesByType("navigation")[0];
@@ -638,11 +476,7 @@ window.addEventListener("load", () => {
 });
 
 // ─── SYSTEM ANNOUNCEMENTS ───────────────────────────────────────────────────
-// Maintenance/incident banner. Publishing is entirely manual (see
-// system-announcements-migration.sql) — this code only ever READS.
-// Re-checked periodically (not just once at boot) so a maintenance
-// window that starts or ends while someone already has the app open
-// still shows/clears correctly without needing a refresh.
+// Maintenance/incident banner. Publishing is entirely manual (see system-announcements-migration.sql).
 const SYSTEM_ANNOUNCEMENT_CHECK_MS = 5 * 60 * 1000;
 let systemAnnouncementTimer = null;
 
@@ -668,9 +502,7 @@ async function checkSystemAnnouncements() {
       return;
     }
 
-    // Don't re-show one this device already dismissed — but DO show
-    // it again if it's a different announcement than whatever was
-    // last dismissed.
+    // Don't re-show one this device already dismissed.
     if (
       localStorage.getItem("campus_market_dismissed_announcement") ===
       announcement.id
@@ -711,21 +543,11 @@ function startSystemAnnouncementWatch() {
   );
 }
 
-// Runs regardless of sign-in state — a maintenance notice needs to reach
-// signed-out visitors too, so this is NOT tied to the auth-boot sequence
-// the way session tracking/event logging above are.
+// Runs regardless of sign-in state — a maintenance notice needs to reach signed-out visitors too, so this is NOT tied to the auth-boot sequence the way session tracking/event logging above are.
 startSystemAnnouncementWatch();
 
 // ─── USAGE EVENT TRACKING ───────────────────────────────────────────────────
-// Same fire-and-forget pattern as everything else in this section. Backs
-// the cohort/dropout analysis queries in user-events-migration.sql —
-// those need a history of when people were actually active, which is
-// exactly what logging events over time provides.
-//
-// userIdOverride exists for exactly one situation: sign-in/sign-up
-// success, where this needs to fire BEFORE currentUserData gets set by
-// the auth-state observer that runs after. Every other call site can
-// omit the third argument and it'll use currentUserData.id normally.
+// Same fire-and-forget pattern as everything else in this section.
 async function trackEvent(eventName, detail = {}, userIdOverride = null) {
   const userId = userIdOverride || currentUserData?.id;
   if (!userId) return;
@@ -741,11 +563,7 @@ async function trackEvent(eventName, detail = {}, userIdOverride = null) {
   }
 }
 
-// Records sensitive account actions to the `audit_log` table (see
-// audit-log-migration.sql, run once in the Supabase SQL editor). Fire-and-
-// forget by design: an audit log write failing must never block or fail
-// the actual action it's describing — logging that something happened
-// can't be a precondition for the thing itself happening.
+// Records sensitive account actions to the `audit_log` table (see audit-log-migration.sql, run once in the Supabase SQL editor).
 async function logAuditEvent(action, detail = {}) {
   if (!currentUserData?.id) return;
   try {
@@ -760,14 +578,7 @@ async function logAuditEvent(action, detail = {}) {
   }
 }
 
-// Fix: `last_read_by_me` was referenced when computing unread state but
-// never actually written anywhere (a single boolean column can't
-// correctly represent "read by ME" for a two-person conversation
-// anyway), so unread detection was effectively broken. Tracked here
-// client-side instead: conversationId -> ISO timestamp of the last time
-// THIS user viewed that thread. A conversation is unread if its
-// last_message_at is newer than the stored read timestamp AND the last
-// message wasn't sent by this user.
+// Fix: `last_read_by_me` was referenced when computing unread state but never actually written anywhere (a single boolean column can't correctly represent "read by ME" for a two-person conversation anyway), so unread detection was effectively broken.
 const conversationLastRead = safeStorageJsonParse(
   "campus_market_dm_last_read",
   {},
@@ -807,24 +618,10 @@ function updateDmUnreadBadge() {
   });
 }
 
-// Fix: post ids come back from Supabase as a JS `number` (posts.id is
-// bigint), but the same id also flows through HTML onclick attributes
-// (e.g. onclick="likePost('123', this)") which always stringifies it to
-// "123". Set membership is strict-equality based, so 123 !== "123" and a
-// Set mixing both types silently fails half its lookups — this was the
-// real cause of likes (and bookmarks) reading as "unliked"/"unsaved"
-// after a refresh or a fresh scroll-in render even though the DB had the
-// like recorded correctly. Every id is now funneled through this helper
-// before being stored in or checked against an id-keyed Set, so
-// comparisons are always string-to-string regardless of where the id
-// originated.
+// Fix: post ids come back from Supabase as a JS `number` (posts.id is bigint), but the same id also flows through HTML onclick attributes (e.g.
 const idKey = (id) => String(id);
 
 // Tiny best-effort haptic tap for like/follow-style micro-interactions.
-// navigator.vibrate doesn't exist on iOS Safari at all (no-op there,
-// nothing to guard beyond the typeof check) and can be blocked by the
-// OS/browser for other reasons — wrapped in try/catch so a haptic nice-
-// to-have can never throw and break the actual action it's attached to.
 function hapticTap(ms = 15) {
   try {
     if (typeof navigator !== "undefined" && navigator.vibrate) {
@@ -833,11 +630,7 @@ function hapticTap(ms = 15) {
   } catch (_) {}
 }
 
-// Scroll-to-top button visibility. Pure client-side UI state — no DB/
-// storage involved. Reuses the existing passive window scroll listener
-// pattern (see _lastScrollAt above) rather than adding a second one;
-// threshold check is cheap so it just runs alongside the existing
-// handler instead of a separate listener.
+// Scroll-to-top button visibility. Pure client-side UI state.
 window.addEventListener(
   "scroll",
   () => {
@@ -858,17 +651,10 @@ const likedPostIds = new Set(
 );
 const openCommentIds = new Set(); // tracks which comment sections are open
 
-// Per-post comment sort preference (Reels comment sheet) — 'top' sorts by
-// likes_count desc, 'newest' by created_at desc. Keyed by idKey(postId) so
-// it's remembered per-post if someone reopens the same reel's comments
-// later in the same session; defaults to 'newest' for any post not in here.
+// Per-post comment sort preference (Reels comment sheet).
 const commentSortMode = new Map();
 
-// Theme mode — persisted 'dark' | 'light' | 'system' (default 'dark' for
-// new users; 'system' means follow prefers-color-scheme; otherwise forced
-// dark or light). The actual data-theme attribute on <html> is set by
-// the inline bootstrap script in index.html (before first paint) and
-// then re-applied if the user changes it via the settings UI.
+// Theme mode — persisted 'dark' | 'light' | 'system' (default 'dark' for new users.
 const _validThemeModes = ["dark", "light", "system"];
 const _savedThemeMode = localStorage.getItem("campus_market_theme");
 let currentThemeMode = _validThemeModes.includes(_savedThemeMode)
@@ -878,10 +664,7 @@ const systemPrefersLight = () =>
   window.matchMedia &&
   window.matchMedia("(prefers-color-scheme: light)").matches;
 
-// Applies the theme mode to <html>. Both the resolved value (dark/light)
-// and the mode the user picked are stored on the element so CSS and the
-// settings UI can read either. System mode listens for OS-level changes
-// and re-applies automatically.
+// Applies the theme mode to <html>. Both the resolved value (dark/light) and the mode the user picked are stored on the element so CSS and the settings UI can read either.
 window.applyTheme = function (mode) {
   const valid = ["dark", "light", "system"];
   if (!valid.includes(mode)) mode = "dark";
@@ -893,15 +676,12 @@ window.applyTheme = function (mode) {
   try {
     localStorage.setItem("campus_market_theme", mode);
   } catch (_) {}
-  // Sync the UI selector if it exists yet (settings may not have been
-  // initialized when this fires).
+  // Sync the UI selector if it exists yet (settings may not have been initialized when this fires).
   const sel = document.getElementById("settingsThemeSelect");
   if (sel) sel.value = mode;
 };
 
-// Wire up the live OS-preference listener exactly once — system mode
-// re-applies whenever the device's dark/light setting flips while the
-// app is open.
+// Wire up the live OS-preference listener exactly once.
 if (_savedThemeMode === "system" && window.matchMedia) {
   const mq = window.matchMedia("(prefers-color-scheme: light)");
   const onChange = () => {
@@ -913,15 +693,7 @@ if (_savedThemeMode === "system" && window.matchMedia) {
 
 let userCartList = safeStorageJsonParse("campus_market_cart", []);
 
-// Fix: the header bookmark icon's badge (header-cart-badge) had zero code
-// updating it anywhere — toggleCartItem() carefully updated four separate
-// bookmark ICONS (feed card, grid, reel, detail view) but never this
-// badge, so it stayed permanently stuck at its static "0 hidden" default
-// no matter how many items were actually saved. Synced once here at
-// boot (from whatever's already in userCartList), and called again
-// inside toggleCartItem() below so it updates live on every save/unsave
-// instead of only reflecting reality after a page reload happened to
-// re-run this same boot-time line.
+// Fix: the header bookmark icon's badge (header-cart-badge) had zero code updating it anywhere.
 function syncHeaderCartBadge() {
   const badge = document.getElementById("header-cart-badge");
   if (!badge) return;
@@ -931,15 +703,7 @@ function syncHeaderCartBadge() {
 }
 syncHeaderCartBadge();
 
-// Fix: the Profile page's "Saved Items" pill and tab-label count only
-// ever got refreshed as a side effect of renderCartListView() — which
-// itself only runs when the Saved Items screen is actually open. Saving
-// or unsaving a post from anywhere else (the feed, a detail page) left
-// those two numbers stuck at whatever they were the last time you
-// happened to open that tab, until you clicked into it again. This is
-// deliberately just the count (getValidCartItems().length), not a full
-// renderCartListView() re-render — cheap enough to call unconditionally
-// on every save/unsave, unlike the full card list rebuild.
+// Fix: the Profile page's "Saved Items" pill and tab-label count only ever got refreshed as a side effect of renderCartListView().
 function syncProfileSavedCountBadges() {
   const count = getValidCartItems().length;
   ["profile-saved-count", "profile-saved-count-pill"].forEach((id) => {
@@ -950,18 +714,11 @@ function syncProfileSavedCountBadges() {
 
 Object.defineProperty(window, "_currentUser", { get: () => currentUserData });
 Object.defineProperty(window, "_userCartList", { get: () => userCartList });
-// Debug helper: likedPostIds is a module-scoped const, so it's private
-// to this module and was never reachable from the browser console
-// directly (typing `likedPostIds` there throws "not defined" — that's
-// expected JS module behavior, not a bug). Exposing it read-only here,
-// the same way _currentUser/_userCartList already are, so it can
-// actually be inspected: type `[..._likedPostIds]` in the console to
-// see its contents as a plain array.
+// Debug helper: likedPostIds is a module-scoped const, so it's private to this module and was never reachable from the browser console directly (typing `likedPostIds` there throws "not defined" — that's expected JS module behavior, not a bug).
 Object.defineProperty(window, "_likedPostIds", { get: () => likedPostIds });
 
 // ─── 3b. MEDIA EDIT MODAL STATE (WhatsApp-style edit before upload) ──────────
-// Files staged for review in the "Edit Media" modal before they're actually
-// attached/uploaded. Each entry: { file, url (object URL), rotation, type }
+// Files staged for review in the "Edit Media" modal before they're actually attached/uploaded.
 let stagedMediaFiles = [];
 let activeStagedIndex = 0;
 let finalMediaFiles = []; // the files the user actually confirmed via "Use These Files"
@@ -969,38 +726,16 @@ let finalMediaPreviewUrls = [];
 const MAX_VIDEO_DURATION_SECONDS = 30;
 
 // ─── 3c. HISTORY / BACK-BUTTON STATE ──────────────────────────────────────────
-// Tracks which overlays (modals, comment sheets, DM threads) are open so the
-// phone's hardware/gesture back button closes them one layer at a time
-// instead of exiting/backgrounding the app.
-// Tracks which overlays (modals, comment sheets, DM threads) are open so the
-// phone's hardware/gesture back button closes them one layer at a time
-// instead of exiting/backgrounding the app.
+// Tracks which overlays (modals, comment sheets, DM threads) are open so the phone's hardware/gesture back button closes them one layer at a time instead of exiting/backgrounding the app.
 const _uiStack = [];
-// Feed-tab back trail, separate from top-level view history: when someone
-// walks All -> Reels -> Following -> Deals, the phone's native back
-// gesture should step Deals -> Following -> Reels -> All before the app
-// gets anywhere near its exit confirmation. Restores don't seed this
-// trail — a cold-open directly onto Reels/Deals still gets one back to
-// All via the popstate fallback below, but only explicit in-session tab
-// switches grow the trail.
+// Feed-tab back trail, separate from top-level view history.
 const _feedTabHistory = [];
-// Prevents a tab change triggered BY the popstate handler from pushing a
-// brand-new browser-history entry right back on top of the one the person
-// just popped.
+// Prevents a tab change triggered BY the popstate handler from pushing a brand-new browser-history entry right back on top of the one the person just popped.
 let _isFeedTabNavInProgress = false;
-// Counts history entries that were consumed programmatically (by
-// popUiState below, when a layer is closed via its own X/back-arrow
-// button rather than the phone's back gesture) so the popstate handler
-// can tell "a real user back-press" apart from "our own history.back()
-// call catching up with a manual close" and skip re-processing it.
+// Counts history entries that were consumed programmatically (by popUiState below, when a layer is closed via its own X/back-arrow button rather than the phone's back gesture) so the popstate handler can tell "a real user back-press" apart from "our own history.back() call catching up with a manual close" and skip re-processing it.
 let _suppressPopstateCount = 0;
 
-// Tracks whether the person is actively scrolling right now — used below
-// to defer the feed's Realtime-triggered re-render (which rebuilds
-// potentially dozens of post cards) until scrolling has actually
-// stopped, instead of running it mid-scroll and blocking the main
-// thread for the ~100-250ms that shows up as visible freezing/jank.
-// Passive + capture so this never itself adds scroll jank.
+// Tracks whether the person is actively scrolling right now.
 let _lastScrollAt = 0;
 window.addEventListener(
   "scroll",
@@ -1014,51 +749,25 @@ function _isActivelyScrolling() {
 }
 
 // ─── VIEW HISTORY (Hardware/Gesture back navigation across views) ────────────
-// Fix: the previous popstate handler only closed overlays. Pressing the
-// hardware/gesture back button while on Profile (or any non-feed view with
-// nothing open above it) silently exited/backgrounded the app instead of
-// returning to the Feed tab the way the bottom-nav button does. A separate
-// _viewHistory stack records the last view the user came from so the back
-// button reverses navigateTo() layer-by-layer the way every modern mobile
-// app does (Instagram, TikTok, WhatsApp, Twitter all behave this way).
-//
-// _isViewNavInProgress prevents an internal navigateTo() (triggered when
-// the user pops a view) from immediately pushing itself back onto the
-// stack — otherwise back-then-tap would loop or stick.
+// Fix: the previous popstate handler only closed overlays.
 const _viewHistory = [];
-// Tracks drilling into a "You might also like" post from within an
-// already-open detail modal, so the back button can return to the post
-// you came FROM instead of closing the whole modal (see openDetail()).
+// Tracks drilling into a "You might also like" post from within an already-open detail modal, so the back button can return to the post you came FROM instead of closing the whole modal (see openDetail()).
 let _detailPostStack = [];
 let _currentDetailPostId = null;
 
-// Exit confirmation: when both the overlay stack and the view-history
-// stack are empty (and, per the feed-sub-tab check above, the person is
-// already on the All tab if they're on Feed at all), a back-press would
-// otherwise close the app/PWA immediately. Requires a second back-press
-// within 2 seconds with a "Press back again to exit" toast — the exact
-// convention most Android apps use (Instagram, Twitter, WhatsApp,
-// etc.), one warning then confirm, not a custom multi-press sequence.
+// Exit confirmation: when both the overlay stack and the view-history stack are empty (and, per the feed-sub-tab check above, the person is already on the All tab if they're on Feed at all), a back-press would otherwise close the app/PWA immediately.
 const EXIT_CONFIRM_PRESSES_REQUIRED = 2;
 let _exitConfirmPresses = 0;
 let _exitConfirmTimer = null;
 
 window.addEventListener("popstate", (event) => {
-  // A layer that was closed manually (X/back-arrow button) already
-  // consumed its own history entry via popUiState's history.back()
-  // call below — this popstate is that call catching up, not a real
-  // user back-press, so it must do nothing rather than being treated
-  // as a fresh back-press and closing/navigating something else.
+  // A layer that was closed manually (X/back-arrow button) already consumed its own history entry via popUiState's history.back() call below.
   if (_suppressPopstateCount > 0) {
     _suppressPopstateCount--;
     return;
   }
 
   // Highest priority: a still-open overlay (modal/sheet/DM thread).
-  // Close it first, leave the underlying view alone. The browser just
-  // popped back to whatever state sat underneath this layer already,
-  // so there's nothing to re-push here — just mirror that pop in the
-  // app's own UI stack.
   if (_uiStack.length > 0) {
     const top = _uiStack.pop();
     try {
@@ -1067,28 +776,7 @@ window.addEventListener("popstate", (event) => {
     return;
   }
 
-  // Bug fix: this used to walk two SEPARATE trails (_viewHistory for
-  // top-level tabs, _feedTabHistory for feed sub-tabs) in a fixed
-  // priority — view-history always checked first, feed-tab-history
-  // second — regardless of which kind of navigation actually happened
-  // most recently. But both trails were pushing onto the exact same
-  // real browser history timeline, interleaved in whatever order the
-  // person actually navigated in. Checking a fixed priority instead of
-  // that real order is what caused two different bugs: (1) a back-press
-  // right after swiping through several feed tabs could jump straight
-  // to an old Profile/DMs visit from earlier in the session instead of
-  // stepping back through the tabs just swiped through, and (2) with no
-  // stale _viewHistory to (wrongly) catch it first, a feed-tab
-  // back-press could instead fall all the way through to the exit
-  // confirmation, closing the app, because the fixed-priority walk
-  // wasn't actually looking at what the very next entry back was.
-  //
-  // The fix: every entry this app pushes is already tagged with what
-  // it represents (uiFeedTab / uiView / uiLayer) — event.state on a
-  // popstate IS the entry the browser just landed on, so reading it
-  // directly restores exactly whatever was actually there, in the
-  // exact order it was really visited, with no separate bookkeeping
-  // needed to get that order right.
+  // Bug fix: this used to walk two SEPARATE trails (_viewHistory for top-level tabs, _feedTabHistory for feed sub-tabs) in a fixed priority.
   const state = event.state;
 
   if (state && state.uiFeedTab) {
@@ -1114,22 +802,12 @@ window.addEventListener("popstate", (event) => {
     return;
   }
 
-  // No app-specific tag on this entry — either the very first,
-  // pre-app history entry (created before this app ever called
-  // pushState), or an exit-guard placeholder from the block below.
-  // Same baseline guarantee every branch above already gives: land on
-  // Feed/All before a genuine exit is ever considered, rather than
-  // jumping straight to exit-confirmation from wherever this happens
-  // to be.
+  // No app-specific tag on this entry — either the very first, pre-app history entry (created before this app ever called pushState), or an exit-guard placeholder from the block below.
   const feedContainer = document.getElementById("feed-container");
   const isFeedVisible =
     feedContainer && !feedContainer.classList.contains("hidden");
 
-  if (
-    isFeedVisible &&
-    typeof currentFeedType !== "undefined" &&
-    currentFeedType !== "all"
-  ) {
+  if (isFeedVisible && typeof currentFeedType !== "undefined" && currentFeedType !== "all") {
     _isFeedTabNavInProgress = true;
     try {
       window.filterFeed(
@@ -1152,20 +830,11 @@ window.addEventListener("popstate", (event) => {
     return;
   }
 
-  // Nothing reachable — this is a genuine exit back-press (both the
-  // overlay stack and the view-history stack are empty, and if this is
-  // the Feed view, it's already on the All tab per the check above).
-  // One warning, one confirm — each press within the window re-arms
-  // the timer, so the person gets the full 2s from their MOST RECENT
-  // press, not a fixed 2s from the first one.
+  // Nothing reachable — this is a genuine exit back-press (both the overlay stack and the view-history stack are empty, and if this is the Feed view, it's already on the All tab per the check above).
   if (_exitConfirmPresses < EXIT_CONFIRM_PRESSES_REQUIRED - 1) {
     _exitConfirmPresses++;
     showToast("Press back again to exit");
-    // Re-push a history entry so THIS back-press is absorbed instead
-    // of actually navigating away. Once the required number of presses
-    // is reached, it'll find both stacks still empty and fall through
-    // past this block to the real exit (nothing re-pushes state at
-    // that point, so the browser/app handles it normally).
+    // Re-push a history entry so THIS back-press is absorbed instead of actually navigating away.
     try {
       history.pushState({ uiExitGuard: true }, "");
     } catch (_) {}
@@ -1177,18 +846,10 @@ window.addEventListener("popstate", (event) => {
   }
   _exitConfirmPresses = 0;
   clearTimeout(_exitConfirmTimer);
-  // Falls through here on the final required press — let the
-  // browser/app handle exit as a normal web history pop (closes PWA,
-  // tabs back, etc). Nothing further to do.
+  // Falls through here on the final required press.
 });
 
-// Keyboard: Escape closes the topmost open overlay (modal/sheet/DM
-// thread), mirroring the hardware/gesture back-button handler above
-// rather than duplicating its close logic. Deliberately routes through
-// history.back() so the exact same popstate branch runs either way —
-// one code path, two ways to trigger it. Guarded to only fire when an
-// overlay is actually open, so Escape does nothing (and never
-// navigates the browser) the rest of the time.
+// Keyboard: Escape closes the topmost open overlay (modal/sheet/DM thread), mirroring the hardware/gesture back-button handler above rather than duplicating its close logic.
 window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (_uiStack.length === 0) return;
@@ -1197,15 +858,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 // ─── SWIPE BETWEEN FEED TABS (Instagram-style) ────────────────────────────────
-// Horizontal swipe over the feed content moves to the adjacent tab in the
-// same left-to-right order the tab bar itself is laid out in — same
-// gesture Instagram uses to move between its top-level tabs. Deliberately
-// scoped to #posts-feed only (not the whole document), so it can't ever
-// fire while some other view (Explore/Profile/DMs/Cart) is on screen,
-// and deliberately passive/non-preventDefault throughout so it never
-// fights the feed's own vertical scroll (or Reels' vertical snap-scroll,
-// which lives in this same container) — it only acts once a swipe is
-// already clearly finished and was clearly horizontal.
+// Horizontal swipe over the feed content moves to the adjacent tab in the same left-to-right order the tab bar itself is laid out in.
 const _swipeTabOrder = [
   "all",
   "reels",
@@ -1237,20 +890,9 @@ document.addEventListener(
     if (e.touches.length !== 1) return;
     const feed = _feedSwipeTarget();
     if (!feed || !feed.contains(e.target)) return;
-    // Never hijack a swipe while any overlay (detail modal, sheet, DM
-    // thread, etc.) is open above the feed.
+    // Never hijack a swipe while any overlay (detail modal, sheet, DM thread, etc.) is open above the feed.
     if (_uiStack.length > 0) return;
-    // Bug fix: a swipe starting right at the screen edge is exactly the
-    // zone iOS Safari and most Android browsers reserve for their own
-    // native "swipe from edge to go back" gesture. Starting our tab-swipe
-    // there let both fire — the browser's real edge-swipe was
-    // consuming/confusing the back-history stack behind our JS
-    // (history.pushState) logic in filterFeed(), which is what made a
-    // later hardware/gesture back press behave as if there was nothing
-    // left to unwind and close the app outright, even after switching
-    // through several tabs. Ignoring swipe-starts within this margin
-    // leaves that zone entirely to the browser's own gesture, the way
-    // native apps keep a safe edge margin for exactly this reason.
+    // Bug fix: a swipe starting right at the screen edge is exactly the zone iOS Safari and most Android browsers reserve for their own native "swipe from edge to go back" gesture.
     const EDGE_EXCLUSION_PX = 28;
     if (
       e.touches[0].clientX < EDGE_EXCLUSION_PX ||
@@ -1272,8 +914,7 @@ document.addEventListener(
     if (_swipeCancelled || !_swipeStartTime || e.touches.length !== 1) return;
     const dx = e.touches[0].clientX - _swipeStartX;
     const dy = e.touches[0].clientY - _swipeStartY;
-    // Once it's clearly a vertical scroll (Reels paging, normal feed
-    // scroll), stop treating this touch as a tab-swipe candidate at all.
+    // Once it's clearly a vertical scroll (Reels paging, normal feed scroll), stop treating this touch as a tab-swipe candidate at all.
     if (Math.abs(dy) > 24 && Math.abs(dy) > Math.abs(dx)) {
       _swipeCancelled = true;
     }
@@ -1300,51 +941,143 @@ document.addEventListener(
 
     const currentIndex = _swipeTabOrder.indexOf(currentFeedType);
     if (currentIndex === -1) return;
-    // Swiped left (finger moved left, content "moves" to reveal the tab
-    // to the right) -> next tab; swiped right -> previous tab. No
-    // wrap-around at either end, matching how Instagram's own top tabs
-    // behave.
+    // Swiped left (finger moved left, content "moves" to reveal the tab to the right) -> next tab.
     const nextIndex = dx < 0 ? currentIndex + 1 : currentIndex - 1;
     if (nextIndex < 0 || nextIndex >= _swipeTabOrder.length) return;
 
     const nextTab = _swipeTabOrder[nextIndex];
-    const btn = document.querySelector(`.feed-tab-btn[data-tab="${nextTab}"]`);
+    const btn = document.querySelector(
+      `.feed-tab-btn[data-tab="${nextTab}"]`,
+    );
     if (!btn) return;
     hapticTap(10);
     window.filterFeed(nextTab, btn);
-    btn.scrollIntoView({
-      behavior: "smooth",
-      inline: "center",
-      block: "nearest",
-    });
+    btn.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  },
+  { passive: true },
+);
+
+// ─── PULL TO REFRESH ──────────────────────────────────────────────────
+// Custom, scoped to Feed (non-Reels) and the DMs inbox list only - not a
+// blanket re-enable of the browser's native gesture, which does a real
+// full-page reload (that's what caused the flash-of-default-tabs bug on
+// every other tab). This calls the same re-fetch paths those tabs
+// already use.
+const PTR_HIDDEN_Y = -60;
+const PTR_THRESHOLD_PX = 64;
+const PTR_MAX_PULL_PX = 100;
+let _ptrStartY = 0;
+let _ptrPulling = false;
+let _ptrActive = false;
+
+function _ptrIndicatorEl() {
+  let el = document.getElementById("pull-refresh-indicator");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "pull-refresh-indicator";
+    el.innerHTML = '<i class="fas fa-rotate-right"></i>';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function _ptrTarget() {
+  const feedContainer = document.getElementById("feed-container");
+  if (
+    feedContainer &&
+    !feedContainer.classList.contains("hidden") &&
+    currentFeedType !== "reels"
+  ) {
+    return {
+      refresh: async () => {
+        _feedBucketCache.clear();
+        await subscribeFeed();
+      },
+    };
+  }
+  const dmsContainer = document.getElementById("dms-container");
+  if (
+    dmsContainer &&
+    !dmsContainer.classList.contains("hidden") &&
+    !document.getElementById("chat-thread-panel")
+  ) {
+    return { refresh: refreshInboxList };
+  }
+  return null;
+}
+
+document.addEventListener(
+  "touchstart",
+  (e) => {
+    if (_ptrActive || e.touches.length !== 1) return;
+    if (_uiStack.length > 0) return;
+    if ((document.scrollingElement || document.documentElement).scrollTop > 0)
+      return;
+    if (!_ptrTarget()) return;
+    _ptrStartY = e.touches[0].clientY;
+    _ptrPulling = true;
+  },
+  { passive: true },
+);
+
+document.addEventListener(
+  "touchmove",
+  (e) => {
+    if (!_ptrPulling || _ptrActive || e.touches.length !== 1) return;
+    const dy = e.touches[0].clientY - _ptrStartY;
+    if (
+      dy <= 0 ||
+      (document.scrollingElement || document.documentElement).scrollTop > 0 ||
+      !_ptrTarget()
+    ) {
+      _ptrPulling = false;
+      _ptrIndicatorEl().style.transform = `translateY(${PTR_HIDDEN_Y}px)`;
+      return;
+    }
+    const pull = Math.min(dy * 0.5, PTR_MAX_PULL_PX);
+    const el = _ptrIndicatorEl();
+    el.style.transform = `translateY(${PTR_HIDDEN_Y + pull}px)`;
+    el.classList.toggle("pull-refresh-ready", pull >= PTR_THRESHOLD_PX);
+  },
+  { passive: true },
+);
+
+document.addEventListener(
+  "touchend",
+  () => {
+    if (!_ptrPulling) return;
+    _ptrPulling = false;
+    const el = _ptrIndicatorEl();
+    const ready = el.classList.contains("pull-refresh-ready");
+    const target = _ptrTarget();
+    if (!ready || !target) {
+      el.style.transform = `translateY(${PTR_HIDDEN_Y}px)`;
+      return;
+    }
+    _ptrActive = true;
+    el.classList.add("pull-refresh-spinning");
+    el.style.transform = `translateY(${PTR_HIDDEN_Y + PTR_THRESHOLD_PX}px)`;
+    hapticTap(10);
+    Promise.resolve(target.refresh())
+      .catch((err) => console.error("Pull-to-refresh failed:", err))
+      .finally(() => {
+        el.classList.remove("pull-refresh-spinning", "pull-refresh-ready");
+        el.style.transform = `translateY(${PTR_HIDDEN_Y}px)`;
+        _ptrActive = false;
+      });
   },
   { passive: true },
 );
 
 // ─── FEED REFRESH COALESCING ──────────────────────────────────────────────────
-// Hoisted to module scope on purpose: when the user switches across feed
-// tabs (Products → All → Reels) rapidly, each new subscribeFeed() runs
-// inside its own closure. If the debounce timer lived inside subscribeFeed,
-// a queued callback from the just-unsubscribed previous subscription
-// could still fire and call buildFeedQuery() with the *previous* tab's
-// baseFilter, silently overwriting the new feed's allCachedPosts with
-// mismatched data. Module-scoping lets us clear ANY pending timer
-// (regardless of which subscribeFeed() call spawned it) before installing
-// a new subscription.
+// Hoisted to module scope on purpose: when the user switches across feed tabs (Products → All → Reels) rapidly, each new subscribeFeed() runs inside its own closure.
 let _feedRefreshDebounceTimer = null;
 
-// Defense-in-depth URL safety wrapper. Use this anywhere a user-controlled
-// string is about to land in an `src=` or `href=` attribute rather than
-// relying solely on esc/eAttr — those handle HTML-specials and quotes but
-// don't strip `javascript:` / `data:text/html` / `vbscript:` payload URLs.
-// This is a wrapping layer; full sanitization for color etc. should still
-// happen upstream where the value is saved (Supabase side).
+// Defense-in-depth URL safety wrapper. Use this anywhere a user-controlled string is about to land in an `src=` or `href=` attribute rather than relying solely on esc/eAttr.
 function safeUrl(url) {
   const s = String(url ?? "").trim();
   if (!s) return "";
-  // Allow only http, https, mailto, and protocol-relative safe forms;
-  // nuke anything else (javascript:, data:, vbscript:, file:, etc.) and
-  // anything that doesn't even look like a URL/uri.
+  // Allow only http, https, mailto, and protocol-relative safe forms.
   if (/^(https?:|mailto:|\/)/i.test(s)) return s;
   if (/^[a-z][a-z0-9+.\-]*:/i.test(s)) {
     console.warn("[safeUrl] blocked non-http(s) URL:", s);
@@ -1366,22 +1099,7 @@ function popUiState(id) {
   const wasTop = idx === _uiStack.length - 1;
   _uiStack.splice(idx, 1);
 
-  // Fix: closing a layer via its own X/back-arrow button (as opposed
-  // to the phone's back gesture) used to only update _uiStack, leaving
-  // the history entry pushUiState() pushed for it sitting orphaned in
-  // the browser's real history. Those orphaned entries pile up with
-  // every manual close and don't map to anything still open, so a
-  // later back-gesture press had to silently "burn through" several of
-  // them before doing anything visible — and once they ran out, the
-  // very next gesture press had no more in-app history left to
-  // consume, so the phone's OS handled it as a normal back navigation
-  // and closed/backgrounded the whole app. Calling history.back() here
-  // consumes the matching entry the moment it's actually orphaned,
-  // keeping the real browser history and _uiStack in lockstep so every
-  // later back-press/gesture does exactly one meaningful thing.
-  // Guarded to only fire when the closed layer really was the top of
-  // history (the normal case) — closing something out of order is left
-  // alone rather than risking popping the wrong entry.
+  // Fix: closing a layer via its own X/back-arrow button (as opposed to the phone's back gesture) used to only update _uiStack, leaving the history entry pushUiState() pushed for it sitting orphaned in the browser's real history.
   if (wasTop && history.state && history.state.uiLayer === id) {
     _suppressPopstateCount++;
     try {
@@ -1392,11 +1110,7 @@ function popUiState(id) {
   }
 }
 
-// Seed one base history entry plus one throwaway guard entry above it so
-// the VERY first phone back gesture on a freshly-opened home screen fires
-// popstate inside this document (letting the app walk tabs/views or show
-// exit confirmation) instead of immediately leaving the app with no chance
-// to handle it.
+// Seed one base history entry plus one throwaway guard entry above it so the VERY first phone back gesture on a freshly-opened home screen fires popstate inside this document (letting the app walk tabs/views or show exit confirmation) instead of immediately leaving the app with no chance to handle it.
 try {
   history.replaceState({ uiLayer: "base" }, "");
   history.pushState({ uiExitGuard: true }, "");
@@ -1404,21 +1118,10 @@ try {
 
 // ─── 4. UTILITIES ─────────────────────────────────────────────────────────────
 
-// Formats a price input live with thousands separators as the person
-// types (e.g. "20000" -> "20,000"). This is the actual fix for the bug
-// where typing "20.000" meaning twenty thousand lost the zeros — a native
-// <input type="number"> only EVER treats "." as a decimal point, with no
-// way to type a thousands separator at all. Switching that field to a
-// plain text input with this live formatter sidesteps the ambiguity
-// entirely: people type digits, see them grouped into thousands as they
-// go, and the commas get stripped back out at the one place each price
-// field's value is actually read (see signPost/createPost's price
-// parsing) — nothing downstream needs to know this formatting exists.
+// Formats a price input live with thousands separators as the person types (e.g.
 window._formatPriceInput = function (el) {
   const cursorFromEnd = el.value.length - el.selectionStart;
-  // Keep digits and at most one decimal point; silently drop anything
-  // else (letters, a second dot, commas the person typed themselves —
-  // they'll reappear correctly-placed after this runs).
+  // Keep digits and at most one decimal point.
   let raw = el.value.replace(/[^\d.]/g, "");
   const firstDot = raw.indexOf(".");
   if (firstDot !== -1) {
@@ -1444,23 +1147,7 @@ function esc(str) {
 }
 
 function escAttr(str) {
-  // escAttr is used almost everywhere a value gets interpolated into
-  // onclick="window.someFn('${escAttr(x)}')" — that's TWO nested
-  // contexts at once: an HTML attribute (delimited by ") wrapping a JS
-  // string literal (delimited by '). esc() alone only protects the
-  // outer HTML layer. The single-quote entity it produces (&#x27;)
-  // looks safe, but the browser decodes HTML entities in an attribute's
-  // value BEFORE compiling that value as the inline event handler's JS
-  // — so &#x27; simply turns back into a raw ' at the moment the click
-  // actually fires, breaking out of the JS string. Any title/name with
-  // a real apostrophe (e.g. "E's Pop Crave") then corrupts that handler
-  // and every attribute after it on the same tag — this is exactly what
-  // threw "Uncaught SyntaxError: Unexpected identifier 'fas'" the
-  // instant Add to Cart was tapped on such a card.
-  //
-  // Backslash-escaping the quote first makes it survive that entity
-  // round-trip as \' (a valid escaped quote inside a JS string) instead
-  // of a bare, string-breaking '.
+  // escAttr is used almost everywhere a value gets interpolated into onclick="window.someFn('${escAttr(x)}')".
   const jsSafe = String(str ?? "")
     .replace(/\\/g, "\\\\")
     .replace(/'/g, "\\'")
@@ -1474,12 +1161,7 @@ function setEl(id, val) {
   if (el) el.textContent = val;
 }
 
-// Bug fix: every price shown on a card/detail/cart/DM anywhere in the
-// app was interpolated as a raw String(d.price) — e.g. "GH₵7000" — with
-// no thousands separator, even though Create/Manage Listing's own
-// price inputs DO show one as you type. Only the input formatting
-// existed; the actual displayed price everywhere else never used it.
-// This is the one shared formatter both now go through.
+// Bug fix: every price shown on a card/detail/cart/DM anywhere in the app was interpolated as a raw String(d.price).
 function formatGHS(amount) {
   const n = Number(amount);
   if (!Number.isFinite(n)) return "0";
@@ -1487,10 +1169,6 @@ function formatGHS(amount) {
 }
 
 // Lightweight registry mapping postId -> { id, title, price, image, type }.
-// Populated whenever a card/detail view is rendered, so the "Contact" /
-// "Contact Seller" buttons can look up full post context by ID instead of
-// trying to smuggle a JSON blob through an inline onclick HTML attribute
-// (which is fragile with quotes/backticks and easy to break on escaping).
 const postContextRegistry = {};
 
 function registerPostContext(id, d, firstMediaUrl) {
@@ -1499,9 +1177,6 @@ function registerPostContext(id, d, firstMediaUrl) {
     title: d.title || "Listing",
     price: d.price || 0,
     // Kept alongside price so anywhere reading from this registry (e.g.
-    // Make an Offer) can tell whether a live flash sale price applies
-    // right now, via isSaleActiveForPost/getEffectivePrice, instead of
-    // always defaulting to the regular price.
     originalPrice: d.original_price ?? null,
     saleEndsAt: d.sale_ends_at ?? null,
     image: firstMediaUrl || "",
@@ -1546,31 +1221,14 @@ function getFeedScore(post) {
   return freshness * (1 + engagement * FEED_DECAY_ENGAGEMENT_WEIGHT);
 }
 
-// Module-scope reels cache — invalidated by every allCachedPosts mutation
-// (see subscribeFeed, loadFollowingFeed, loadNextFollowingPage, and the
-// timed refresh path). Lets renderReelsFeed() skip re-filtering the
-// post-list on every realtime update.
+// Module-scope reels cache — invalidated by every allCachedPosts mutation (see subscribeFeed, loadFollowingFeed, loadNextFollowingPage, and the timed refresh path).
 let allReelsCache = [];
 
-// Separate pool for the All feed's "Suggested Reels" injection (see
-// interleaveSuggestedReels) — deliberately NOT the same data as
-// allReelsCache/allCachedPosts, since those only ever reflect whatever
-// page of the main feed happens to be currently loaded. This pulls its
-// own broader set of recent/popular video posts, independent of
-// whatever the person has scrolled to, matching how Instagram's
-// suggested content is a genuinely separate recommendation surface
-// rather than a reshuffling of what's already on screen.
+// Separate pool for the All feed's "Suggested Reels" injection (see interleaveSuggestedReels).
 let suggestedReelsPool = [];
 let _suggestedReelsFetchedAt = 0;
 
-// Interleaving cursor state, made persistent across page loads (rather
-// than local to a single interleaveSuggestedReels call) specifically so
-// incremental load-more appends continue the same 3-6-post rhythm the
-// feed already had, instead of restarting the gap countdown from zero
-// at every page boundary — which would visibly cluster suggested reels
-// right after each "load more" instead of flowing naturally through the
-// whole scroll. Reset only on a genuine fresh feed load (see
-// resetSuggestedReelsInterleaveState, called from subscribeFeed).
+// Interleaving cursor state, made persistent across page loads (rather than local to a single interleaveSuggestedReels call) specifically so incremental load-more appends continue the same 3-6-post rhythm the feed already had, instead of restarting the gap countdown from zero at every page boundary — which would visibly cluster suggested reels right after each "load more" instead of flowing naturally through the whole scroll.
 let _reelInterleavePoolIndex = 0;
 let _reelInterleaveSinceLastInsert = 0;
 let _reelInterleaveNextGap = 3 + Math.floor(Math.random() * 4);
@@ -1582,10 +1240,7 @@ function resetSuggestedReelsInterleaveState() {
 }
 
 async function fetchSuggestedReelsPool() {
-  // Refetching on every single render would be wasteful for content
-  // that's explicitly supplementary — five minutes is a reasonable
-  // balance between "feels fresh" and "not hammering the DB every
-  // time someone opens the All tab".
+  // Refetching on every single render would be wasteful for content that's explicitly supplementary.
   if (
     Date.now() - _suggestedReelsFetchedAt < 5 * 60 * 1000 &&
     suggestedReelsPool.length > 0
@@ -1607,19 +1262,12 @@ async function fetchSuggestedReelsPool() {
     _suggestedReelsFetchedAt = Date.now();
   } catch (err) {
     console.error("Suggested reels fetch error:", err);
-    // Leave whatever pool (even empty) already exists rather than
-    // throwing — this is supplementary content, a failed fetch here
-    // should never block or break the main feed rendering.
+    // Leave whatever pool (even empty) already exists rather than throwing.
   }
   return suggestedReelsPool;
 }
 
-// Weaves suggested-reel cards in among the regular feed cards at
-// semi-random spacing (3-6 posts apart) rather than a fixed interval —
-// matching the request that there shouldn't be one specific predictable
-// spot, the same way Instagram doesn't inject its Suggested Reels at an
-// exact fixed cadence either. Cards already visible as regular posts in
-// this feed page are skipped so the same post never appears twice.
+// Weaves suggested-reel cards in among the regular feed cards at semi-random spacing (3-6 posts apart) rather than a fixed interval.
 function interleaveSuggestedReels(regularCardsHtml, pool, alreadyShownIds) {
   if (!pool || pool.length === 0) return regularCardsHtml;
 
@@ -1644,11 +1292,7 @@ function interleaveSuggestedReels(regularCardsHtml, pool, alreadyShownIds) {
   return merged;
 }
 
-// Incremental sibling of interleaveSuggestedReels: same 3-6-post gap
-// logic, but reads/advances the persistent module-level cursor
-// (_reelInterleave*) instead of starting fresh each call, so calling
-// this once per load-more page continues the same rhythm the full
-// render would have produced across the whole scroll.
+// Incremental sibling of interleaveSuggestedReels.
 function interleaveSuggestedReelsIncremental(
   regularCardsHtml,
   pool,
@@ -1683,15 +1327,10 @@ function refreshReelsCache() {
   return allReelsCache;
 }
 
-// Stable-feed cache sort. Preserves the previous visible order whenever
-// scores are equal so the feed never re-shuffles cards back and forth on
-// state mutations (likes, comments, follows) or realtime refreshes. This
-// matters because getFeedScore depends on likes_count: a card touched by a
-// fresh like can otherwise outrank neighbors and reorder mid-scroll.
+// Stable-feed cache sort.
 let _rankOrdinal = 0;
 function applyFeedRankingToCache() {
-  // First pass: assign monotonically-increasing ordinals to current
-  // positions, so the next re-sort has a stable secondary key.
+  // First pass: assign monotonically-increasing ordinals to current positions, so the next re-sort has a stable secondary key.
   if (allCachedPosts.length && !allCachedPosts[0].__ordinal) {
     _rankOrdinal = 0;
     for (const entry of allCachedPosts) entry.__ordinal = ++_rankOrdinal;
@@ -1700,20 +1339,15 @@ function applyFeedRankingToCache() {
     const aScore = getFeedScore(a?.data || a);
     const bScore = getFeedScore(b?.data || b);
     if (Math.abs(bScore - aScore) > 0.0001) return bScore - aScore;
-    // Tiebreaker #1: most-recent created_at first (still useful for
-    // genuinely equal scores on a fresh vs older fetch).
+    // Tiebreaker #1: most-recent created_at first (still useful for genuinely equal scores on a fresh vs older fetch).
     const aTime = new Date(a?.data?.created_at || 0).getTime();
     const bTime = new Date(b?.data?.created_at || 0).getTime();
     if (bTime !== aTime) return bTime - aTime;
-    // Tiebreaker #2: PRESERVE previous display order. This is the
-    // crucial guard — without it, after a like, two posts with new
-    // equal scores would swap positions purely due to Array.sort's
-    // non-stable spec.
+    // Tiebreaker #2: PRESERVE previous display order.
     const aOrd = a.__ordinal || 0;
     const bOrd = b.__ordinal || 0;
     if (aOrd !== bOrd) return aOrd - bOrd;
-    // Final deterministic tiebreaker so two truly identical entries
-    // never get reshuffled by the engine.
+    // Final deterministic tiebreaker so two truly identical entries never get reshuffled by the engine.
     return (
       Number((b?.data?.id ?? b?.id) || 0) - Number((a?.data?.id ?? a?.id) || 0)
     );
@@ -1723,13 +1357,9 @@ function applyFeedRankingToCache() {
   for (const entry of allCachedPosts) entry.__ordinal = ++_rankOrdinal;
 }
 
-// Alias to keep the realtime-refresh path semantically identical (it
-// explicitly remembers "previous display order" so a card ordering from
-// a moment ago is still preserved across this one refresh).
+// Alias to keep the realtime-refresh path semantically identical (it explicitly remembers "previous display order" so a card ordering from a moment ago is still preserved across this one refresh).
 function applyStableFeedRankingToCache(previousById) {
-  // Use the previous display order when present so a fresh fetch that
-  // drops or adds posts doesn't visually reshuffle what the user was
-  // already looking at.
+  // Use the previous display order when present so a fresh fetch that drops or adds posts doesn't visually reshuffle what the user was already looking at.
   if (previousById) {
     let ord = 0;
     for (const [, entry] of previousById) {
@@ -1768,16 +1398,7 @@ function renderSafeSwapZoneCard(post) {
 }
 
 // ─── SMART RECOMMENDATIONS ("Similar listings") ─────────────────────────────
-// Honest scope note: this is a same-category/same-campus heuristic, not a
-// personalized ML recommender — building genuine collaborative filtering
-// or embeddings-based similarity would need a lot more user behavior data
-// than this app currently collects (no view-history table, no purchase
-// signal), plus infra this file can't stand up on its own. What's here
-// is the useful, buildable version: from whatever's already loaded in
-// allCachedPosts, surface other active listings of the same type,
-// preferring same institution first, then same region, most recent
-// first — the same signals a person would use browsing manually, just
-// automated.
+// Honest scope note: this is a same-category/same-campus heuristic, not a personalized ML recommender.
 function renderSimilarListingsBlock(post) {
   if (!post?.id || !allCachedPosts?.length) return "";
 
@@ -1793,15 +1414,7 @@ function renderSimilarListingsBlock(post) {
 
   if (!candidates.length) return "";
 
-  // Fix (Aug 2026): scoring used to only weigh institution/region — two
-  // posts sharing nothing but "same type + same campus" could rank
-  // above something actually related, which is why unrelated items
-  // (toothpaste next to a wristband) could show up. Added lightweight,
-  // still-zero-new-infra signals: shared significant title words, and
-  // price-proximity (a GH₵100 item isn't "similar" to a GH₵0 one just
-  // because they're both products from the same campus). Still an
-  // honest heuristic, not real ML — just a better one, using only data
-  // already sitting in allCachedPosts.
+  // Fix (Aug 2026): scoring used to only weigh institution/region.
   const STOPWORDS = new Set([
     "the",
     "and",
@@ -1851,10 +1464,7 @@ function renderSimilarListingsBlock(post) {
     (a, b) => b.score - a.score || (b.createdAt > a.createdAt ? 1 : -1),
   );
 
-  // A large-but-fixed batch (not infinite scroll) — matches the Temu
-  // reference's visual density without the added complexity of a
-  // second infinite-scroll/pagination system living inside a modal
-  // that already has its own scroll container.
+  // A large-but-fixed batch (not infinite scroll).
   const picks = scored.slice(0, 24).map((s) => s.d);
   if (!picks.length) return "";
 
@@ -1868,12 +1478,7 @@ function renderSimilarListingsBlock(post) {
 }
 
 // ─── DEALS STRIP (post detail page) ──────────────────────────────────────
-// Horizontal-scroll preview of live flash sales, shown above "You might
-// also like" on the post detail page — a taste of the Deals tab without
-// leaving the post you're on. Reuses getLiveDeals() (same "is this a
-// live deal" definition as the Deals tab itself), so this is zero extra
-// Supabase reads — just a different view of data already loaded in
-// allCachedPosts.
+// Horizontal-scroll preview of live flash sales, shown above "You might also like" on the post detail page.
 function renderDealsStripCard(id, d) {
   let mediaUrl = "";
   if (d.media_url) {
@@ -2011,13 +1616,7 @@ function notifySavedAlertsForPosts(posts, { source = "feed" } = {}) {
 function renderSavedAlertPills(activeTerm = "") {
   if (!savedSearchAlerts.length) return "";
   const normalizedActive = normalizeSearchAlertTerm(activeTerm);
-  // Fix: the pill button and its remove button used to be flex
-  // siblings glued together with a negative margin (-ml-1). That only
-  // looks attached when both happen to land on the same flex-wrap line;
-  // once the row wraps at a narrow width, the remove button can end up
-  // on the next line, detached from the pill it's meant to remove.
-  // Wrapping each pair in its own inline-flex container keeps them
-  // physically together no matter where the wrap point falls.
+  // Fix: the pill button and its remove button used to be flex siblings glued together with a negative margin (-ml-1).
   return `
         <div class="flex flex-wrap gap-2 mb-3">
             ${savedSearchAlerts
@@ -2112,24 +1711,14 @@ function formatClockTime(dateStr) {
   });
 }
 
-// "On campus since <Month Year>" for the "Active Since" bio field — coarse
-// month/year granularity is deliberate (builds trust/shows history
-// without exposing the exact signup day).
+// "On campus since <Month Year>" for the "Active Since" bio field.
 function formatMonthYear(dateStr) {
   if (!dateStr) return "";
   const d = new Date(dateStr);
   return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 }
 
-// Flash-sale price model: `price` is always the regular, standing price
-// — it's never overwritten by a sale and is what shows once a sale ends.
-// `original_price` (misleadingly named at the DB-column level, kept as-is
-// to avoid a migration) actually holds the FLASH SALE price — a separate,
-// lower number that only applies while sale_ends_at is still in the
-// future. The moment the timer runs out, the sale price simply stops
-// being used anywhere (display, offers, etc.) and the post reverts to
-// showing just the regular price — no manual edit needed, matching how
-// other marketplaces run a flash sale.
+// Flash-sale price model: `price` is always the regular, standing price.
 function isSaleActiveForPost(d) {
   return (
     !!d &&
@@ -2140,24 +1729,12 @@ function isSaleActiveForPost(d) {
     new Date(d.sale_ends_at).getTime() > Date.now()
   );
 }
-// The price a buyer actually pays right now: the sale price while a
-// sale is live, otherwise the regular price. Anywhere that needs "the
-// price" for an actual transaction (Make an Offer default, etc.) should
-// read this instead of d.price directly, since d.price alone ignores an
-// active sale.
+// The price a buyer actually pays right now.
 function getEffectivePrice(d) {
-  return isSaleActiveForPost(d)
-    ? Number(d.original_price)
-    : Number(d.price || 0);
+  return isSaleActiveForPost(d) ? Number(d.original_price) : Number(d.price || 0);
 }
 
-// Renders a flash-sale end time as a countdown string. Days-out sales
-// still show a coarse "Nd left" (a live second-by-second tick wouldn't
-// mean much a week out), but once under 24h it renders H:MM:SS so the
-// badge visibly ticks — see the setInterval below that updates every
-// element carrying this text once a second via its data-sale-ends
-// attribute, rather than only refreshing whenever the card happens to
-// re-render.
+// Renders a flash-sale end time as a countdown string.
 function countdownText(endsAtStr) {
   if (!endsAtStr) return "";
   const remainingMs = new Date(endsAtStr).getTime() - Date.now();
@@ -2172,11 +1749,7 @@ function countdownText(endsAtStr) {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
 
-// Ticks every visible flash-sale badge once a second. Badges are found
-// by class rather than tracked individually, so this stays correct
-// across feed re-renders/scroll recycling without extra bookkeeping.
-// Once a sale's time is up the badge is simply removed from the DOM —
-// the post itself is never touched, matching "no auto-delete."
+// Ticks every visible flash-sale badge once a second.
 setInterval(() => {
   document.querySelectorAll(".sale-countdown-badge").forEach((el) => {
     const endsAt = el.getAttribute("data-sale-ends");
@@ -2188,19 +1761,12 @@ setInterval(() => {
       el.textContent = text;
     }
   });
-  // Fix: the crossed-out original price used to be rendered once and
-  // never revisited, so it kept showing indefinitely after a flash
-  // sale's countdown ran out — the badge vanished but the "cancelled"
-  // price stayed stuck on screen, which is exactly the confusing state
-  // that was reported. This removes it the same way, the moment its
-  // sale_ends_at passes.
+  // Fix: the crossed-out original price used to be rendered once and never revisited, so it kept showing indefinitely after a flash sale's countdown ran out.
   document.querySelectorAll(".sale-strike-price").forEach((el) => {
     const endsAt = el.getAttribute("data-sale-ends");
     if (endsAt && !countdownText(endsAt)) el.remove();
   });
-  // The big price itself also needs to revert from the (now-expired)
-  // sale price back to the regular price the instant the countdown
-  // runs out — not just wait for the card's next full re-render.
+  // The big price itself also needs to revert from the (now-expired) sale price back to the regular price the instant the countdown runs out.
   document.querySelectorAll(".sale-live-price").forEach((el) => {
     const endsAt = el.getAttribute("data-sale-ends");
     if (!endsAt) return;
@@ -2213,12 +1779,7 @@ setInterval(() => {
   });
 }, 1000);
 
-// Fetches every rating for a seller and computes the average/count
-// client-side — the seller_ratings_select_all RLS policy already allows
-// any authenticated user to read all rows, so no aggregate DB function
-// is needed here; for a marketplace this size the row count per seller
-// is small enough that this is simpler than maintaining a separate
-// summary function would be.
+// Fetches every rating for a seller and computes the average/count client-side.
 async function loadAndRenderSellerRating(sellerId, containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -2272,8 +1833,7 @@ window.openRateSellerSheet = async function (sellerId, sellerName) {
     window.closeManageListingSheet(true),
   );
 
-  // Pre-fill with the rater's existing rating for this seller, if any,
-  // so re-rating feels like editing rather than starting from scratch.
+  // Pre-fill with the rater's existing rating for this seller, if any, so re-rating feels like editing rather than starting from scratch.
   const { data: existing } = await supabase
     .from("seller_ratings")
     .select("stars, comment")
@@ -2323,11 +1883,7 @@ window._submitSellerRating = async function (sellerId) {
   const commentEl = document.getElementById("rateSellerComment");
   const comment = commentEl ? commentEl.value.trim().slice(0, 500) : "";
 
-  // Upsert on (seller_id, rater_id) so re-rating updates the existing
-  // row instead of erroring on a duplicate — matches the "one rating
-  // per rater per seller" intent the table's own design already
-  // reflects (seller_ratings_update_own policy exists specifically to
-  // support this).
+  // Upsert on (seller_id, rater_id) so re-rating updates the existing row instead of erroring on a duplicate.
   const { error } = await supabase.from("seller_ratings").upsert(
     {
       seller_id: sellerId,
@@ -2350,15 +1906,7 @@ window._submitSellerRating = async function (sellerId) {
 };
 
 // ─── PASSWORD SET / RESET ──────────────────────────────────────────────────
-// Two entry points share the same modal and submit function:
-//   1. "Forgot password?" on the sign-in form -> resetPasswordForEmail()
-//      emails a link -> clicking it lands back here and fires a
-//      PASSWORD_RECOVERY auth event, caught below -> this modal opens.
-//   2. "Set/Change Password" in Account settings, for anyone already
-//      signed in — most usefully, accounts that signed up via Google and
-//      have never had a password at all (see the "only Google sign-in
-//      works" issue this exists to fix).
-// Both ultimately call the same supabase.auth.updateUser({ password }).
+// Two entry points share the same modal and submit function.
 let _isPasswordRecoveryFlow = false;
 
 window.openSetPasswordModal = function (isRecovery = false) {
@@ -2367,10 +1915,7 @@ window.openSetPasswordModal = function (isRecovery = false) {
   const closeBtn = document.getElementById("set-password-close-btn");
   const title = document.getElementById("set-password-modal-title");
   if (!modal) return;
-  // The recovery flow can't be dismissed without setting a password —
-  // there's no other "logged in" state to fall back to at that point
-  // (the recovery link itself IS the sign-in). The Settings entry point
-  // is a normal already-signed-in action, so it can be closed freely.
+  // The recovery flow can't be dismissed without setting a password.
   if (closeBtn) closeBtn.classList.toggle("hidden", isRecovery);
   if (title) {
     title.textContent = isRecovery ? "Set New Password" : "Change Password";
@@ -2429,11 +1974,7 @@ window.submitNewPassword = async function (event) {
   }
 };
 
-// Catches landing back on the app via the emailed reset link. Separate
-// from activeAuthChange above deliberately — that wrapper only exposes
-// the resulting user object, not which specific auth EVENT fired, and
-// PASSWORD_RECOVERY is the one event this app needs to react to
-// differently from an ordinary sign-in.
+// Catches landing back on the app via the emailed reset link.
 supabase.auth.onAuthStateChange((event) => {
   if (event === "PASSWORD_RECOVERY") {
     window.openSetPasswordModal(true);
@@ -2509,10 +2050,7 @@ window.saveOnboarding = async function () {
   const region = document.getElementById("onboard-region")?.value;
   const institution = document.getElementById("onboard-institution")?.value;
 
-  // Fix: these used to use native alert(), which ignored the app's own
-  // styling and couldn't be styled/dismissed consistently with the rest
-  // of the UI. showToast keeps the same blocking-visibility (toast
-  // persists for ~2.8s) but matches the dark theme.
+  // Fix: these used to use native alert(), which ignored the app's own styling and couldn't be styled/dismissed consistently with the rest of the UI.
   if (!region) {
     showToast("Please select your region.");
     return;
@@ -2550,11 +2088,7 @@ window.saveOnboarding = async function () {
     } catch (_) {}
     document.getElementById("onboarding-modal")?.remove();
 
-    // The person just set their institution for the first time —
-    // refresh the campus scope banner (previously hidden since there
-    // was nothing to scope by) and re-run the current feed so it
-    // picks up campus scoping immediately, instead of waiting for
-    // the next tab click or reload.
+    // The person just set their institution for the first time.
     updateCampusScopeBanner();
     if (["all", "product", "skill"].includes(currentFeedType)) {
       const clickedBtn = document.querySelector(".feed-tab-btn.text-amber-400");
@@ -2585,9 +2119,7 @@ function applyLocationToUI(institution, region) {
   if (locationEl) locationEl.textContent = `${institution} · ${region}`;
 }
 
-// Shows the signed-in user's own avatar in the bottom nav's Profile
-// tab (and its desktop equivalent) instead of a generic person icon —
-// same click handler as before, just an <img> in place of the <i>.
+// Shows the signed-in user's own avatar in the bottom nav's Profile tab (and its desktop equivalent) instead of a generic person icon.
 function setNavProfileAvatar(avatarUrl) {
   const navBtn = document.getElementById("auth-profile-nav");
   if (navBtn) {
@@ -2610,10 +2142,7 @@ function setNavProfileAvatar(avatarUrl) {
 // ─── 6. AUTH ACTIONS ──────────────────────────────────────────────────────────
 window.login = async function () {
   try {
-    // Let the button's own :active press state actually get painted
-    // before the modal disappears — closing it in the same tick as
-    // the click left no visible sign the tap registered at all, even
-    // though sign-in itself worked correctly underneath.
+    // Let the button's own :active press state actually get painted before the modal disappears.
     await new Promise((resolve) => setTimeout(resolve, 150));
     document.getElementById("login-modal")?.classList.add("hidden");
     document.getElementById("signup-modal")?.classList.add("hidden");
@@ -2641,11 +2170,7 @@ window.signOutUser = async function () {
   await window.logout();
 };
 
-// Lightweight confirm gate for Sign Out — this button sits directly above
-// Delete Account in the settings danger zone, so a plain one-tap sign-out
-// was an easy accidental trigger right next to a genuinely destructive
-// action. No typed confirmation needed here (signing out isn't
-// destructive), just a tap-to-confirm step.
+// Lightweight confirm gate for Sign Out.
 window.confirmSignOut = function () {
   showConfirmDialog({
     title: "Sign out?",
@@ -2670,16 +2195,9 @@ function defaultFeedQuery() {
     supabase
       .from("posts")
       .select(FEED_SELECT_COLUMNS)
-      // Archived posts (owner-deleted via the soft-archive flow, or
-      // auto-hidden by checkAutoModerationThreshold after enough
-      // reports) shouldn't show up in normal browsing — is_archived
-      // exists on posts now (see the SQL migration), so this filter
-      // actually takes effect rather than being a no-op.
+      // Archived posts (owner-deleted via the soft-archive flow, or auto-hidden by checkAutoModerationThreshold after enough reports) shouldn't show up in normal browsing.
       .eq("is_archived", false)
-      // Scheduled-for-later posts (see the Post Scheduling feature)
-      // stay out of the public feed until their publish time arrives —
-      // scheduled_for is either null (an ordinary, already-live post)
-      // or a future timestamp that hasn't passed yet.
+      // Scheduled-for-later posts (see the Post Scheduling feature) stay out of the public feed until their publish time arrives.
       .or(`scheduled_for.is.null,scheduled_for.lte.${new Date().toISOString()}`)
       .order("created_at", { ascending: false })
       .order("id", { ascending: false })
@@ -2687,9 +2205,7 @@ function defaultFeedQuery() {
   );
 }
 
-// Fetches posts using the tab's base filter (type condition only) plus a
-// stable cursor, so newly inserted rows don't shift older rows between
-// pages while someone is already scrolling the feed.
+// Fetches posts using the tab's base filter (type condition only) plus a stable cursor, so newly inserted rows don't shift older rows between pages while someone is already scrolling the feed.
 function buildFeedQuery(baseFilter, cursor = null, limit = FEED_PAGE_SIZE) {
   let q = supabase
     .from("posts")
@@ -2717,10 +2233,7 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
   feedLoadedCount = 0;
   feedHasMore = true;
   feedCursor = null;
-  // A prefetched page belongs to whatever tab/filter was active when it
-  // was fetched — starting a new subscription (tab switch, refresh)
-  // means any in-flight or cached prefetch is for the WRONG feed now,
-  // so it must not get spliced into this one.
+  // A prefetched page belongs to whatever tab/filter was active when it was fetched.
   _prefetchedFeedPage = null;
   resetSuggestedReelsInterleaveState();
   const myGeneration = _feedLoadGeneration;
@@ -2730,15 +2243,7 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
       buildFeedQuery(baseFilter, null, FEED_PAGE_SIZE),
     );
     const freshPosts = data.map((item) => ({ id: item.id, data: item }));
-    // Cache this snapshot for its signature regardless of whether an
-    // even-newer tab switch has since superseded it (see
-    // _feedBucketCache's own comment) — captured from the `forSignature`
-    // parameter (this call's own closure), never from a shared mutable
-    // variable, so two overlapping in-flight fetches can never stomp on
-    // each other's cache entry. Only set when filterFeed is what
-    // triggered this call — subscribeFeed() also runs from sign-out/
-    // reconnect paths that pass no signature, and those should never be
-    // treated as a reusable cache.
+    // Cache this snapshot for its signature regardless of whether an even-newer tab switch has since superseded it (see _feedBucketCache's own comment).
     if (forSignature) {
       const cursorForCache = data.length
         ? getPostCursor(data[data.length - 1])
@@ -2757,10 +2262,7 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
     feedHasMore = data.length === FEED_PAGE_SIZE;
     updateFeedCursorFromPosts(data, "feed");
     applyFeedRankingToCache();
-    // Keep the bucket cache entry in sync with the now-ranked order,
-    // since the version stored above (pre-ranking, to avoid mutating
-    // the shared ranking state for a possibly-superseded fetch) is
-    // slightly out of order otherwise.
+    // Keep the bucket cache entry in sync with the now-ranked order, since the version stored above (pre-ranking, to avoid mutating the shared ranking state for a possibly-superseded fetch) is slightly out of order otherwise.
     if (forSignature) {
       const entry = _feedBucketCache.get(forSignature);
       if (entry) entry.posts = allCachedPosts;
@@ -2774,10 +2276,7 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
         .eq("user_id", currentUserData.id);
 
       if (remoteSaves) {
-        // Same string/number mismatch as likes (posts.id is bigint,
-        // but ids flowing through onclick attributes are strings) —
-        // normalize both sides through idKey so a saved item never
-        // silently reads as "not bookmarked" after a refresh.
+        // Same string/number mismatch as likes (posts.id is bigint, but ids flowing through onclick attributes are strings).
         const savedIds = remoteSaves.map((s) => idKey(s.post_id));
         userCartList = userCartList.filter((item) =>
           savedIds.includes(idKey(item.id)),
@@ -2803,21 +2302,12 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
           "campus_market_cart",
           JSON.stringify(userCartList),
         );
-        // This reconciliation can genuinely change the saved count
-        // (e.g. a save made on another device) — keep the header badge
-        // and Profile's Saved Items numbers in sync with it rather than
-        // waiting for the next explicit save/unsave action to catch up.
+        // This reconciliation can genuinely change the saved count (e.g.
         syncHeaderCartBadge();
         syncProfileSavedCountBadges();
       }
 
-      // Fix: likedPostIds was only ever derived from localStorage,
-      // which is per-browser and can be cleared, so a refresh (or a
-      // new device) could show hearts as "unliked" even though the
-      // like is recorded server-side. Now we reconcile against the
-      // real `likes` table for the signed-in user on every feed load,
-      // so the heart state always matches the database, not just
-      // whatever happened to survive in this browser's storage.
+      // Fix: likedPostIds was only ever derived from localStorage, which is per-browser and can be cleared, so a refresh (or a new device) could show hearts as "unliked" even though the like is recorded server-side.
       try {
         const { data: remoteLikes, error: likesFetchErr } = await supabase
           .from("likes")
@@ -2825,14 +2315,7 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
           .eq("user_id", currentUserData.id);
 
         if (likesFetchErr) {
-          // Surfacing this (rather than swallowing it) matters:
-          // if this query errors — e.g. an RLS policy blocking
-          // the read, or a column type mismatch on the likes
-          // table — likedPostIds silently keeps whatever was
-          // last in localStorage instead of actually
-          // reconciling with the database, which can look
-          // exactly like "likes disappearing on refresh" when
-          // the real problem is this sync failing every time.
+          // Surfacing this (rather than swallowing it) matters.
           console.error("Likes sync query failed:", likesFetchErr);
         }
 
@@ -2852,26 +2335,7 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
       }
     }
 
-    // Bug fix: this used to check `myGeneration >= _lastRenderedFeedGeneration`
-    // — a "highest generation rendered so far" tracker meant to stop an
-    // older fetch from clobbering a newer one that already finished. But
-    // it did nothing to stop an older fetch from rendering when it's
-    // simply the FIRST one to reach this point — which happens easily on
-    // a fast swipe-through (All -> Services -> Following in quick
-    // succession): Services' subscribeFeed() call can still be sitting in
-    // its own awaits (the saves/likes reconciliation above) when
-    // Following's loadFollowingFeed() finishes and renders first. Since
-    // loadFollowingFeed() never touches _lastRenderedFeedGeneration at
-    // all, Services' late fetch then reaches here, sees
-    // myGeneration >= _lastRenderedFeedGeneration is still true, and
-    // overwrites the DOM with Services content — while the tab UI still
-    // says Following. That's exactly what "swiped to Following, saw
-    // Services" was. The fix is the same strict check already used
-    // everywhere else in this file (see line ~2708 above, and
-    // loadFollowingFeed/loadTrendingFeed): only render if this fetch's
-    // generation is still the CURRENT one, full stop — no fetch that's
-    // been superseded by ANY subsequent tab switch is allowed to paint
-    // the screen, regardless of arrival order.
+    // Bug fix: this used to check `myGeneration >= _lastRenderedFeedGeneration`.
     if (myGeneration === _feedLoadGeneration) {
       renderFeedFromCache();
     }
@@ -2879,10 +2343,7 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
     console.error("Feed poll error:", err);
   }
 
-  // Hoisted: clear any pending coalesce from a previous subscription
-  // BEFORE installing this channel's listener, so a queued callback
-  // from the just-unsubscribed previous one can't fire with the
-  // previous tab's baseFilter and silently overwrite the new feed.
+  // Hoisted: clear any pending coalesce from a previous subscription BEFORE installing this channel's listener, so a queued callback from the just-unsubscribed previous one can't fire with the previous tab's baseFilter and silently overwrite the new feed.
   clearTimeout(_feedRefreshDebounceTimer);
   _feedRefreshDebounceTimer = null;
   currentFeedChan = supabase
@@ -2891,21 +2352,7 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
       "postgres_changes",
       { event: "*", schema: "public", table: "posts" },
       (payload) => {
-        // Debounced: multiple realtime events arriving in quick
-        // succession (e.g. several people liking/commenting around
-        // the same time) previously each triggered their own full
-        // feed re-fetch + re-render, tearing down and rebuilding
-        // every card and restarting every video repeatedly. Now
-        // rapid bursts coalesce into a single refresh shortly after
-        // things settle.
-        //
-        // Fix: this used to always re-fetch just the first
-        // FEED_LIMIT posts, silently discarding anything the person
-        // had already scrolled/loaded further down via "load more" —
-        // a live update partway through browsing would snap the
-        // feed back to page 1. Now it re-fetches exactly however
-        // many posts are currently loaded, preserving pagination
-        // progress.
+        // Debounced: multiple realtime events arriving in quick succession (e.g.
         if (payload?.eventType === "INSERT" && payload?.new) {
           notifySavedAlertsForPosts([payload.new], { source: "realtime" });
         }
@@ -2917,17 +2364,7 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
               buildFeedQuery(baseFilter, null, currentCount),
             );
 
-            // Fix: liking a post writes to posts.likes_count via
-            // increment_post_likes, which itself fires THIS very
-            // listener. If that refresh's fresh fetch lands before
-            // your own increment has actually committed server-side,
-            // it would silently overwrite your optimistic count with
-            // the stale pre-like number — which is exactly why likes
-            // could appear to "revert" seemingly at random shortly
-            // after tapping them. Any post with a like operation
-            // still in flight (see likeInFlight, set/cleared in
-            // likePost) keeps whatever likes_count is already showing
-            // locally instead of being blindly replaced here.
+            // Fix: liking a post writes to posts.likes_count via increment_post_likes, which itself fires THIS very listener.
             const previousById = new Map(
               allCachedPosts.map((p) => [idKey(p.id), p.data]),
             );
@@ -2946,33 +2383,10 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
             feedLoadedCount = data.length;
             feedHasMore = data.length >= currentCount;
             updateFeedCursorFromPosts(data, "feed");
-            // Fix: tapping the like (heart) button on a post used to
-            // visibly move the post up/down the list, swapping places
-            // with whatever rank had a slightly higher score after the
-            // ranking sort ran. The rank changes because likes_count
-            // is one of the inputs to getFeedScore via FEED_DECAY_-
-            // ENGAGEMENT_WEIGHT — a tap that went from 0 likes to 1
-            // like could push a low-freshness post above a higher-
-            // freshness one and reorder the array, which rendered as
-            // the post "jumping".
-            //
-            // Always re-rank, but use a STABLE sort that preserves
-            // the previous display order when engagement ties. The
-            // order someone saw before the tap is now remembered as
-            // a per-post "rank" so compare-by-rank is part of the
-            // secondary break — meaning identical scores never
-            // visually reorder cards.
+            // Fix: tapping the like (heart) button on a post used to visibly move the post up/down the list, swapping places with whatever rank had a slightly higher score after the ranking sort ran.
             applyStableFeedRankingToCache(previousById);
 
-            // Fix: this re-render was running the instant the debounce
-            // timer fired, with no regard for whether the person was
-            // actively mid-scroll at that exact moment — rebuilding
-            // potentially dozens of post cards is exactly the kind of
-            // work that blocks the main thread long enough to show up
-            // as a visible scroll freeze. Capped at 2 seconds of
-            // waiting so a person who never stops scrolling still
-            // gets an eventually-fresh feed rather than the update
-            // being deferred forever.
+            // Fix: this re-render was running the instant the debounce timer fired, with no regard for whether the person was actively mid-scroll at that exact moment.
             let scrollWaitBudgetMs = 2000;
             while (_isActivelyScrolling() && scrollWaitBudgetMs > 0) {
               await sleep(150);
@@ -2997,9 +2411,7 @@ async function subscribeFeed(baseFilter = null, forSignature = null) {
     .subscribe();
 }
 
-// Fetches the next page of posts for the currently active tab and appends
-// them to allCachedPosts, then re-renders. Triggered by scrolling near
-// the bottom of the feed (see setupFeedLoadMoreObserver).
+// Fetches the next page of posts for the currently active tab and appends them to allCachedPosts, then re-renders.
 async function loadNextFeedPage() {
   if (isFeedLoadingMore || !feedHasMore) return;
   isFeedLoadingMore = true;
@@ -3009,8 +2421,7 @@ async function loadNextFeedPage() {
   try {
     let data;
     if (_prefetchedFeedPage && _prefetchedFeedPage.cursorUsed === feedCursor) {
-      // Already fetched ahead of time (see prefetchNextFeedPage) — skip
-      // the network wait and the "Loading more..." flash entirely.
+      // Already fetched ahead of time (see prefetchNextFeedPage).
       data = _prefetchedFeedPage.data;
       _prefetchedFeedPage = null;
     } else {
@@ -3039,14 +2450,11 @@ async function loadNextFeedPage() {
     appendFeedCards(newItems);
 
     if (!feedHasMore && data.length === FEED_PAGE_SIZE && sentinel) {
-      // Hit the session cap specifically (not a real end-of-feed) —
-      // say so, rather than showing nothing/implying there's truly
-      // nothing left.
+      // Hit the session cap specifically (not a real end-of-feed).
       sentinel.innerHTML = `<div class="py-6 text-center text-slate-500 text-[10px] uppercase tracking-widest">You've reached the end for now — refresh for the latest</div>`;
     }
 
-    // Immediately start fetching the page after THIS one, so it's
-    // likely ready the next time the person scrolls this far.
+    // Immediately start fetching the page after THIS one, so it's likely ready the next time the person scrolls this far.
     prefetchNextFeedPage();
   } catch (err) {
     console.error("Load more posts error:", err);
@@ -3056,19 +2464,11 @@ async function loadNextFeedPage() {
   }
 }
 
-// Prefetch cache: holds the NEXT page's data, fetched in the background
-// as soon as the current page finishes rendering, so by the time the
-// person actually scrolls the sentinel into range (see the 400px
-// rootMargin below), the data is usually already sitting in memory
-// instead of still needing a network round trip — a real prefetch, not
-// just an early-triggering observer.
+// Prefetch cache: holds the NEXT page's data, fetched in the background as soon as the current page finishes rendering, so by the time the person actually scrolls the sentinel into range (see the 400px rootMargin below), the data is usually already sitting in memory instead of still needing a network round trip — a real prefetch, not just an early-triggering observer.
 let _prefetchedFeedPage = null; // { cursorUsed, data } | null
 
 async function prefetchNextFeedPage() {
-  // Only the main type-based feed uses this (currentFeedBaseFilter) —
-  // Following/Trending/Reels have their own separate load paths and
-  // aren't wired to this cache, so this intentionally no-ops for them
-  // rather than guessing at an equivalent.
+  // Only the main type-based feed uses this (currentFeedBaseFilter).
   if (
     currentFeedType === "following" ||
     currentFeedType === "trending" ||
@@ -3083,23 +2483,16 @@ async function prefetchNextFeedPage() {
     const data = await fetchFeedSnapshot(() =>
       buildFeedQuery(currentFeedBaseFilter, cursorUsed, FEED_PAGE_SIZE),
     );
-    // Only keep this if the cursor hasn't moved since — otherwise a
-    // real loadNextFeedPage (or a tab switch) already changed what
-    // "next page" even means, and using this stale result would
-    // duplicate or skip posts.
+    // Only keep this if the cursor hasn't moved since.
     if (cursorUsed === feedCursor) {
       _prefetchedFeedPage = { cursorUsed, data };
     }
   } catch (_) {
     // Silent by design — this is purely a perf optimization.
-    // loadNextFeedPage's normal fetch path is the real mechanism and
-    // already has its own error handling/toast.
   }
 }
 
-// Watches a sentinel element placed after the last rendered card; once it
-// scrolls into view, fetches the next page. Using an observer instead of
-// a scroll listener avoids firing on every scroll pixel.
+// Watches a sentinel element placed after the last rendered card.
 function setupFeedLoadMoreObserver() {
   if (feedLoadMoreObserver) {
     feedLoadMoreObserver.disconnect();
@@ -3125,9 +2518,7 @@ function setupFeedLoadMoreObserver() {
 
   feedLoadMoreObserver.observe(sentinel);
 
-  // Kick off fetching one page AHEAD right away, in the background —
-  // by the time the person actually scrolls this far, it's often
-  // already sitting in memory (see prefetchNextFeedPage above).
+  // Kick off fetching one page AHEAD right away, in the background.
   prefetchNextFeedPage();
 }
 
@@ -3178,38 +2569,19 @@ function setNavHighlight(btn, viewId) {
 }
 
 window.navigateTo = function (viewId, btn = null) {
-  // Fix: refreshing the page always dropped you back on the Feed/All
-  // tab, even if you'd been sitting on DMs or Profile — nothing
-  // remembered which tab you were actually on, so a hard reload had no
-  // way to restore it. Every real tab switch (not internal calls like
-  // the search bar routing through 'explore') records itself here;
-  // _restoreLastViewOnce() (near the auth boot handler) reads it back
-  // exactly once per app load.
+  // Fix: refreshing the page always dropped you back on the Feed/All tab, even if you'd been sitting on DMs or Profile.
   if (["feed", "explore", "dms", "profile", "cart"].includes(viewId)) {
     try {
       localStorage.setItem("campus_market_last_view", viewId);
     } catch (_) {}
   }
 
-  // Fix: the header search bar (and its results) used to stay open on
-  // screen after switching tabs — the only thing that closed it was
-  // tapping the search icon a second time. Closing it here means
-  // moving to Feed/Explore/DMs/Profile/Cart always leaves a clean
-  // header behind. _runSearchImmediate() also routes through
-  // navigateTo('explore') on every keystroke to show results, so we
-  // skip the auto-close in that one case — otherwise it would wipe
-  // out the query the person is still typing.
-  // Record view transitions in the back-history stack so the hardware/
-  // gesture back button can return to the previous tab, except when this
-  // navigateTo() call IS the back-navigation itself (silent re-entry —
-  // pushed from the popstate handler). Skip pushes for the same view
-  // the user is already on so repeated taps don't grow the stack.
+  // Fix: the header search bar (and its results) used to stay open on screen after switching tabs.
   if (!window._isViewNavInProgress) {
     const last = _viewHistory[_viewHistory.length - 1];
     if (last !== viewId) {
       _viewHistory.push(viewId);
-      // Cap so the stack never grows unbounded if someone calls
-      // navigateTo() programmatically many times in a row.
+      // Cap so the stack never grows unbounded if someone calls navigateTo() programmatically many times in a row.
       if (_viewHistory.length > 8) _viewHistory.shift();
       try {
         history.pushState({ uiView: viewId }, "");
@@ -3224,17 +2596,11 @@ window.navigateTo = function (viewId, btn = null) {
     window.closeHeaderSearch();
   }
 
-  // Stop all reel video audio whenever we leave the feed entirely, so
-  // switching to Profile/DMs/etc never leaves background audio playing.
+  // Stop all reel video audio whenever we leave the feed entirely, so switching to Profile/DMs/etc never leaves background audio playing.
   if (viewId !== "feed") {
     pauseAllReelVideos();
 
-    // A reel's comment sheet is moved to document.body the first time
-    // it opens (see toggleComments — this sidesteps a WebKit clipping
-    // bug), which means it's no longer inside feed-container and
-    // won't get hidden by the container toggle below. Close it
-    // explicitly so switching to Profile/DMs/etc never leaves it
-    // floating on screen over whatever view comes next.
+    // A reel's comment sheet is moved to document.body the first time it opens (see toggleComments.
     document.querySelectorAll(".reel-comments.comments-open").forEach((el) => {
       const reelId = el.id.replace("comments-", "");
       window._closeCommentSheet(idKey(reelId));
@@ -3253,18 +2619,11 @@ window.navigateTo = function (viewId, btn = null) {
   const targetElement = document.getElementById(targetId);
   if (targetElement) targetElement.classList.remove("hidden");
 
-  // feed-tabs now lives in the merged header row (always visible), but
-  // it only applies to the feed itself — hide it on other views the
-  // same way the old two-row header did.
+  // feed-tabs now lives in the merged header row (always visible), but it only applies to the feed itself.
   const tabs = document.getElementById("feed-tabs");
   if (tabs) tabs.style.display = viewId === "feed" ? "flex" : "none";
 
-  // Fix: Profile and DMs don't need the search icon or the saved-items
-  // (bookmark/cart) shortcut in the header — search already lives on
-  // Explore, and neither view is a place you'd bookmark something
-  // from. Removing them without replacing anything left a bare,
-  // half-empty header bar (icons bunched at the left edge), so a page
-  // title fills that same space instead on exactly those two views.
+  // Fix: Profile and DMs don't need the search icon or the saved-items (bookmark/cart) shortcut in the header.
   const HEADER_TITLES = { profile: "Profile", dms: "Inbox" };
   const searchBtn = document.getElementById("search-toggle-btn");
   const cartBtn = document.getElementById("nav-btn-cart");
@@ -3277,38 +2636,25 @@ window.navigateTo = function (viewId, btn = null) {
     if (titleText) pageTitle.textContent = titleText;
   }
 
-  // TikTok-style profile header: the bookmark icon's spot (already
-  // hidden on Profile by the block above) gets a Share icon instead —
-  // only on Profile, not DMs, since DMs has no "share this" concept.
+  // TikTok-style profile header: the bookmark icon's spot (already hidden on Profile by the block above) gets a Share icon instead.
   const profileShareBtn = document.getElementById("header-profile-share-btn");
   if (profileShareBtn)
     profileShareBtn.classList.toggle("hidden", viewId !== "profile");
 
-  // Leaving the feed always exits Reels overlay mode so the header goes
-  // back to its normal solid bar on Profile/DMs/Explore/Cart.
+  // Leaving the feed always exits Reels overlay mode so the header goes back to its normal solid bar on Profile/DMs/Explore/Cart.
   if (viewId !== "feed") {
     document
       .getElementById("site-header")
       ?.classList.remove("header-reels-mode");
   }
 
-  // Safety net: renderChatThreadShell() hides the bottom nav while a
-  // chat thread is open and closeDMThread() is what normally restores
-  // it — but navigateTo() is the one function guaranteed to run on
-  // every possible way of leaving a view (including back-gesture paths
-  // that don't go through closeDMThread), so it un-hides the nav here
-  // too. Reels' own scroll handler re-hides it on the feed as needed,
-  // so this is safe to always run.
+  // Safety net: renderChatThreadShell() hides the bottom nav while a chat thread is open and closeDMThread() is what normally restores it.
   document
     .querySelector(".bottom-nav-container")
     ?.classList.remove("bottom-nav-hidden");
   document.querySelector("main")?.classList.remove("chat-thread-open");
 
-  // Fix: feed-tab-all/feed-tab-grid on <body> (desktop column width +
-  // right-rail visibility) previously only got set/cleared by
-  // filterFeed(), never by navigateTo() — so switching away from the
-  // feed left them stuck on <body>, over-widening (or hiding the rail
-  // on) Profile/DMs/Explore/Cart. Sync them on every navigation instead.
+  // Fix: feed-tab-all/feed-tab-grid on <body> (desktop column width + right-rail visibility) previously only got set/cleared by filterFeed(), never by navigateTo().
   if (viewId === "feed") {
     syncFeedTabBodyClasses(currentFeedType);
   } else {
@@ -3319,9 +2665,7 @@ window.navigateTo = function (viewId, btn = null) {
     );
   }
   document.body.classList.toggle("profile-tab", viewId === "profile");
-  // Same idea as profile-tab above, just for the other two views where
-  // the header-to-content gap needed closing — see the matching CSS
-  // rule for what this actually changes.
+  // Same idea as profile-tab above, just for the other two views where the header-to-content gap needed closing.
   document.body.classList.toggle("dms-tab", viewId === "dms");
   document.body.classList.toggle("explore-tab", viewId === "explore");
   document.body.classList.toggle("cart-tab", viewId === "cart");
@@ -3332,17 +2676,7 @@ window.navigateTo = function (viewId, btn = null) {
   if (viewId === "profile") {
     const gate = document.getElementById("profile-auth-gate");
     const content = document.getElementById("profile-content");
-    // Bug fix: this used to decide sign-in state purely from
-    // currentUserData, which is still null for a brief window on every
-    // refresh (before the auth observer has resolved a restored
-    // session) — so navigating straight back to a previously-open
-    // Profile tab on reload forced the sign-in gate on screen, then the
-    // auth observer flipped it to the real signed-in profile a moment
-    // later. That's the flash. Now, while auth hasn't resolved yet,
-    // this leaves both gate and content exactly as they already are
-    // (both hidden on a fresh load) instead of asserting "signed out" —
-    // the auth observer (which does know for sure) settles it for real
-    // once it fires, same as it already does after sign-in/sign-out.
+    // Bug fix: this used to decide sign-in state purely from currentUserData, which is still null for a brief window on every refresh (before the auth observer has resolved a restored session) — so navigating straight back to a previously-open Profile tab on reload forced the sign-in gate on screen, then the auth observer flipped it to the real signed-in profile a moment later.
     if (!isAuthInitialized) {
       // leave as-is; auth observer will set the correct state shortly
     } else if (!currentUserData) {
@@ -3358,8 +2692,7 @@ window.navigateTo = function (viewId, btn = null) {
   if (viewId === "dms") {
     const gate = document.getElementById("dms-auth-gate");
     const content = document.getElementById("dms-content");
-    // Same fix as the Profile tab above — don't assert signed-out state
-    // before auth has actually resolved.
+    // Same fix as the Profile tab above — don't assert signed-out state before auth has actually resolved.
     if (!isAuthInitialized) {
       // leave as-is; auth observer will set the correct state shortly
     } else if (!currentUserData) {
@@ -3452,19 +2785,11 @@ window.openCampusSettings = function () {
   document
     .getElementById("profile-subview-settings")
     ?.classList.add("settings-panel-open");
-  // Instagram-style drill-down: always land on the flat category list
-  // first, even if a sub-screen was left open the last time Settings
-  // was visited. Reset is silent (no ui-stack pop) since there's
-  // nothing to animate back from on first entry.
+  // Instagram-style drill-down: always land on the flat category list first, even if a sub-screen was left open the last time Settings was visited.
   window.closeSettingsSubScreen(true);
 };
 
-// Instagram-style settings navigation: the list screen shows one row per
-// category; tapping a row opens ONE dedicated sub-screen at a time
-// (hidden/shown, no scrolling/anchoring), with its own back button. Wired
-// into the same pushUiState/popUiState stack every other overlay in the
-// app uses, so the hardware/device back button steps back to the list
-// screen first instead of leaving Settings entirely.
+// Instagram-style settings navigation: the list screen shows one row per category.
 window.openSettingsScreen = function (name) {
   const list = document.getElementById("settings-list-screen");
   const target = document.getElementById(`settings-screen-${name}`);
@@ -3500,14 +2825,7 @@ window.closeCampusSettingsPanel = function () {
 
 window.openUserDashboard = function (userId) {
   if (!userId) return;
-  // Changed: tapping "Provider" used to jump straight to your own
-  // private editable Profile tab (closing whatever you were looking
-  // at). Now it opens the same read-only profile card everyone else
-  // sees when they tap your posts, so you can actually view your own
-  // profile the way buyers do instead of only ever seeing the edit
-  // screen. The edit screen is still just as reachable via the
-  // Profile tab in the bottom nav — this only changes what tapping
-  // your own name/avatar on a post does.
+  // Changed: tapping "Provider" used to jump straight to your own private editable Profile tab (closing whatever you were looking at).
   window.openPublicProfile(userId);
 };
 
@@ -3521,15 +2839,7 @@ window.togglePostModal = function () {
   const willOpen = modal.classList.contains("hidden");
   modal.classList.toggle("hidden");
 
-  // Fix: this modal never locked body scroll at all — unlike the
-  // Detail modal (see _bodyScrollLocks below), which already handles
-  // this correctly. #post-modal is a fixed inset-0 overlay, but its
-  // actual content card only fills the bottom portion (items-end);
-  // the backdrop area above the card has nothing scrollable of its
-  // own, so on mobile a swipe starting there was chaining through to
-  // the feed underneath instead of being absorbed by the overlay.
-  // Same pair++/-- counter as the Detail modal so the two nest
-  // correctly if one is ever opened from inside the other.
+  // Fix: this modal never locked body scroll at all.
   if (willOpen) {
     _bodyScrollLocks++;
     document.body.style.overflow = "hidden";
@@ -3539,11 +2849,7 @@ window.togglePostModal = function () {
   }
 
   if (willOpen) {
-    // Back-button/gesture close routes through this closure, not
-    // through this function itself (see pushUiState above) — release
-    // the same lock here too, or a back-button close would leave body
-    // scroll permanently disabled instead of just the toggle-button
-    // close path.
+    // Back-button/gesture close routes through this closure, not through this function itself (see pushUiState above).
     pushUiState("post-modal", () => {
       document.getElementById("post-modal")?.classList.add("hidden");
       if (--_bodyScrollLocks <= 0) {
@@ -3573,9 +2879,7 @@ window.openDetail = async function (postId, fromBack = false) {
       _currentDetailPostId &&
       idKey(_currentDetailPostId) !== idKey(postId)
     ) {
-      // Drilling into a related post from inside an already-open
-      // modal — remember where we came from so Back retraces the
-      // trail instead of closing the whole modal.
+      // Drilling into a related post from inside an already-open modal.
       _detailPostStack.push(_currentDetailPostId);
       pushUiState("detail-modal", () => window._goBackInDetailModal());
     } else if (!wasOpen) {
@@ -3586,36 +2890,14 @@ window.openDetail = async function (postId, fromBack = false) {
   _currentDetailPostId = postId;
 
   modal.classList.remove("hidden");
-  // Pair with the --_bodyScrollLocks counter in closeDetailModal: only
-  // bump the lock on a genuine closed->open transition. Fix: this used
-  // to run unconditionally on every call, including the drill-in case
-  // (already open, just switching to a different post) and the
-  // refresh-in-place case (Manage Listing calls openDetail(id, true) on
-  // an already-open modal just to repaint it with fresh data after a
-  // save — no close ever happens to release that extra lock). Either
-  // one silently inflated the counter with no matching release, and
-  // once it's inflated above what a single real close brings back to
-  // zero, document.body.style.overflow stays "hidden" permanently —
-  // exactly the "page scrolling seized after setting a flash sale"
-  // symptom, since saving from Manage Listing while that post's detail
-  // was open is exactly this refresh-in-place path.
+  // Pair with the --_bodyScrollLocks counter in closeDetailModal.
   if (!wasOpen) {
     _bodyScrollLocks++;
     document.body.style.overflow = "hidden";
   }
-  // Fix: keep aria-hidden in sync with .hidden so assistive tech knows
-  // the modal is visible when the class is removed, and gone when added.
+  // Fix: keep aria-hidden in sync with .hidden so assistive tech knows the modal is visible when the class is removed, and gone when added.
   modal.setAttribute("aria-hidden", "false");
-  // Fix: this used to unconditionally push ANOTHER 'detail-modal' history
-  // entry here, on top of whatever the if/else block above already
-  // pushed. When drilling into a "you might also like" post, that block
-  // correctly pushes a _goBackInDetailModal handler — but this second,
-  // redundant push then landed on top of it with a plain closeDetailModal
-  // handler instead. Since Back pops the LAST entry, pressing Back always
-  // closed the whole modal instead of stepping back through the trail.
-  // The if/else block above already pushes exactly the right handler for
-  // every case (drill-in vs fresh open vs fromBack), so nothing further
-  // needs to happen here.
+  // Fix: this used to unconditionally push ANOTHER 'detail-modal' history entry here, on top of whatever the if/else block above already pushed.
   content.innerHTML = `<div class="p-20 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Syncing Details...</div>`;
 
   try {
@@ -3630,11 +2912,7 @@ window.openDetail = async function (postId, fromBack = false) {
       return;
     }
 
-    // Fix: a direct link to a specific post (from a notification, an
-    // old share, browser history) could still open the full detail
-    // view for a listing from someone you've blocked, even though the
-    // feed itself already filters them out. Same placeholder treatment
-    // as blocked comments/profiles.
+    // Fix: a direct link to a specific post (from a notification, an old share, browser history) could still open the full detail view for a listing from someone you've blocked, even though the feed itself already filters them out.
     if (blockedUserIds.has(idKey(d.user_id))) {
       content.innerHTML = `
             <div class="p-10 text-center space-y-3">
@@ -3650,21 +2928,12 @@ window.openDetail = async function (postId, fromBack = false) {
     const isFollowing =
       !isOwn && viewer ? await checkFollowing(d.user_id) : false;
 
-    // Post view analytics (doc: "Analytics for Your Posts — show views and
-    // unique visitors"). Only counts real signed-in visitors other than
-    // the poster themselves — trackEvent silently no-ops for logged-out
-    // visitors (see trackEvent's userId guard), which is an honest,
-    // known gap rather than a bug: view counts here are a floor, not a
-    // complete count of anonymous traffic.
+    // Post view analytics (doc: "Analytics for Your Posts.
     if (!isOwn && !fromBack) {
       trackEvent("post_viewed", { post_id: idKey(postId) });
     }
 
-    // Tags the modal with the post's own type (product/skill/etc) so
-    // desktop CSS can give Products its own layout — same width as
-    // the default side-by-side view, but with details stacked below
-    // the media instead of beside it (see #detail-modal.is-product-detail
-    // in main.css).
+    // Tags the modal with the post's own type (product/skill/etc) so desktop CSS can give Products its own layout.
     modal.classList.remove("is-product-detail");
     if (d.type === "product") modal.classList.add("is-product-detail");
 
@@ -3732,9 +3001,7 @@ window.openDetail = async function (postId, fromBack = false) {
     const isSoldDetail = !!d.sold_at;
     const saleActiveDetail = isSaleActiveForPost(d);
     const hasDiscountDetail = saleActiveDetail;
-    // Big price is what a buyer pays right now (the sale price while
-    // live); the regular price shows crossed out next to it, and
-    // disappears the instant the countdown ends.
+    // Big price is what a buyer pays right now (the sale price while live).
     const displayPriceDetail = saleActiveDetail ? d.original_price : d.price;
     const detailActionsBlock = isSoldDetail
       ? `<p class="text-center text-slate-500 text-xs uppercase tracking-widest py-2">This listing is no longer available</p>`
@@ -3889,22 +3156,14 @@ window.openDetail = async function (postId, fromBack = false) {
 
 window.closeDetailModal = function (fromPop = false) {
   const modal = document.getElementById("detail-modal");
-  // Fix: scroll-lock leak. Previously set to '' unconditionally, which
-  // is correct ONLY when this close was the most recent open. If another
-  // modal overlaying the detail (or a sibling sheet like the options
-  // menu) is still open on close, clearing overflow here re-enabled the
-  // body scroll under THAT still-open overlay, defeating the rubber-band
-  // fix. Track our own count so only the LAST close releases the lock.
+  // Fix: scroll-lock leak. Previously set to '' unconditionally, which is correct ONLY when this close was the most recent open.
   if (--_bodyScrollLocks <= 0) {
     _bodyScrollLocks = 0;
     document.body.style.overflow = "";
   }
   _detailPostStack = [];
   _currentDetailPostId = null;
-  // Stop any video playing inside the detail view immediately — without
-  // this, closing the modal left the video (and its audio) running
-  // silently behind the scenes since only the modal's visibility was
-  // toggled, not the media element itself.
+  // Stop any video playing inside the detail view immediately.
   modal?.querySelectorAll("video").forEach((video) => {
     try {
       video.pause();
@@ -3913,43 +3172,17 @@ window.closeDetailModal = function (fromPop = false) {
     } catch (_) {}
   });
   modal?.classList.add("hidden");
-  // Fix: keep aria-hidden in sync so assistive tech actually treats the
-  // modal as gone — .hidden alone is a visual hint only, and screen
-  // readers were still reading the now-invisible content because the
-  // attribute was never toggled off on close.
+  // Fix: keep aria-hidden in sync so assistive tech actually treats the modal as gone.
   modal?.setAttribute("aria-hidden", "true");
   if (!fromPop) popUiState("detail-modal");
 };
 
-// Handles the browser/gesture Back action while inside a "You might also
-// like" trail: steps back to the post you drilled in FROM. openDetail is
-// called with fromBack=true so it just reloads that post's content
-// without pushing yet another history entry. Once the trail is empty,
-// Back behaves exactly like closing the modal normally.
+// Handles the browser/gesture Back action while inside a "You might also like" trail.
 window._goBackInDetailModal = function () {
   const prevId = _detailPostStack.pop();
   if (prevId) {
     window.openDetail(prevId, true);
-    // Fix: the popstate handler already popped this layer's _uiStack
-    // entry before calling us (that's how it got here) — and openDetail
-    // skips its usual pushUiState call entirely whenever fromBack is
-    // true, since that flag also covers unrelated "just refresh this
-    // modal's content in place" callers (Manage Listing save) that must
-    // NOT push a new entry. The net effect for a genuine drill-back
-    // like this one was that the modal stayed visually open (now
-    // showing the previous post) with NOTHING in _uiStack representing
-    // it — so the next back-press found an empty stack, skipped closing
-    // the still-open modal, skipped returning to the All tab, and fell
-    // straight into the exit sequence instead.
-    //
-    // Only push directly onto _uiStack here, NOT via pushUiState — the
-    // popstate handler that called us already re-pushes a real history
-    // entry for whatever's on top of _uiStack once this close() call
-    // returns (see the `if (_uiStack.length > 0) history.pushState(...)`
-    // right after `top.close(true)`), so calling pushUiState here too
-    // would push history state TWICE for one back-press, inflating real
-    // browser history depth beyond what _uiStack expects — the exact
-    // kind of drift that eventually causes a premature exit.
+    // Fix: the popstate handler already popped this layer's _uiStack entry before calling us (that's how it got here).
     _uiStack.push({
       id: "detail-modal",
       close: _detailPostStack.length
@@ -3962,10 +3195,7 @@ window._goBackInDetailModal = function () {
 };
 
 // ─── 9b. MANAGE LISTING (mark sold / flash sale price / countdown) ───────────
-// Deliberately narrow in scope rather than a full post editor (no title,
-// description, or image editing here) — see conversation: the ask was
-// specifically for sold-status and sale-pricing controls on an existing
-// listing, not general editing.
+// Deliberately narrow in scope rather than a full post editor (no title, description, or image editing here).
 window.openManageListingSheet = async function (postId) {
   if (!currentUserData) return;
 
@@ -3990,14 +3220,7 @@ window.openManageListingSheet = async function (postId) {
     return;
   }
 
-  // Post analytics (doc: "show views and unique visitors"). Reads from
-  // the existing user_events table (already used for signup/signin
-  // tracking) rather than a dedicated counter column — post_viewed
-  // events are fired from openDetail. This is best-effort by design:
-  // logged-out visitors don't produce a user_events row at all, so
-  // these numbers are a floor on real traffic, not a complete count.
-  // Failing to load them is non-fatal — the rest of the sheet still
-  // renders normally.
+  // Post analytics (doc: "show views and unique visitors").
   let viewCount = 0;
   let uniqueVisitorCount = 0;
   try {
@@ -4015,17 +3238,11 @@ window.openManageListingSheet = async function (postId) {
   }
 
   const isSold = !!post.sold_at;
-  // datetime-local inputs need "YYYY-MM-DDTHH:mm" with no timezone
-  // suffix — slicing an ISO string to 16 chars gives exactly that.
+  // datetime-local inputs need "YYYY-MM-DDTHH:mm" with no timezone suffix.
   const saleEndsValue = post.sale_ends_at
     ? new Date(post.sale_ends_at).toISOString().slice(0, 16)
     : "";
-  // Shows the "End Flash Sale Now" button whenever there's a running
-  // countdown at all (sale_ends_at in the future) — not just when it's
-  // a valid discount. A listing can end up with a countdown but no real
-  // discount (sale end time was set without ever setting a flash sale
-  // price below the listing price), and that stray timer needs to be
-  // clearable too, not just an actual live deal.
+  // Shows the "End Flash Sale Now" button whenever there's a running countdown at all (sale_ends_at in the future).
   const hasActiveSaleForManage =
     !!post.sale_ends_at && new Date(post.sale_ends_at).getTime() > Date.now();
 
@@ -4082,21 +3299,7 @@ window.openManageListingSheet = async function (postId) {
             </button>
         </div>`;
 
-  // Bug fix: this modal reuses the same input ids ("manageSaleEndsAt"
-  // etc.) every time it's opened for any post, with no
-  // autocomplete="off" until this fix. Mobile browsers (Chrome/Safari)
-  // can silently restore a previously-typed value into a field that
-  // matches an id/name they've seen before, AFTER the value attribute
-  // above has already been set — overwriting the real, freshly-loaded
-  // sale_ends_at with a stale leftover value the person never
-  // re-entered. _saveManageListing only rewrites the flash-sale fields
-  // when they differ from data-original-value, so a silent autofill
-  // swap here looked exactly like "the user changed this" and wrote
-  // that stale time back to the database — which is what was making
-  // the flash-sale countdown jump around across saves. autocomplete=
-  // "off" (added above) stops most of this at the source; forcing the
-  // real values back in on the next frame, after any autofill pass has
-  // had a chance to run, closes the rest of the gap.
+  // Bug fix: this modal reuses the same input ids ("manageSaleEndsAt" etc.) every time it's opened for any post, with no autocomplete="off" until this fix.
   requestAnimationFrame(() => {
     const priceEl = document.getElementById("managePrice");
     const origPriceEl = document.getElementById("manageOriginalPrice");
@@ -4143,10 +3346,7 @@ window._saveManageListing = async function (postId) {
   )
     return;
 
-  // Both price fields display thousands separators as you type (see
-  // _formatPriceInput) — stripped back to a plain numeric string here,
-  // same as Create Listing's price field, so "8,000" parses as 8000
-  // instead of silently truncating at the comma.
+  // Both price fields display thousands separators as you type (see _formatPriceInput).
   const newPriceRaw = priceInput.value.trim().replace(/,/g, "");
   const parsedPrice = newPriceRaw !== "" ? parseFloat(newPriceRaw) : null;
   if (newPriceRaw !== "" && (isNaN(parsedPrice) || parsedPrice < 0)) {
@@ -4164,16 +3364,7 @@ window._saveManageListing = async function (postId) {
     : null;
   const saleEndsRaw = saleEndsInput.value;
 
-  // Fix: changing ONLY the listing price used to always re-validate the
-  // flash sale fields too (future-end-time check, price-vs-discount
-  // check) even when neither field was touched — so a stale end time
-  // left over from a past sale (still sitting in the field, already in
-  // the past) blocked a plain price edit entirely, with no way to save
-  // until the person also cleared the flash sale fields by hand. Only
-  // re-validate flash sale fields when they've actually changed from
-  // what was loaded — compared against data-original-value, set once
-  // when the sheet opened, so this can't drift out of sync with what's
-  // really stored.
+  // Fix: changing ONLY the listing price used to always re-validate the flash sale fields too (future-end-time check, price-vs-discount check) even when neither field was touched.
   const flashPriceUnchanged =
     originalPriceRaw === (originalPriceInput.dataset.originalValue || "");
   const saleEndsUnchanged =
@@ -4201,13 +3392,7 @@ window._saveManageListing = async function (postId) {
       showToast("Flash sale end time must be in the future.");
       return;
     }
-    // Same rule as Create Listing: a sale end time only means anything
-    // if it comes with a flash sale price that's genuinely lower than
-    // the listing price — otherwise the post ends up with a running
-    // timer that never counts as a real deal anywhere. Uses the actual
-    // values this save is about to apply (a price field left blank
-    // keeps the post's existing price, read from its own
-    // data-original-value rather than a possibly-stale feed cache).
+    // Same rule as Create Listing: a sale end time only means anything if it comes with a flash sale price that's genuinely lower than the listing price.
     if (saleEndsRaw) {
       const effectivePrice =
         parsedPrice !== null
@@ -4233,10 +3418,7 @@ window._saveManageListing = async function (postId) {
   if (parsedPrice !== null) {
     updates.price = parsedPrice;
   }
-  // Flash sale fields are only included in the update at all when they
-  // were actually touched — leaving them out entirely when unchanged
-  // means a pure price edit can never accidentally clear or rewrite an
-  // existing (or stale) flash sale value.
+  // Flash sale fields are only included in the update at all when they were actually touched.
   if (!flashFieldsUnchanged) {
     if (originalPriceRaw === "") {
       updates.original_price = null;
@@ -4272,15 +3454,7 @@ window._saveManageListing = async function (postId) {
   showToast("Listing updated.");
   window.closeManageListingSheet();
   renderFeedFromCache();
-  // Fix: closing this sheet and re-rendering the feed grid never
-  // touched the post detail page underneath it — Manage Listing is
-  // usually opened FROM there (via the ⋮ menu on your own post), so
-  // saving showed the old price until you left the detail view and
-  // came back to it (which re-fetches fresh). openDetail always does a
-  // full fresh fetch rather than reading the feed cache, so calling it
-  // again here (fromBack=true: no new history entry, no duplicate view
-  // analytics) is a direct, guaranteed-accurate refresh of exactly what
-  // just changed.
+  // Fix: closing this sheet and re-rendering the feed grid never touched the post detail page underneath it.
   if (
     _currentDetailPostId &&
     idKey(_currentDetailPostId) === idKey(postId) &&
@@ -4290,14 +3464,7 @@ window._saveManageListing = async function (postId) {
   }
 };
 
-// Ends a listing's flash sale immediately (clears original_price and
-// sale_ends_at) without going through _saveManageListing — deliberately
-// its own DB call so it doesn't bump created_at the way Save Changes
-// does (that would incorrectly re-surface the post as "new" just for
-// ending a sale). Only reachable from the button that's shown when a
-// sale is actually active, but re-checks currentUserData ownership at
-// the DB level via the same .eq("user_id", ...) guard as every other
-// listing mutation here.
+// Ends a listing's flash sale immediately (clears original_price and sale_ends_at) without going through _saveManageListing.
 window._endFlashSaleNow = async function (postId) {
   if (!currentUserData) return;
 
@@ -4335,8 +3502,7 @@ window._endFlashSaleNow = async function (postId) {
 
 // ─── 10. LOGIN MODAL ──────────────────────────────────────────────────────────
 window.openLoginModal = function () {
-  // Never show credential entry while offline — keeps the app feeling
-  // professional instead of dumping a broken form on a dead connection.
+  // Never show credential entry while offline.
   if (!isOnline) {
     showToast("You're offline. Reconnect to sign in.");
     return;
@@ -4388,13 +3554,7 @@ window.signInWithEmailPassword = async function (email, password) {
       btn.disabled = true;
     }
 
-    // Account lockout check, before attempting sign-in at all. If the
-    // check itself fails (network hiccup, function cold-start error),
-    // this fails OPEN — the sign-in attempt proceeds normally rather
-    // than blocking someone from logging in because a side-system had
-    // a problem. The lockout enforcement itself lives entirely in the
-    // login-guard Edge Function / login_attempts table, not here —
-    // this is just the client-side check-and-display step.
+    // Account lockout check, before attempting sign-in at all.
     try {
       const { data: lockoutCheck } = await supabase.functions.invoke(
         "login-guard",
@@ -4418,31 +3578,19 @@ window.signInWithEmailPassword = async function (email, password) {
       password,
     });
     if (error) {
-      // Record the failure (fire-and-forget — must not block showing
-      // the person their actual error message) before re-throwing
-      // into the catch block below.
+      // Record the failure (fire-and-forget — must not block showing the person their actual error message) before re-throwing into the catch block below.
       supabase.functions
         .invoke("login-guard", { body: { action: "failure", email } })
         .catch(() => {});
       throw error;
     }
 
-    // Successful login clears any prior failed-attempt count for this
-    // email — a person who mistypes their password twice and then
-    // gets it right on the third try shouldn't stay one step closer
-    // to lockout indefinitely.
+    // Successful login clears any prior failed-attempt count for this email.
     supabase.functions
       .invoke("login-guard", { body: { action: "success", email } })
       .catch(() => {});
 
-    // Two-Factor Authentication check. signInWithPassword above already
-    // succeeded (correct email+password), but Supabase Auth's own MFA
-    // system (supabase.auth.mfa — TOTP factors, not custom-built) tracks
-    // whether the SESSION has actually satisfied a second factor yet via
-    // "AAL" (Authenticator Assurance Level). If the person has 2FA
-    // enrolled, currentLevel stays at aal1 until they enter a code, even
-    // though the password step already passed — so sign-in isn't
-    // actually complete until that gap closes.
+    // Two-Factor Authentication check. signInWithPassword above already succeeded (correct email+password), but Supabase Auth's own MFA system (supabase.auth.mfa.
     const { data: aalData } =
       await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
     if (
@@ -4459,9 +3607,7 @@ window.signInWithEmailPassword = async function (email, password) {
     }
 
     startNewDeviceSession();
-    // currentUserData isn't populated until the auth-state observer
-    // runs after this — passing the id explicitly here means the
-    // event is still correctly attributed instead of silently no-op'ing.
+    // currentUserData isn't populated until the auth-state observer runs after this.
     trackEvent("signed_in", {}, data?.user?.id);
     document.getElementById("login-modal")?.classList.add("hidden");
     showToast("Welcome back! ✓");
@@ -4476,11 +3622,7 @@ window.signInWithEmailPassword = async function (email, password) {
   }
 };
 
-// Bot protection: Turnstile's widget calls this once a real visitor
-// passes its check, handing back a single-use token. Stored here so
-// registerWithEmail can attach it to the actual signUp() call below —
-// Supabase Auth verifies this token server-side against Cloudflare
-// itself; nothing about trusting it happens on the client.
+// Bot protection: Turnstile's widget calls this once a real visitor passes its check, handing back a single-use token.
 let _turnstileToken = "";
 window._onTurnstileVerified = function (token) {
   _turnstileToken = token;
@@ -4523,9 +3665,7 @@ window.registerWithEmail = async function (name, email, password) {
       btn.textContent = "Create Account";
       btn.disabled = false;
     }
-    // Turnstile tokens are single-use — reset the widget so a second
-    // attempt (after a failed signup, e.g. "email already in use")
-    // gets a fresh token instead of silently reusing a spent one.
+    // Turnstile tokens are single-use — reset the widget so a second attempt (after a failed signup, e.g.
     _turnstileToken = "";
     try {
       window.turnstile?.reset();
@@ -4558,12 +3698,7 @@ window.handleAvatarUpload = async function (inputEl) {
   showToast("Uploading avatar…");
 
   try {
-    // Compress before upload (see compressImageFile) — this also
-    // normalizes the output to JPEG, so every avatar upload lands at
-    // the SAME storage path (avatar.jpg) regardless of what format
-    // the original photo was in. That fixes a second bug: previously
-    // uploading a .png after a .jpg (or vice versa) left the old file
-    // sitting in storage forever, orphaned and never replaced.
+    // Compress before upload (see compressImageFile).
     const compressed = await compressImageFile(file, {
       maxDimension: 800,
       quality: 0.85,
@@ -4578,11 +3713,7 @@ window.handleAvatarUpload = async function (inputEl) {
           .upload(storagePath, compressed, {
             contentType: "image/jpeg",
             upsert: true,
-            // Safe to cache for a full year: storagePath is
-            // timestamp-based (see where it's built above), so
-            // the same path is never reused for different
-            // content — there's nothing for a long cache to
-            // ever go stale against.
+            // Safe to cache for a full year: storagePath is timestamp-based (see where it's built above), so the same path is never reused for different content.
             cacheControl: "31536000",
           });
         if (uploadErr) throw uploadErr;
@@ -4597,12 +3728,7 @@ window.handleAvatarUpload = async function (inputEl) {
     const {
       data: { publicUrl },
     } = supabase.storage.from("avatars").getPublicUrl(storagePath);
-    // Cache-bust with a fresh timestamp every time, and — critically —
-    // use THIS SAME cache-busted URL everywhere (DB, in-memory user
-    // object, AND the visible <img> tag). Previously the on-screen
-    // avatar was set to the plain, non-busted publicUrl, so browsers
-    // would happily keep serving whatever was cached at that exact
-    // path from a prior upload instead of the new photo.
+    // Cache-bust with a fresh timestamp every time, and.
     const dynamicUrl = `${publicUrl}?t=${Date.now()}`;
 
     const { error: dbErr } = await supabase
@@ -4617,25 +3743,7 @@ window.handleAvatarUpload = async function (inputEl) {
     if (!currentUserData.user_metadata) currentUserData.user_metadata = {};
     currentUserData.user_metadata.avatar_url = dynamicUrl;
 
-    // Fix: previously a new avatar only ever applied going forward —
-    // every post you'd already published had its `user_avatar` value
-    // frozen at upload time (posts store a denormalized snapshot of
-    // the poster's avatar rather than looking it up live), so old
-    // posts kept showing your old photo forever. Now we backfill
-    // user_avatar across ALL of the person's existing posts whenever
-    // they change their avatar, so past and future posts both show
-    // the current photo.
-    //
-    // Real bug found here: supabase-js's .update() does NOT throw when
-    // Row Level Security silently blocks the write — it just resolves
-    // normally with { data: null, error: {...} }. This code never
-    // looked at that `error`, so a blocked update looked identical to
-    // a successful one: no exception, catch block never ran, and the
-    // "Avatar updated everywhere! ✓" toast fired regardless of whether
-    // anything actually got written. Destructuring and checking
-    // `error` explicitly (like the rest of the app already does for
-    // every other insert/update) is what actually surfaces a genuine
-    // RLS rejection instead of masking it as silent success.
+    // Fix: previously a new avatar only ever applied going forward.
     let postsBackfillOk = true;
     try {
       const { error: postsBackfillErr } = await supabase
@@ -4645,16 +3753,13 @@ window.handleAvatarUpload = async function (inputEl) {
       if (postsBackfillErr) throw postsBackfillErr;
     } catch (backfillErr) {
       postsBackfillOk = false;
-      console.error("Avatar backfill onto existing posts failed:", backfillErr);
+      console.error(
+        "Avatar backfill onto existing posts failed:",
+        backfillErr,
+      );
     }
 
-    // Fix: comments have the exact same denormalized-snapshot problem
-    // as posts did (see above) — comments.user_avatar was frozen at
-    // the moment each comment was posted, so old comments kept
-    // showing a stale photo forever while only brand-new comments got
-    // the current one. Same backfill, same table-agnostic reasoning,
-    // just a different table — and the same silent-RLS-failure bug
-    // fixed above applies here too, now checked the same way.
+    // Fix: comments have the exact same denormalized-snapshot problem as posts did (see above).
     let commentsBackfillOk = true;
     try {
       const { error: commentsBackfillErr } = await supabase
@@ -4670,10 +3775,7 @@ window.handleAvatarUpload = async function (inputEl) {
       );
     }
 
-    // Instantly reflect the new avatar on anything already rendered
-    // in this session — the in-memory allCachedPosts snapshot, plus
-    // every avatar <img> tagged as belonging to this user — instead
-    // of waiting for the next full feed refresh.
+    // Instantly reflect the new avatar on anything already rendered in this session.
     allCachedPosts.forEach(({ data: d }) => {
       if (d.user_id === currentUserData.id) d.user_avatar = dynamicUrl;
     });
@@ -4690,7 +3792,10 @@ window.handleAvatarUpload = async function (inputEl) {
       postsBackfillOk && commentsBackfillOk
         ? "Avatar updated everywhere! ✓"
         : "Avatar updated, but couldn't sync to your older " +
-            [!postsBackfillOk && "posts", !commentsBackfillOk && "comments"]
+            [
+              !postsBackfillOk && "posts",
+              !commentsBackfillOk && "comments",
+            ]
               .filter(Boolean)
               .join(" or ") +
             " — check the Supabase RLS UPDATE policy for that table.",
@@ -4698,10 +3803,7 @@ window.handleAvatarUpload = async function (inputEl) {
   } catch (err) {
     console.error("Avatar upload error:", err);
     if (previewEl) {
-      // Fix: this used to fall back to '' if user_metadata was
-      // missing avatar_url, which silently cleared the preview on a
-      // failed upload. Always reserve the avatar-letter-placeholder
-      // as the ultimate fallback so the preview never goes blank.
+      // Fix: this used to fall back to '' if user_metadata was missing avatar_url, which silently cleared the preview on a failed upload.
       const fallbackAvatar =
         currentUserData.user_metadata?.avatar_url ||
         currentUserData.user_metadata?.avatar ||
@@ -4716,19 +3818,7 @@ window.handleAvatarUpload = async function (inputEl) {
 
 // ─── 11b. AVATAR LONG-PRESS MODAL ────────────────────────────────────────────
 let _avatarPressTimer = null;
-// Blocks the phone browser's own long-press menus app-wide — Android
-// Chrome's "Copy image / Download image / Share image / Open in Chrome
-// browser" sheet on images, and the text-selection "Copy / Share /
-// Select all" toolbar + Google-search bubble on labels — which only the
-// profile avatar's long-press had ever explicitly handled elsewhere.
-// The CSS user-select/touch-callout rules above cover most of this, but
-// Android Chrome's image context menu specifically is tied to the
-// contextmenu event itself and isn't reliably suppressed by CSS alone —
-// this is the same technique _initAvatarLongPress() already uses for
-// the avatar, just applied globally instead of to one element.
-// Genuinely typed content (inputs/textareas) and the avatar preview
-// modal (which has its own real Copy/Download buttons and wants its
-// own long-press handling) are explicitly excluded.
+// Blocks the phone browser's own long-press menus app-wide.
 document.addEventListener(
   "contextmenu",
   (e) => {
@@ -4747,9 +3837,7 @@ function _initAvatarLongPress() {
   const copyImageBtn = document.getElementById("copyImageBtn");
   const downloadImageBtn = document.getElementById("downloadImageBtn");
 
-  // Exposed globally so any avatar in the app can reuse this same
-  // shared preview modal (tap-to-view), not just the long-press-only
-  // one on your own profile edit screen below.
+  // Exposed globally so any avatar in the app can reuse this same shared preview modal (tap-to-view), not just the long-press-only one on your own profile edit screen below.
   window.openAvatarPreview = function (src) {
     if (!avatarModal || !modalAvatarImg) return;
     modalAvatarImg.src = src;
@@ -4787,11 +3875,7 @@ function _initAvatarLongPress() {
   profileAvatar.addEventListener("mouseup", cancelPress);
   profileAvatar.addEventListener("mouseleave", cancelPress);
 
-  // Belt-and-suspenders: some Android WebViews still surface their own
-  // native "Open in browser / Share / Download" long-press menu on an
-  // <img> even with -webkit-touch-callout: none set in CSS. Explicitly
-  // blocking the contextmenu event here guarantees our in-app modal
-  // wins instead of the OS-level share sheet from your screenshot.
+  // Belt-and-suspenders: some Android WebViews still surface their own native "Open in browser / Share / Download" long-press menu on an <img> even with -webkit-touch-callout.
   profileAvatar.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     return false;
@@ -4843,14 +3927,7 @@ if (document.readyState === "loading") {
 }
 
 // ─── 11c. MEDIA EDIT MODAL (WhatsApp-style edit before upload) ──────────────
-// Opened automatically whenever files are chosen via the mediaInput file
-// picker. Lets the user preview, rotate, and remove files before they are
-// actually attached to the listing (finalMediaFiles is what gets uploaded).
-// Limits enforced when attaching media to a post — previously there was
-// no validation at all, so someone could attach a 50-file batch or a
-// huge multi-hundred-MB video and the app would just try (and likely
-// fail slowly, or hammer the data usage fixes made elsewhere) instead of
-// telling them up front what's allowed.
+// Opened automatically whenever files are chosen via the mediaInput file picker.
 const MAX_MEDIA_FILES = 10;
 const MAX_IMAGE_SIZE_MB = 15;
 const MAX_VIDEO_SIZE_MB = 30;
@@ -4973,10 +4050,7 @@ function renderEditMediaModal() {
 
 window._selectStagedMedia = function (i) {
   activeStagedIndex = i;
-  // renderEditMediaModal() rebuilds the preview (including cropOverlay)
-  // from scratch, which naturally drops crop mode for the OLD image —
-  // but the footer buttons live outside that rebuilt subtree, so their
-  // crop-mode classes need to be reset explicitly here too.
+  // renderEditMediaModal() rebuilds the preview (including cropOverlay) from scratch, which naturally drops crop mode for the OLD image.
   window._cancelCrop();
   renderEditMediaModal();
 };
@@ -4985,22 +4059,13 @@ window._rotateStagedMedia = function () {
   if (!stagedMediaFiles[activeStagedIndex]) return;
   stagedMediaFiles[activeStagedIndex].rotation =
     (stagedMediaFiles[activeStagedIndex].rotation + 90) % 360;
-  // Rotating invalidates any crop the person already drew, since the
-  // rect was drawn against the old orientation — simplest and least
-  // surprising is to just clear it rather than try to remap coordinates
-  // through a rotation.
+  // Rotating invalidates any crop the person already drew, since the rect was drawn against the old orientation.
   delete stagedMediaFiles[activeStagedIndex].cropRect;
   renderEditMediaModal();
 };
 
 // ─── CROP ───────────────────────────────────────────────────────────────────
-// A lightweight, dependency-free crop tool: drag inside the box to move
-// it, drag a corner handle to resize it. The crop rect is stored as
-// fractions of the image's natural (rotated) dimensions (0–1 for
-// x/y/width/height), not pixels — that way it's completely independent
-// of whatever size the preview happens to be rendered at on screen, and
-// maps directly onto the full-resolution source image when actually
-// applying the crop in confirmEditedMedia.
+// A lightweight, dependency-free crop tool.
 let _cropDragState = null; // { mode: 'move'|'resize', handle, startX, startY, startRect }
 
 window._toggleCropMode = function () {
@@ -5018,9 +4083,7 @@ window._toggleCropMode = function () {
   cropFooter?.classList.toggle("crop-active", enteringCropMode);
 
   if (enteringCropMode) {
-    // Start from whatever crop was previously set for this image, or
-    // default to a centered 80% box so there's immediately something
-    // visible and adjustable rather than a jarring full-bleed box.
+    // Start from whatever crop was previously set for this image, or default to a centered 80% box so there's immediately something visible and adjustable rather than a jarring full-bleed box.
     const rect = item.cropRect || { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
     _setCropBoxRect(rect);
     _wireCropHandlers();
@@ -5053,8 +4116,7 @@ window._applyCrop = async function () {
 
   showToast("Applying crop…");
   try {
-    // Apply rotation first, then replace the staged source immediately. This
-    // makes the crop visible in the editor now, not only after publishing.
+    // Apply rotation first, then replace the staged source immediately.
     let workingFile = item.file;
     if (item.rotation !== 0)
       workingFile = await rotateImageFile(workingFile, item.rotation);
@@ -5105,10 +4167,7 @@ window._syncVideoTrimForPreview = function (video) {
     renderVideoTrimControls(active);
   };
 
-  // Same Infinity-duration quirk as compressVideoFile — without this,
-  // a video hitting it would never even show trim controls in the
-  // first place, on top of never actually getting capped at publish
-  // time.
+  // Same Infinity-duration quirk as compressVideoFile.
   if (!Number.isFinite(video.duration)) {
     video.currentTime = 1e101;
     video.ondurationchange = () => {
@@ -5141,24 +4200,12 @@ window._setVideoTrim = function (which, rawValue) {
   if (endEl) endEl.textContent = `${end.toFixed(1)}s`;
 };
 
-// Fix: #editMainPreview is a fixed 1:1 square with object-fit: contain,
-// so any non-square photo is letterboxed inside it — the actual pixels
-// only occupy part of that square, with black bars filling the rest.
-// The crop overlay spans the FULL square container, so without this
-// correction, a percentage-based crop rect computed against the overlay
-// would be calibrated against empty letterbox space for part of its
-// range, producing a crop that's shifted/wrong-sized relative to what
-// the person visually saw and dragged over. This computes the real
-// visible image rect (in the same coordinate space as the overlay) so
-// both reading and writing the crop box can be anchored to actual image
-// pixels, not the surrounding square.
+// Fix: #editMainPreview is a fixed 1:1 square with object-fit.
 function _getRenderedImageRect(overlay) {
   const img = overlay.parentElement?.querySelector("img");
   const overlayRect = overlay.getBoundingClientRect();
   if (!img || !img.naturalWidth || !img.naturalHeight) {
-    // No image to measure against (shouldn't normally happen since
-    // crop mode only opens for images) — fall back to treating the
-    // whole overlay as the image area rather than crashing.
+    // No image to measure against (shouldn't normally happen since crop mode only opens for images).
     return {
       left: overlayRect.left,
       top: overlayRect.top,
@@ -5172,13 +4219,11 @@ function _getRenderedImageRect(overlay) {
 
   let renderedWidth, renderedHeight;
   if (imageRatio > containerRatio) {
-    // Image is wider than the container: full width, letterboxed
-    // top/bottom.
+    // Image is wider than the container: full width, letterboxed top/bottom.
     renderedWidth = overlayRect.width;
     renderedHeight = overlayRect.width / imageRatio;
   } else {
-    // Image is taller than (or equal to) the container: full height,
-    // letterboxed left/right.
+    // Image is taller than (or equal to) the container.
     renderedHeight = overlayRect.height;
     renderedWidth = overlayRect.height * imageRatio;
   }
@@ -5196,9 +4241,7 @@ function _setCropBoxRect(rect) {
   const overlay = document.getElementById("cropOverlay");
   if (!box || !overlay) return;
 
-  // Convert the image-relative fraction back into overlay-relative
-  // percentages, since that's the coordinate space box.style.left/top
-  // actually operates in (it's a child of the overlay, not the image).
+  // Convert the image-relative fraction back into overlay-relative percentages, since that's the coordinate space box.style.left/top actually operates in (it's a child of the overlay, not the image).
   const overlayRect = overlay.getBoundingClientRect();
   const imgRect = _getRenderedImageRect(overlay);
 
@@ -5217,10 +4260,7 @@ function _readCropBoxRect(box, overlay) {
   const boxRect = box.getBoundingClientRect();
   const imgRect = _getRenderedImageRect(overlay);
 
-  // Express the box's position/size as fractions of the ACTUAL visible
-  // image area, not the surrounding square — this is what
-  // cropImageFile's rect.x/y/width/height are documented to mean (see
-  // its own comment), and now they actually are.
+  // Express the box's position/size as fractions of the ACTUAL visible image area, not the surrounding square.
   return {
     x: (boxRect.left - imgRect.left) / imgRect.width,
     y: (boxRect.top - imgRect.top) / imgRect.height,
@@ -5236,8 +4276,7 @@ function _wireCropHandlers() {
   const box = document.getElementById("cropBox");
   if (!overlay || !box) return;
 
-  // Re-query handles fresh each time since renderEditMediaModal rebuilds
-  // this DOM subtree from scratch on every render.
+  // Re-query handles fresh each time since renderEditMediaModal rebuilds this DOM subtree from scratch on every render.
   const handles = box.querySelectorAll(".crop-handle");
 
   const onPointerDown = (e, mode, handle = null) => {
@@ -5249,12 +4288,7 @@ function _wireCropHandlers() {
       handle,
       startClientX: e.clientX,
       startClientY: e.clientY,
-      // Deltas need to be expressed as fractions of the actual
-      // visible image, matching the coordinate space startRect is
-      // already in (see _readCropBoxRect) — using the full,
-      // possibly-letterboxed overlay dimensions here instead would
-      // make the box drift out of sync with the cursor on any
-      // non-square photo.
+      // Deltas need to be expressed as fractions of the actual visible image, matching the coordinate space startRect is already in (see _readCropBoxRect).
       imageWidth: imgRect.width,
       imageHeight: imgRect.height,
       startRect: _readCropBoxRect(box, overlay),
@@ -5278,8 +4312,7 @@ function _wireCropHandlers() {
       return;
     }
 
-    // Resize: each corner drags its own two edges, clamped so the box
-    // never shrinks below the minimum or crosses outside the image.
+    // Resize: each corner drags its own two edges, clamped so the box never shrinks below the minimum or crosses outside the image.
     let { x, y, width, height } = startRect;
     if (handle === "se") {
       width = _clamp(
@@ -5380,15 +4413,7 @@ window.closeEditMediaModal = function (fromPop = false) {
   if (!fromPop) popUiState("edit-media-modal");
 };
 
-// Applies rotation (if any) then compresses images by redrawing them to
-// canvas, so the final uploaded file is both edited correctly AND
-// meaningfully smaller than the original camera photo — this is the main
-// data-usage improvement for posting: previously the raw, unmodified
-// file (often several MB straight from a phone camera) was uploaded
-// as-is. Videos are left untouched here; real video transcoding needs a
-// much heavier tool than a browser canvas can provide, so for now we
-// only compress images. Rotated + compressed happens in one pass to
-// avoid re-encoding twice.
+// Applies rotation (if any) then compresses images by redrawing them to canvas, so the final uploaded file is both edited correctly AND meaningfully smaller than the original camera photo — this is the main data-usage improvement for posting: previously the raw, unmodified file (often several MB straight from a phone camera) was uploaded as-is.
 window.confirmEditedMedia = async function () {
   if (stagedMediaFiles.length === 0) {
     showToast("Please attach at least one file.");
@@ -5398,10 +4423,7 @@ window.confirmEditedMedia = async function () {
 
   showToast("Preparing media…");
 
-  // Data Saver toggle (Settings) makes compression noticeably more
-  // aggressive — smaller max dimension and lower quality — for people
-  // who've explicitly said they want to minimize data usage over a
-  // slightly sharper image.
+  // Data Saver toggle (Settings) makes compression noticeably more aggressive.
   const dataSaverOn =
     typeof window.getAppSettings === "function" &&
     window.getAppSettings().dataSaver;
@@ -5417,12 +4439,7 @@ window.confirmEditedMedia = async function () {
         if (item.rotation !== 0) {
           workingFile = await rotateImageFile(workingFile, item.rotation);
         }
-        // Crop is applied after rotation (the stored cropRect is
-        // relative to the rotated image, matching what the person
-        // actually saw and dragged the box over) and before
-        // compression, so the final encode only has to happen
-        // once on the already-cropped pixels rather than cropping
-        // a full-size image and re-encoding twice.
+        // Crop is applied after rotation (the stored cropRect is relative to the rotated image, matching what the person actually saw and dragged the box over) and before compression, so the final encode only has to happen once on the already-cropped pixels rather than cropping a full-size image and re-encoding twice.
         if (item.cropRect) {
           workingFile = await cropImageFile(workingFile, item.cropRect);
         }
@@ -5505,11 +4522,7 @@ function rotateImageFile(file, degrees) {
   });
 }
 
-// Crops an image to the given rect, where rect.x/y/width/height are all
-// fractions (0–1) of the image's own natural dimensions — the same
-// resolution-independent format the crop UI in _readCropBoxRect stores,
-// so this works correctly regardless of what size the crop box preview
-// was actually displayed at on screen.
+// Crops an image to the given rect, where rect.x/y/width/height are all fractions (0–1) of the image's own natural dimensions.
 function cropImageFile(file, rect) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -5545,16 +4558,9 @@ function cropImageFile(file, rect) {
   });
 }
 
-// Downscales and re-encodes an image to cut both upload and (later)
-// download size significantly. This is a lossy step by design — the
-// point is smaller files, which does mean a small drop in sharpness —
-// but it's what actually reduces data consumption for people uploading
-// and everyone viewing the feed afterward. Images already smaller than
-// maxDimension in both axes are still re-encoded at the given quality
-// (skipping that would leave big, poorly-compressed camera JPEGs as-is).
+// Downscales and re-encodes an image to cut both upload and (later) download size significantly.
 function compressImageFile(file, { maxDimension = 1280, quality = 0.75 } = {}) {
-  // Never try to compress non-raster formats (e.g. animated GIFs would
-  // lose their animation if redrawn to a single canvas frame).
+  // Never try to compress non-raster formats (e.g.
   if (file.type === "image/gif") return Promise.resolve(file);
 
   return new Promise((resolve, reject) => {
@@ -5581,9 +4587,7 @@ function compressImageFile(file, { maxDimension = 1280, quality = 0.75 } = {}) {
             reject(new Error("Canvas toBlob failed during compression"));
             return;
           }
-          // If compression somehow produced a LARGER file than the
-          // original (can happen with tiny/simple source images),
-          // just keep the original rather than penalizing the user.
+          // If compression somehow produced a LARGER file than the original (can happen with tiny/simple source images), just keep the original rather than penalizing the user.
           if (blob.size >= file.size) {
             resolve(file);
             return;
@@ -5596,28 +4600,14 @@ function compressImageFile(file, { maxDimension = 1280, quality = 0.75 } = {}) {
     };
     img.onerror = () => {
       URL.revokeObjectURL(objUrl);
-      // If the image somehow fails to decode for compression,
-      // fall back to uploading the original rather than blocking
-      // the whole post.
+      // If the image somehow fails to decode for compression, fall back to uploading the original rather than blocking the whole post.
       resolve(file);
     };
     img.src = objUrl;
   });
 }
 
-// Video compression — downscales resolution and re-encodes at a capped
-// bitrate via canvas + MediaRecorder, using the browser/device's own
-// (often hardware-accelerated) encoder. Deliberately NOT using a WASM
-// transcoder library like ffmpeg.wasm: that's a 25MB+ download, which
-// would undercut the exact "don't make every visitor's device do
-// avoidable heavy work" fix already done for Tailwind elsewhere in this
-// app. Trade-off for staying lightweight: re-encoding takes roughly as
-// long as the clip's own duration (it plays through once in the
-// background), and output format/codec depends on what the device's
-// MediaRecorder supports — both real compromises versus a proper
-// transcoder, but zero added download weight and no new CDN dependency.
-// Matters most while the app is on free-tier Supabase storage/egress —
-// video is by far the most expensive media type per post.
+// Video compression — downscales resolution and re-encodes at a capped bitrate via canvas + MediaRecorder, using the browser/device's own (often hardware-accelerated) encoder.
 function compressVideoFile(
   file,
   {
@@ -5632,8 +4622,7 @@ function compressVideoFile(
       typeof MediaRecorder === "undefined" ||
       !HTMLCanvasElement.prototype.captureStream
     ) {
-      // Older Safari/Android WebViews may lack one or both — fail open
-      // to the original file rather than blocking the post entirely.
+      // Older Safari/Android WebViews may lack one or both.
       resolve(file);
       return;
     }
@@ -5652,16 +4641,7 @@ function compressVideoFile(
     };
 
     video.onloadedmetadata = () => {
-      // Many real phone-camera videos (and anything MediaRecorder
-      // produced, including a video that already went through THIS
-      // same function once) report duration as Infinity in Chrome
-      // until something forces a seek — a known browser quirk, not
-      // anything wrong with the file. Previously this silently bailed
-      // out to the ORIGINAL, completely untrimmed/uncapped file
-      // whenever it hit this — exactly matching "the 30s cap doesn't
-      // apply" and "trim doesn't work" happening together. Seeking to
-      // a huge timestamp forces Chrome to actually compute the real
-      // duration; ondurationchange fires once it has it.
+      // Many real phone-camera videos (and anything MediaRecorder produced, including a video that already went through THIS same function once) report duration as Infinity in Chrome until something forces a seek — a known browser quirk, not anything wrong with the file.
       if (!Number.isFinite(video.duration)) {
         video.currentTime = 1e101;
         video.ondurationchange = () => {
@@ -5691,8 +4671,7 @@ function compressVideoFile(
         return;
       }
 
-      // Nothing worth gaining on an already-small/short clip — same
-      // "don't penalize small inputs" philosophy as compressImageFile.
+      // Nothing worth gaining on an already-small/short clip.
       if (
         safeStart === 0 &&
         safeEnd >= duration - 0.05 &&
@@ -5717,8 +4696,7 @@ function compressVideoFile(
       const ctx = canvas.getContext("2d");
       const stream = canvas.captureStream(30);
 
-      // Carries the original audio track through untouched — only the
-      // video track gets re-encoded/downscaled here.
+      // Carries the original audio track through untouched.
       try {
         if (typeof video.captureStream === "function") {
           video
@@ -5727,8 +4705,7 @@ function compressVideoFile(
             .forEach((t) => stream.addTrack(t));
         }
       } catch (_) {
-        // Some browsers don't support capturing audio this way — the
-        // compressed clip just ends up silent rather than failing.
+        // Some browsers don't support capturing audio this way.
       }
 
       const mimeCandidates = [
@@ -5802,14 +4779,7 @@ function compressVideoFile(
           else finish(file);
         });
 
-      // Second, independent enforcement of the trim end-point, on top of
-      // ontimeupdate above — ontimeupdate's firing rate is throttled by
-      // the browser and isn't guaranteed to land exactly on safeEnd, and
-      // relies on currentTime tracking correctly at all (the same class
-      // of unreliable-metadata issue this function just worked around
-      // once already). A plain wall-clock timeout can't be thrown off
-      // by either of those, so between the two, the 30s cap should
-      // never fail to actually apply.
+      // Second, independent enforcement of the trim end-point, on top of ontimeupdate above.
       setTimeout(
         () => {
           if (recorder.state === "recording") {
@@ -5827,15 +4797,7 @@ function compressVideoFile(
 }
 
 // ─── UPLOAD RETRY HELPER ──────────────────────────────────────────────────────
-// Wraps a network operation (storage upload, DB write) with a short wait
-// and a few retries before truly giving up. Without this, a brief
-// connectivity blip mid-upload (a couple of seconds of no signal, a wifi
-// handoff, walking through a dead zone on campus) immediately surfaced as
-// "failed to upload" even though the connection came right back. Now we
-// wait, try again, and only report a genuine failure after several
-// attempts — and if the device is offline at the moment of failure, wait
-// specifically for the 'online' event (up to a timeout) before retrying,
-// rather than retrying blindly into a still-dead connection.
+// Wraps a network operation (storage upload, DB write) with a short wait and a few retries before truly giving up.
 async function withUploadRetry(
   operation,
   { retries = 3, baseDelayMs = 1500, onRetry = null } = {},
@@ -5846,9 +4808,7 @@ async function withUploadRetry(
       if (onRetry) onRetry(attempt, retries);
 
       if (!navigator.onLine) {
-        // Wait specifically for connectivity to return (capped so
-        // we don't hang forever), rather than immediately retrying
-        // into a connection we already know is down.
+        // Wait specifically for connectivity to return (capped so we don't hang forever), rather than immediately retrying into a connection we already know is down.
         await waitForOnline(15000);
       } else {
         await sleep(baseDelayMs * attempt);
@@ -5858,9 +4818,7 @@ async function withUploadRetry(
       return await operation();
     } catch (err) {
       lastErr = err;
-      // Only worth retrying on what looks like a network-level
-      // failure, not on things like a validation or auth error that
-      // will just fail identically every time.
+      // Only worth retrying on what looks like a network-level failure, not on things like a validation or auth error that will just fail identically every time.
       const isNetworkish =
         !navigator.onLine ||
         err?.message?.toLowerCase().includes("network") ||
@@ -5929,9 +4887,7 @@ function waitForOnline(timeoutMs) {
 }
 
 // ─── 12. CARD RENDERERS ───────────────────────────────────────────────────────
-// Tracks posts currently mid-like-toggle so a rapid double-tap can't fire
-// two overlapping insert/delete calls racing each other against the same
-// row (which could otherwise leave the DB counter and the UI disagreeing).
+// Tracks posts currently mid-like-toggle so a rapid double-tap can't fire two overlapping insert/delete calls racing each other against the same row (which could otherwise leave the DB counter and the UI disagreeing).
 const likeInFlight = new Set();
 
 function syncLikeButtonsForPost(postId, liked, count, sourceBtn = null) {
@@ -5992,11 +4948,7 @@ window.likePost = async function (postId, btn) {
     return;
   }
 
-  // Normalize once: postId arrives as a string (it's read out of an HTML
-  // attribute), but everywhere else in the app (allCachedPosts, the RPC
-  // calls, etc.) may hold it as the raw bigint number from the DB. Doing
-  // every lookup/comparison through the same string key keeps this
-  // function's behavior consistent regardless of which type shows up.
+  // Normalize once: postId arrives as a string (it's read out of an HTML attribute), but everywhere else in the app (allCachedPosts, the RPC calls, etc.) may hold it as the raw bigint number from the DB.
   const key = idKey(postId);
   if (likeInFlight.has(key)) return;
   likeInFlight.add(key);
@@ -6022,38 +4974,11 @@ window.likePost = async function (postId, btn) {
     JSON.stringify([...likedPostIds]),
   );
 
-  // Keep the in-memory cache in sync so a re-render (tab switch, search,
-  // etc.) before the next DB refresh doesn't show a stale count. Compare
-  // via idKey too, since allCachedPosts ids come straight from Supabase
-  // (numbers for a bigint column) while postId here is a string.
+  // Keep the in-memory cache in sync so a re-render (tab switch, search, etc.) before the next DB refresh doesn't show a stale count.
   const cachedEntry = allCachedPosts.find((p) => idKey(p.id) === key);
   if (cachedEntry?.data) cachedEntry.data.likes_count = currentCount;
 
   // 2. Execute Backend sync — this is what makes likes survive reload.
-  //
-  // Fix: this used to also call increment_post_likes/decrement_post_likes
-  // RPCs after the insert/delete succeeded, to keep posts.likes_count
-  // up to date. That's now redundant and was actually a source of
-  // unnecessary fragility: the likes_count_sync trigger (added
-  // separately, directly on the likes table) already recalculates
-  // posts.likes_count from a real COUNT(*) on every insert/delete,
-  // automatically, with no RPC involved — so the count was already
-  // being kept correct by the time this RPC call ran. Keeping the RPC
-  // around meant a single network hiccup or naming mismatch on THAT
-  // call alone could throw and roll back an otherwise fully successful
-  // like/unlike action, even though the actual likes row (and the
-  // trigger-maintained count) were already correct. Removing it
-  // matches the simpler, standard pattern most apps use: write the
-  // row, let the database keep the derived count in sync — nothing
-  // else needed.
-  //
-  // Also fixed previously: an insert/delete failure into the `likes`
-  // table used to be swallowed silently (error checked but never
-  // surfaced or acted on), so the heart stayed optimistically "liked"
-  // in the UI while nothing was actually saved server-side. Any real
-  // failure now rolls the UI back to its prior state and tells the
-  // person, instead of drifting out of sync with the database until
-  // the next reload silently corrects it.
   try {
     if (liked) {
       const { error: deleteErr } = await supabase
@@ -6069,16 +4994,7 @@ window.likePost = async function (postId, btn) {
         user_id: currentUserData.id,
       });
 
-      // A 23505 conflict is only harmless if the exact same
-      // (user_id, post_id) like row already exists. If the likes
-      // table was accidentally given a wrong unique constraint
-      // (for example UNIQUE(user_id) instead of UNIQUE(user_id,
-      // post_id)), then liking a *different* post would also throw
-      // 23505 — and treating every duplicate as success would make
-      // the UI look liked even though the new row was never saved.
-      // So on conflict we verify that THIS specific like row exists;
-      // otherwise we surface the error and roll the optimistic UI
-      // back.
+      // A 23505 conflict is only harmless if the exact same (user_id, post_id) like row already exists.
       const isDuplicate = insertErr && insertErr.code === "23505";
       if (insertErr) {
         if (!isDuplicate) throw insertErr;
@@ -6096,8 +5012,7 @@ window.likePost = async function (postId, btn) {
   } catch (e) {
     console.error("Like sync failed — reverting UI to match database:", e);
 
-    // Roll back the optimistic UI exactly, since the write did not
-    // actually persist.
+    // Roll back the optimistic UI exactly, since the write did not actually persist.
     if (liked) {
       likedPostIds.add(key);
       currentCount = currentCount + 1;
@@ -6122,12 +5037,7 @@ window.likePost = async function (postId, btn) {
 window.sharePost = function (postId, title) {
   const text = `Check out "${title}" on Unix-Sync!`;
   if (navigator.share) {
-    // Fix: navigator.share used to silently swallow every error path
-    // (rejected promise, user dismissal, browser quota, etc.) so the
-    // tap had no feedback at all on failure. We now distinguish
-    // "user cancelled" (AbortError — silent, intentional) from a real
-    // error (log + clipboard fallback toast) so the share UX is never
-    // a no-op again.
+    // Fix: navigator.share used to silently swallow every error path (rejected promise, user dismissal, browser quota, etc.) so the tap had no feedback at all on failure.
     const fallbackCopy = () => {
       if (navigator.clipboard?.writeText) {
         navigator.clipboard
@@ -6152,10 +5062,7 @@ window.sharePost = function (postId, title) {
   }
 };
 
-// Copies a real, working link to this specific post (?post=ID) — unlike
-// sharePost's fallback (which just copies window.location.href, the
-// generic app URL), this actually resolves to the post when opened, since
-// the app checks for ?post=ID on boot and opens that detail view.
+// Copies a real, working link to this specific post (?post=ID).
 window.copyPostLink = function (postId) {
   const url = new URL(window.location.href);
   url.search = "";
@@ -6170,11 +5077,7 @@ window.copyPostLink = function (postId) {
   }
 };
 
-// TikTok-style profile share — mirrors sharePost/copyPostLink's pattern:
-// native share sheet first, with a clipboard-copy fallback that still
-// carries a real, working link (?u=ID) since the app checks for that on
-// boot (see the ?post=ID handling further down) and opens that person's
-// public profile instead of just landing on the generic app URL.
+// TikTok-style profile share — mirrors sharePost/copyPostLink's pattern.
 window.shareProfile = function () {
   if (!currentUserData) {
     showToast("Please sign in first.");
@@ -6212,15 +5115,9 @@ window.shareProfile = function () {
   }
 };
 
-// downloadMedia was removed entirely — post media (photos/videos) is no
-// longer downloadable from anywhere in the app. This is separate from the
-// avatar long-press "Save" button, which only ever lets someone save
-// their OWN profile picture and is unaffected by this change.
+// downloadMedia was removed entirely — post media (photos/videos) is no longer downloadable from anywhere in the app.
 
-// Opens a real DM thread with the seller AND shares a small preview of the
-// exact listing the person tapped "Contact" on, so the seller immediately
-// sees which item/service the conversation is about instead of a blank
-// chat with no context.
+// Opens a real DM thread with the seller AND shares a small preview of the exact listing the person tapped "Contact" on, so the seller immediately sees which item/service the conversation is about instead of a blank chat with no context.
 window.contactSeller = function (
   sellerId,
   userName,
@@ -6244,16 +5141,7 @@ window.contactSeller = function (
 const commentCountCache = {}; // postId -> count
 
 function exactIdSelector(idValue) {
-  // Fix: the escaping regex here was genuinely malformed —
-  // `/\/g` doesn't unambiguously terminate as a regex literal (it only
-  // "worked" by accident depending on how the surrounding file gets
-  // parsed — Prettier's parser correctly rejected it outright). The
-  // replacement string `'\"'` also didn't do what it looked like it
-  // should: as a JS string literal it evaluates to just `"`, not an
-  // escaped `\"`, so quotes in an idValue weren't actually being
-  // escaped either. Rewritten with unambiguous regex literals and
-  // replacement strings that actually produce a backslash followed by
-  // the escaped character.
+  // Fix: the escaping regex here was genuinely malformed.
   return `[id="${String(idValue).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
 }
 
@@ -6317,11 +5205,7 @@ function getCommentCancelBtn(postId, sourceEl = null) {
   );
 }
 
-// Shared markup for the @ and emoji buttons that sit inside every
-// comment input pill (feed card, Reels sheet, detail page) — one
-// function instead of three copies so all three stay visually and
-// behaviorally identical, matching the Instagram/TikTok-style comment
-// bar with @ + emoji icons inside the input itself.
+// Shared markup for the @ and emoji buttons that sit inside every comment input pill (feed card, Reels sheet, detail page).
 function renderCommentInputExtras(id) {
   return `
         <div class="comment-input-extras absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2.5">
@@ -6334,11 +5218,7 @@ function renderCommentInputExtras(id) {
         </div>`;
 }
 
-// Inserts "@" at the caret (or appends it) and focuses the input, so
-// tapping the button behaves the way typing "@" yourself would. This is
-// deliberately just the character insert — a full tap-to-search/select
-// mention-autocomplete would need a user-lookup query wired in and is a
-// separate, larger feature to scope out before building.
+// Inserts "@" at the caret (or appends it) and focuses the input, so tapping the button behaves the way typing "@" yourself would.
 window._insertCommentMention = function (postId, btnEl) {
   const input = getCommentInputEl(postId, btnEl);
   if (!input) return;
@@ -6346,13 +5226,7 @@ window._insertCommentMention = function (postId, btnEl) {
   window._syncCommentSendState(postId, input);
 };
 
-// Requested change: no more in-app emoji grid — it never looked or
-// behaved quite like a real picker (see screenshot). This just focuses
-// the comment input so the phone's own keyboard comes up, the same as
-// tapping the field directly — from there the person uses their
-// keyboard's own emoji/smiley key (visible in their screenshot) exactly
-// like they would in any other app's comment box, instead of this app
-// trying to reproduce a picker.
+// Requested change: no more in-app emoji grid.
 window._focusCommentEmoji = function (postId, btnEl) {
   const input = getCommentInputEl(postId, btnEl);
   if (!input) return;
@@ -6361,11 +5235,7 @@ window._focusCommentEmoji = function (postId, btnEl) {
   input.setSelectionRange(len, len);
 };
 
-// Inserts text at the current caret position (or appends it if the
-// input never had focus/a caret position yet), then restores focus and
-// places the caret right after the inserted text — so tapping @
-// multiple times keeps building the message in place rather than
-// always jumping back to the end.
+// Inserts text at the current caret position (or appends it if the input never had focus/a caret position yet), then restores focus and places the caret right after the inserted text — so tapping @ multiple times keeps building the message in place rather than always jumping back to the end.
 function _insertTextAtCaret(inputEl, text) {
   const start = inputEl.selectionStart ?? inputEl.value.length;
   const end = inputEl.selectionEnd ?? inputEl.value.length;
@@ -6395,12 +5265,7 @@ async function fetchAndCacheCommentCount(postId) {
   } catch (_) {}
 }
 
-// Simple client-side cooldown against accidental rapid-fire comment
-// spam (e.g. holding Enter, a stuck keypress, an eager double-tap).
-// IMPORTANT: this is a UX safeguard only, not real security — anyone
-// bypassing the UI and calling the API directly isn't affected by this.
-// Real abuse prevention belongs at the database/RLS or Supabase project
-// level (e.g. rate-limited RPC, or Supabase's own abuse protections).
+// Simple client-side cooldown against accidental rapid-fire comment spam (e.g.
 let lastCommentPostedAt = 0;
 const COMMENT_COOLDOWN_MS = 2000;
 
@@ -6424,27 +5289,10 @@ window.postComment = async function (postId, inputEl, parentCommentId = null) {
   );
 
   inputEl.value = "";
-  // Fix: this used to disable the Send button synchronously, right here,
-  // while still inside the very click handler that button's own click
-  // triggered (Send button click -> _submitFromSendBtn ->
-  // submitCommentFromInput -> postComment -> disables the button that's
-  // still mid-dispatch). Chromium has a known quirk where disabling an
-  // element during its own in-flight click event can cause that same
-  // click to get redirected to whatever element is now underneath once
-  // the original target stops being interactive — confirmed here via a
-  // debug trace that caught it landing on both the backdrop and the
-  // sheet's own close (X) button on different tests, immediately
-  // closing the sheet right after sending. Deferring the disable to the
-  // next tick lets the current click finish its normal dispatch first.
+  // Fix: this used to disable the Send button synchronously, right here, while still inside the very click handler that button's own click triggered (Send button click -> _submitFromSendBtn -> submitCommentFromInput -> postComment -> disables the button that's still mid-dispatch).
   setTimeout(() => window._syncCommentSendState(key, inputEl), 0);
 
-  // Fix: posting used to clear the input and then just wait silently for
-  // the realtime echo to repaint the list — on any network lag it looked
-  // like the tap did nothing. This appends an immediate "sending…"
-  // placeholder bubble so the comment appears the instant it's sent; the
-  // next realtime-triggered fetchAndRender() (see toggleComments) does a
-  // full re-render from the DB and naturally replaces this placeholder
-  // with the real row, so there's no separate cleanup or dedupe needed.
+  // Fix: posting used to clear the input and then just wait silently for the realtime echo to repaint the list.
   const list = getCommentListEl(key, inputEl);
   const emptyState = list
     ?.querySelector(".far.fa-comment-dots")
@@ -6495,11 +5343,7 @@ window.postComment = async function (postId, inputEl, parentCommentId = null) {
     if (error) throw error;
   } catch (err) {
     console.error("Comment submission error:", err);
-    // RLS policies added for blocking (see blocked_users_rls.sql) reject
-    // the insert outright if either person has blocked the other —
-    // this is the only way to know that happened when it's the OTHER
-    // person who blocked you, since your local blockedUserIds set has
-    // no way of knowing about a block made from their side.
+    // RLS policies added for blocking (see blocked_users_rls.sql) reject the insert outright if either person has blocked the other.
     const isBlockRejection =
       err?.code === "42501" || /row-level security/i.test(err?.message || "");
     showToast(
@@ -6515,9 +5359,7 @@ window.postComment = async function (postId, inputEl, parentCommentId = null) {
   }
 };
 
-// Tracks which comment (if any) is currently being replied to, per post,
-// so the reply target is visible and Enter posts as a reply not a new
-// top-level comment.
+// Tracks which comment (if any) is currently being replied to, per post, so the reply target is visible and Enter posts as a reply not a new top-level comment.
 const activeReplyTarget = {};
 
 window.startCommentReply = function (
@@ -6550,8 +5392,7 @@ window.cancelCommentReply = function (postId, sourceEl = null) {
   if (cancelBtn) cancelBtn.classList.add("hidden");
 };
 
-// Wraps postComment so the comment input's Enter key correctly posts as a
-// reply when a reply target is active, then clears the reply state.
+// Wraps postComment so the comment input's Enter key correctly posts as a reply when a reply target is active, then clears the reply state.
 window.submitCommentFromInput = function (postId, inputEl) {
   const key = idKey(postId);
   const parentId = inputEl.dataset.replyTo || null;
@@ -6559,25 +5400,19 @@ window.submitCommentFromInput = function (postId, inputEl) {
   if (parentId) window.cancelCommentReply(key, inputEl);
 };
 
-// Enables/disables the paper-plane send button based on whether there's
-// actual (trimmed) text to send — mirrors the disabled feel of iMessage/
-// WhatsApp send buttons rather than always looking tappable.
+// Enables/disables the paper-plane send button based on whether there's actual (trimmed) text to send.
 window._syncCommentSendState = function (postId, inputEl) {
   const sendBtn = getCommentSendBtn(postId, inputEl);
   if (sendBtn) sendBtn.disabled = inputEl.value.trim().length === 0;
 };
 
-// The Send button doesn't have a direct reference to its input the way
-// the onkeydown handler does, so it looks the input up inside the exact
-// comment section that contains the tapped button instead of assuming ids
-// are globally unique across feed cards, reels, and the detail modal.
+// The Send button doesn't have a direct reference to its input the way the onkeydown handler does, so it looks the input up inside the exact comment section that contains the tapped button instead of assuming ids are globally unique across feed cards, reels, and the detail modal.
 window._submitFromSendBtn = function (postId, btnEl = null) {
   const input = getCommentInputEl(postId, btnEl);
   if (input) window.submitCommentFromInput(postId, input);
 };
 
-// Same string/number id mismatch as posts (comments.id is also a bigint
-// primary key) — normalized through idKey for the same reason.
+// Same string/number id mismatch as posts (comments.id is also a bigint primary key).
 const likedCommentIds = new Set(
   safeStorageJsonParse("campus_market_comment_likes", []).map(idKey),
 );
@@ -6609,14 +5444,7 @@ window.likeComment = async function (commentId, btn) {
     JSON.stringify([...likedCommentIds]),
   );
 
-  // Fix: this used to swallow every failure into a console.warn with
-  // no toast and no UI rollback — meaning if this insert/delete ever
-  // failed for any reason (including the exact same kind of orphaned-
-  // row duplicate-key conflict that turned out to be the real post-
-  // likes bug), nobody would ever see it happen. "Comment likes work
-  // well" may partly reflect that failures here were simply invisible
-  // rather than genuinely rarer. Real failures now roll back the
-  // optimistic UI and show a toast, matching likePost's behavior.
+  // Fix: this used to swallow every failure into a console.warn with no toast and no UI rollback.
   try {
     if (liked) {
       const { error } = await supabase
@@ -6663,10 +5491,7 @@ window.likeComment = async function (commentId, btn) {
   }
 };
 
-// Fixed: previously scoped to .eq('user_id', ...) which silently failed
-// whenever RLS/user id mismatched in any way and gave no feedback. Now we
-// check ownership up front, surface real errors, and always refresh the
-// count after a successful delete.
+// Fixed: previously scoped to .eq('user_id', ...) which silently failed whenever RLS/user id mismatched in any way and gave no feedback.
 window.deleteComment = function (commentId, postId) {
   if (!currentUserData) {
     showToast("Please sign in.");
@@ -6713,9 +5538,7 @@ window.deleteComment = function (commentId, postId) {
   });
 };
 
-// Expands a collapsed reply group (see fetchAndRender inside
-// toggleComments) and hides the "View N more replies" toggle that
-// revealed it.
+// Expands a collapsed reply group (see fetchAndRender inside toggleComments) and hides the "View N more replies" toggle that revealed it.
 window._expandReplies = function (groupId) {
   document.getElementById(groupId)?.classList.remove("hidden");
   document.getElementById(`toggle-${groupId}`)?.classList.add("hidden");
@@ -6724,11 +5547,7 @@ window._expandReplies = function (groupId) {
 function renderCommentItem(c, postId, options = {}) {
   const isPreview = !!options.preview;
 
-  // Fix: blocking someone only ever hid their POSTS from the feed —
-  // their comments on posts you can still see kept rendering in full,
-  // which defeats the point of blocking. A blocked user's comment now
-  // collapses to the same kind of placeholder used elsewhere for
-  // blocked content, with no like/reply/options affordances at all.
+  // Fix: blocking someone only ever hid their POSTS from the feed.
   if (blockedUserIds.has(idKey(c.user_id))) {
     const indentClassBlocked = c.parent_comment_id ? "ml-7" : "";
     return `
@@ -6783,12 +5602,7 @@ function renderCommentItem(c, postId, options = {}) {
         </div>`;
 }
 
-// Inline comment preview for the detail view (Temu-style: a few reviews
-// visible directly on the page, with a link through to the full list) —
-// distinct from the full comment sheet (#comments-{id}/toggleComments
-// below), which still opens for the complete, scrollable, repliable
-// experience. Shows only top-level comments (no reply threads) since this
-// is meant to be a quick preview, not a duplicate of the full sheet.
+// Inline comment preview for the detail view (Temu-style.
 const COMMENT_PREVIEW_COUNT = 3;
 async function loadCommentPreview(postId) {
   const container = document.getElementById(`comment-preview-${postId}`);
@@ -6831,13 +5645,7 @@ async function loadCommentPreview(postId) {
         </button>`;
 }
 
-// TikTok-style comment sheet: works for both the inline feed card comment
-// panel and the fixed bottom-sheet used on Reels (markup differs slightly
-// but both use #comments-{id}, #comment-list-{id}).
-// Switches a post's comment sort between 'top' (highest likes_count
-// first) and 'newest' (most recent first), matching TikTok's comment
-// sheet. Re-runs the same fetchAndRender the sheet already set up rather
-// than duplicating the query/render logic here.
+// TikTok-style comment sheet: works for both the inline feed card comment panel and the fixed bottom-sheet used on Reels (markup differs slightly but both use #comments-{id}, #comment-list-{id}).
 window.setCommentSortMode = function (postId, mode, btnGroup) {
   const key = idKey(postId);
   if ((commentSortMode.get(key) || "top") === mode) return;
@@ -6869,15 +5677,7 @@ window.toggleComments = async function (postId, triggerEl = null) {
   const isReelSheet = commentSection.classList.contains("reel-comments");
   const backdrop = document.getElementById("comments-global-backdrop");
 
-  // Fix: on some mobile WebKit browsers, a `position: fixed` element
-  // nested inside an `overflow: hidden` ancestor that also sits in a
-  // CSS scroll-snap container (exactly what .reel-card is) gets
-  // silently clipped/never actually renders on screen, even though the
-  // element's "hidden" class was correctly removed and its open-state
-  // class correctly added — the panel opens logically but never
-  // becomes visible. Moving the sheet to be a direct child of <body>
-  // the first time it opens sidesteps that clipping entirely, since it
-  // no longer has any scroll-snap/overflow ancestor to be clipped by.
+  // Fix: on some mobile WebKit browsers, a `position.
   if (isReelSheet && commentSection.parentElement !== document.body) {
     document.body.appendChild(commentSection);
   }
@@ -6914,11 +5714,7 @@ window.toggleComments = async function (postId, triggerEl = null) {
   list.innerHTML = `<p class="text-[10px] text-slate-500 animate-pulse py-2 pl-1">Loading comments...</p>`;
 
   const fetchAndRender = async () => {
-    // 'top' sorts by likes_count desc (ties broken by newest first,
-    // matching TikTok's behavior); 'newest' by created_at desc.
-    // Defaults to 'top' to match the reference behavior requested —
-    // previously this always showed strict oldest-first chronological
-    // order with no way to change it.
+    // 'top' sorts by likes_count desc (ties broken by newest first, matching TikTok's behavior).
     const sortMode = commentSortMode.get(key) || "top";
     let query = supabase
       .from("comments")
@@ -6948,14 +5744,7 @@ window.toggleComments = async function (postId, triggerEl = null) {
       return;
     }
 
-    // Top-level comments in whatever order the query above produced;
-    // replies always shown oldest-first within their own thread
-    // regardless of the top-level sort mode, since a reply thread's
-    // natural reading order doesn't change just because the parent
-    // list is sorted by popularity instead of time.
-    // idKey() here matters for the same reason it does everywhere else
-    // in the app — comment ids are bigints from the DB, and comparing
-    // them without normalizing types silently drops replies from view.
+    // Top-level comments in whatever order the query above produced.
     const topLevel = comments.filter((c) => !c.parent_comment_id);
     const replies = comments
       .filter((c) => c.parent_comment_id)
@@ -6976,9 +5765,7 @@ window.toggleComments = async function (postId, triggerEl = null) {
         return;
       }
 
-      // Long threads start collapsed to a couple of replies with a
-      // "View N more replies" toggle, instead of always dumping every
-      // reply into view — keeps a busy thread scannable.
+      // Long threads start collapsed to a couple of replies with a "View N more replies" toggle, instead of always dumping every reply into view.
       const groupId = `replies-${idKey(c.id)}`;
       childReplies.slice(0, REPLY_PREVIEW_COUNT).forEach((r) => {
         list.innerHTML += renderCommentItem(r, postId);
@@ -7001,9 +5788,7 @@ window.toggleComments = async function (postId, triggerEl = null) {
     });
   };
 
-  // Exposes this post's fetchAndRender so the Top/Newest sort buttons
-  // (which live outside this closure) can trigger a re-fetch when
-  // tapped. Cleared on close in _closeCommentSheet.
+  // Exposes this post's fetchAndRender so the Top/Newest sort buttons (which live outside this closure) can trigger a re-fetch when tapped.
   window._commentFetchers = window._commentFetchers || {};
   window._commentFetchers[key] = fetchAndRender;
 
@@ -7056,11 +5841,7 @@ window._closeCommentSheet = function (postId, fromPop = false) {
   }
   openCommentIds.delete(key);
 
-  // Stop watching for new comments on this post now that its sheet is
-  // closed — otherwise the realtime subscription just keeps running in
-  // the background, re-rendering into a sheet nobody can see (and,
-  // worse, into DOM nodes that may since have been destroyed by a
-  // later feed re-render).
+  // Stop watching for new comments on this post now that its sheet is closed.
   if (currentCommentsChan?._topic === `comments-live-${key}`) {
     supabase.removeChannel(currentCommentsChan);
     currentCommentsChan = null;
@@ -7071,16 +5852,6 @@ window._closeCommentSheet = function (postId, fromPop = false) {
 };
 
 // Global backdrop click dismisses whichever reel comment sheet is open.
-// Measures the ACTUAL rendered height of the bottom nav bar (icons +
-// labels + its own padding, all of which can vary by device font
-// rendering, safe-area insets, etc.) and stores it as a CSS custom
-// property so #posts-feed.reels-mode's bottom inset is always exactly
-// right instead of relying on a guessed pixel constant that can drift
-// out of sync with reality and leave a sliver of video peeking out from
-// under the nav. Re-measures on resize/orientation change since mobile
-// browsers frequently resize the visual viewport when their address bar
-// shows/hides, which can also change how much of the safe-area inset is
-// actually reserved.
 function measureBottomNavHeight() {
   const nav = document.querySelector(".bottom-nav-container");
   if (!nav) return;
@@ -7095,25 +5866,14 @@ function measureBottomNavHeight() {
 
 document.addEventListener("DOMContentLoaded", () => {
   measureBottomNavHeight();
-  // A second pass shortly after load catches any late font-swap or
-  // layout shift that changed the nav's rendered height after the
-  // very first measurement.
+  // A second pass shortly after load catches any late font-swap or layout shift that changed the nav's rendered height after the very first measurement.
   setTimeout(measureBottomNavHeight, 300);
 
-  // Seed the view-history stack with the initial view the app boots
-  // into ('feed'), so the hardware/gesture back button has somewhere
-  // meaningful to land BEFORE the user makes any tab switch.
+  // Seed the view-history stack with the initial view the app boots into ('feed'), so the hardware/gesture back button has somewhere meaningful to land BEFORE the user makes any tab switch.
   if (!_viewHistory.length) _viewHistory.push("feed");
 
   // ─── ZOOM DISABLED APP-WIDE ────────────────────────────────────────────
-  // Fix: touch-action: pinch-zoom was previously applied to every
-  // <img>/<video> so a post's media could be pinch-zoomed. In practice
-  // this doesn't scope the zoom to that element — it only tells the
-  // browser "allow your normal page-level pinch-zoom gesture starting
-  // here" — and since images/videos cover most of the feed, pinching
-  // (or trackpad-pinching on desktop) almost anywhere zoomed the ENTIRE
-  // app, not the photo. scopeZoomToMedia() below now keeps every
-  // element, media included, pan-only.
+  // Fix: touch-action: pinch-zoom was previously applied to every <img>/<video> so a post's media could be pinch-zoomed.
   scopeZoomToMedia();
   setTimeout(scopeZoomToMedia, 600); // catch late-rendered hero media
 });
@@ -7122,11 +5882,7 @@ window.addEventListener("orientationchange", () =>
   setTimeout(measureBottomNavHeight, 200),
 );
 
-// Safety net for the offline-auth fix above: if currentUserData somehow
-// never got populated (e.g. a connectivity blip during the very first
-// load), re-check auth as soon as the browser reports it's back online,
-// so Profile/DMs/Create self-heal instead of staying stuck behind the
-// sign-in gate until the person manually refreshes.
+// Safety net for the offline-auth fix above.
 window.addEventListener("online", async () => {
   if (currentUserData) return;
   try {
@@ -7135,8 +5891,7 @@ window.addEventListener("online", async () => {
       console.warn(
         "[Auth Observer] Back online — recovered a session that was missed while offline.",
       );
-      // onAuthStateChange doesn't automatically refire just because
-      // getUser() succeeded, so nudge the same gates/state directly.
+      // onAuthStateChange doesn't automatically refire just because getUser() succeeded, so nudge the same gates/state directly.
       location.reload();
     }
   } catch (_) {
@@ -7144,9 +5899,7 @@ window.addEventListener("online", async () => {
   }
 });
 
-// Re-apply the touch-action scope every time any media element is added
-// to the DOM. Each MutationObserver callback debounces so a busy render
-// frame doesn't pile up dozens of recomputes.
+// Re-apply the touch-action scope every time any media element is added to the DOM.
 let _zoomScopeRaf = null;
 function scheduleZoomScopeRescan() {
   if (_zoomScopeRaf) return;
@@ -7191,10 +5944,7 @@ try {
   /* MutationObserver isn't supported (very old browser) — fall back silently */
 }
 
-// Walks the DOM and keeps every <img>/<video> pan-only, same as the rest
-// of the app — no element permits the browser's native pinch/double-tap
-// zoom gesture, since that gesture zooms the whole viewport rather than
-// just the element being touched.
+// Walks the DOM and keeps every <img>/<video> pan-only, same as the rest of the app.
 function scopeZoomToMedia() {
   document.querySelectorAll("img, video").forEach((el) => {
     try {
@@ -7209,33 +5959,7 @@ document.addEventListener("DOMContentLoaded", () => {
     backdrop.id = "comments-global-backdrop";
     backdrop.className = "comments-backdrop";
     backdrop.addEventListener("click", (event) => {
-      // Fix: this used to close on any click event reaching the
-      // backdrop element, on the assumption that only a genuine
-      // "tap outside the sheet" could ever land there (the sheet
-      // sits at a higher z-index, directly on top). In practice,
-      // sending a comment was reliably triggering this handler
-      // too — confirmed via a temporary debug trace — even
-      // though the sheet visually still covered the button that
-      // was tapped. Rather than continue guessing at the exact
-      // browser-level cause (mobile keyboard reflow retargeting
-      // the event, or something else), this checks the actual
-      // click coordinates against the open sheet's real
-      // bounding box: a click within those bounds can't be a
-      // legitimate "outside tap" no matter how the event ended
-      // up here, so it's ignored. A genuine outside click (the
-      // sheet's real dismiss gesture) still works exactly as
-      // before.
-      // Same-class fix, second instance: a stray/delayed synthetic
-      // click from the SAME tap that opened the sheet can still land
-      // on the backdrop a beat later, right as it becomes clickable —
-      // producing a visible open-then-immediately-close flash. The
-      // bounding-box check above catches wrongly-attributed clicks
-      // that land ON the sheet; this catches the other half — clicks
-      // that fire suspiciously soon after the sheet opened at all,
-      // genuine outside-tap or not. 350ms is comfortably past any
-      // mobile browser's touch-to-synthetic-click delay while still
-      // being imperceptible as a "the close button feels sluggish"
-      // delay for an actual outside tap.
+      // Fix: this used to close on any click event reaching the backdrop element, on the assumption that only a genuine "tap outside the sheet" could ever land there (the sheet sits at a higher z-index, directly on top).
       if (Date.now() - _lastCommentSheetOpenAt < 350) return;
       const openSheet = document.querySelector(".reel-comments.comments-open");
       if (openSheet) {
@@ -7255,14 +5979,7 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // ─── OPTIONS MENU (3-dot action sheet) ───────────────────────────────────────
-// Replaces the old always-visible trash-bin delete icon on posts and the
-// bare "Delete" text link on comments with a single "..." entry point that
-// opens a small bottom-sheet menu — the same pattern Instagram, TikTok, and
-// WhatsApp use so a destructive action isn't sitting exposed at a glance.
-// ─── IN-APP CONFIRM DIALOG ────────────────────────────────────────────────────
-// Replaces the browser's native window.confirm() for destructive actions
-// with a dialog styled to match the rest of the app, consistent with how
-// the options menu above also avoids native browser chrome.
+// Replaces the old always-visible trash-bin delete icon on posts and the bare "Delete" text link on comments with a single "..." entry point that opens a small bottom-sheet menu.
 function showConfirmDialog({
   title,
   message,
@@ -7280,13 +5997,7 @@ function showConfirmDialog({
     document.body.appendChild(modal);
   }
 
-  // Optional "type to confirm" step: for the highest-stakes destructive
-  // actions (account deletion), a single tap on a red button is too easy
-  // to hit by accident. When requireText is set, the confirm button stays
-  // disabled until the person types that exact word into the field below —
-  // the same pattern GitHub/similar apps use before permanently destroying
-  // data. Every other existing caller (comment/post delete, etc.) leaves
-  // requireText unset and keeps behaving exactly as before.
+  // Optional "type to confirm" step: for the highest-stakes destructive actions (account deletion), a single tap on a red button is too easy to hit by accident.
   const typedConfirmMarkup = requireText
     ? `
             <div class="space-y-1.5 text-left">
@@ -7371,11 +6082,7 @@ function openOptionsMenu(items, headerHtml = "") {
   const itemsEl = document.getElementById("options-menu-items");
   if (!backdrop || !sheet || !itemsEl) return;
 
-  // Optional raw HTML block rendered above the generated item buttons —
-  // used by the message action sheet to show a row of quick-react emoji
-  // buttons without needing a second, parallel bottom-sheet component.
-  // Every existing call site passes only one argument, so headerHtml
-  // defaults to nothing and behaves exactly as before.
+  // Optional raw HTML block rendered above the generated item buttons.
   itemsEl.innerHTML =
     headerHtml +
     items
@@ -7407,48 +6114,20 @@ window._runOptionsMenuAction = function (index) {
   const action = window._optionsMenuActions?.[index];
   closeOptionsMenu();
   if (typeof action === "function") {
-    // Small delay so the sheet's close animation isn't interrupted by
-    // whatever the action does next (e.g. an immediate confirm dialog).
+    // Small delay so the sheet's close animation isn't interrupted by whatever the action does next (e.g.
     setTimeout(action, 200);
   }
 };
 
 // ─── BLOCKING ───────────────────────────────────────────────────────────────
-// Blocking a person hides their posts from your feed and hides/prevents
-// DMs with them — it does NOT delete anything they've already posted or
-// notify them in any way. Mirrors the `reports` table's fallback pattern:
-// if a `blocked_users` table isn't set up yet in Supabase, blocks are kept
-// in localStorage on this device so the feature still works end-to-end
-// (including unblocking) rather than being a dead end.
-//
-// Suggested table (create this in Supabase for the block to sync across
-// devices and actually filter server-side data other people send you):
-//   create table blocked_users (
-//     id bigint generated always as identity primary key,
-//     blocker_id uuid not null references auth.users(id),
-//     blocked_id uuid not null references auth.users(id),
-//     blocked_name text,
-//     created_at timestamptz not null default now(),
-//     unique (blocker_id, blocked_id)
-//   );
-//   alter table blocked_users enable row level security;
-//   create policy "read own blocks" on blocked_users for select using (auth.uid() = blocker_id);
-//   create policy "insert own blocks" on blocked_users for insert with check (auth.uid() = blocker_id);
-//   create policy "delete own blocks" on blocked_users for delete using (auth.uid() = blocker_id);
+// Blocking a person hides their posts from your feed and hides/prevents DMs with them.
 const blockedUserIds = new Set(
   safeStorageJsonParse("campus_market_blocked_users", []).map(idKey),
 );
-// Keeps display names alongside ids so the Blocked Users settings list has
-// something to show even before/without a `blocked_users` table (which
-// would otherwise require a join back to `profiles` to get a name).
+// Keeps display names alongside ids so the Blocked Users settings list has something to show even before/without a `blocked_users` table (which would otherwise require a join back to `profiles` to get a name).
 let blockedUserNames = safeStorageJsonParse("campus_market_blocked_names", {});
 
-// Bulk-loaded set of user ids the viewer currently follows — lets every
-// feed card render its Follow/Following button with the CORRECT state
-// up front (previously hardcoded to data-active="false" on every card,
-// so a person you already followed still showed "+ Follow" until you
-// tapped it once). Same pattern as blockedUserIds: synced from Supabase
-// once at boot, kept in sync locally by toggleFollow's own success path.
+// Bulk-loaded set of user ids the viewer currently follows.
 const followingUserIds = new Set();
 
 async function syncFollowingIds() {
@@ -7469,11 +6148,7 @@ async function syncFollowingIds() {
 }
 
 // ─── Verification badge + seller ratings caches ─────────────────────────────
-// Both are populated on demand (profile view, feed render) rather than
-// fetched for every post up front, since most feed scrolling never visits
-// a given seller's profile. `null` in verifiedUserCache means "checked,
-// not verified" (distinct from "not yet checked", which is simply absent
-// from the map) so we don't re-query the same unverified user repeatedly.
+// Both are populated on demand (profile view, feed render) rather than fetched for every post up front, since most feed scrolling never visits a given seller's profile.
 const verifiedUserCache = {}; // userId -> boolean
 const sellerRatingCache = {}; // userId -> { average: number, count: number }
 
@@ -7488,9 +6163,7 @@ function _persistBlockedLocally() {
   );
 }
 
-// Pulls the signed-in person's block list from Supabase (if the table
-// exists) so blocks made on another device are respected here too, then
-// falls back to whatever's in localStorage if the table isn't there yet.
+// Pulls the signed-in person's block list from Supabase (if the table exists) so blocks made on another device are respected here too, then falls back to whatever's in localStorage if the table isn't there yet.
 async function syncBlockedUsers() {
   if (!currentUserData) return;
   try {
@@ -7509,8 +6182,7 @@ async function syncBlockedUsers() {
     });
     _persistBlockedLocally();
   } catch (err) {
-    // No table yet (or RLS not set up) — silently keep using whatever
-    // is already in localStorage from a previous local-only block.
+    // No table yet (or RLS not set up) — silently keep using whatever is already in localStorage from a previous local-only block.
     console.warn("Blocked-users sync skipped (using local list):", err);
   }
 }
@@ -7538,10 +6210,7 @@ window.blockUser = function (userId, userName = "this student") {
       blockedUserNames[key] = userName;
       _persistBlockedLocally();
 
-      // A blocked person's existing posts/threads are already on
-      // screen in some cases (feed cache, open inbox) — refresh
-      // whatever's currently visible so the block takes effect
-      // immediately instead of only on next reload.
+      // A blocked person's existing posts/threads are already on screen in some cases (feed cache, open inbox).
       try {
         renderFeedFromCache();
       } catch (_) {}
@@ -7564,10 +6233,7 @@ window.blockUser = function (userId, userName = "this student") {
         console.warn("Block insert failed, kept locally only:", err);
       }
 
-      // Blocking someone also breaks any follow relationship between
-      // you two, in either direction — matches what people expect
-      // from blocking on other apps, and avoids the odd state of
-      // still "following" someone you've just blocked.
+      // Blocking someone also breaks any follow relationship between you two, in either direction.
       try {
         await supabase
           .from("follows")
@@ -7632,27 +6298,7 @@ window.unblockUser = function (userId, userName = "this student") {
 };
 
 // ─── EDU VERIFICATION ───────────────────────────────────────────────────────
-// Verifies a student by their institutional email domain. This is the
-// lightweight, self-serve version of verification (no manual document
-// review) — a user submits their .edu.gh (or equivalent) email, we send
-// a Supabase OTP/magic-link to it, and on confirmation we flip
-// profiles.is_verified. Requires the `verification_requests` table +
-// `profiles.is_verified` column from the accompanying SQL migration —
-// every call below fails soft (toast + console.warn) if that schema
-// isn't present yet, so this can ship even before the migration runs.
-//
-// NOTE ON SCOPE: genuinely confirming someone owns a .edu inbox needs a
-// server-side email step (Supabase Auth email OTP, or a custom Edge
-// Function sending a verification link) — a purely client-side check of
-// "does this string look like a university email" would be trivial to
-// fake and isn't real verification. This function does the client-side
-// half (submitting the request + reflecting status); the email-send/
-// confirm step should go through supabase.auth.signInWithOtp() against
-// the submitted address, or a dedicated Edge Function if you want the
-// user to stay signed in as their existing account rather than switching
-// auth identity. That wiring depends on how your Supabase Auth project
-// is configured, so it's left as the one deliberately-unfinished edge —
-// flagged here rather than guessed at.
+// Verifies a student by their institutional email domain.
 window.submitVerificationRequest = async function (eduEmail) {
   if (!currentUserData) {
     showToast("Please sign in first.");
@@ -7679,11 +6325,7 @@ window.submitVerificationRequest = async function (eduEmail) {
     showToast(
       "Verification request submitted — we'll email you a confirmation link.",
     );
-    // See note above: triggering the actual confirmation email is a
-    // server-side step. If you want it fired from here, this is
-    // where a call like supabase.auth.signInWithOtp({ email }) or an
-    // Edge Function invoke would go, once you've decided which path
-    // fits your existing auth setup.
+    // See note above: triggering the actual confirmation email is a server-side step.
     if (
       document
         .getElementById("info-sheet-overlay")
@@ -7699,8 +6341,7 @@ window.submitVerificationRequest = async function (eduEmail) {
   }
 };
 
-// Checks (and caches) whether a given user is verified. Call before
-// rendering anything that shows a verified badge.
+// Checks (and caches) whether a given user is verified.
 async function isUserVerified(userId) {
   if (!userId) return false;
   if (verifiedUserCache[userId] !== undefined) return verifiedUserCache[userId];
@@ -7715,8 +6356,7 @@ async function isUserVerified(userId) {
     verifiedUserCache[userId] = verified;
     return verified;
   } catch (err) {
-    // Column/table likely doesn't exist yet — fail closed (unverified)
-    // rather than crash the feed render.
+    // Column/table likely doesn't exist yet.
     console.warn("Verification lookup failed:", err);
     verifiedUserCache[userId] = false;
     return false;
@@ -7728,10 +6368,7 @@ function verifiedBadgeHtml() {
   return `<i class="fas fa-circle-check text-amber-400 text-[11px] ml-1" title="Verified student" aria-label="Verified student"></i>`;
 }
 
-// After the feed/profile has already rendered with no badge (verification
-// status wasn't known at render time), this retroactively injects the
-// badge into the DOM once the check resolves — avoids blocking the whole
-// card render on a network round trip for every single post.
+// After the feed/profile has already rendered with no badge (verification status wasn't known at render time), this retroactively injects the badge into the DOM once the check resolves — avoids blocking the whole card render on a network round trip for every single post.
 async function applyVerifiedBadgeWhenReady(userId, targetSelector) {
   const verified = await isUserVerified(userId);
   if (!verified) return;
@@ -7746,16 +6383,7 @@ async function applyVerifiedBadgeWhenReady(userId, targetSelector) {
 }
 
 // ─── SELLER RATINGS ──────────────────────────────────────────────────────────
-// Double-blind-ish peer review: a rating (1-5) + optional comment, tied to
-// a specific seller. "Double-blind" in the strict sense (neither party
-// sees the other's rating until both submit) isn't practical here since
-// there's no tracked "transaction" object linking a buyer and seller —
-// this marketplace is DM-based with no order/checkout flow. What's built
-// instead: any signed-in student who isn't the seller can rate them once
-// per rater/seller pair (enforced by a unique constraint in the SQL
-// migration), from that seller's public profile. Simpler than the full
-// blueprint's transaction-scoped review, but honest about what the app can
-// actually verify happened.
+// Double-blind-ish peer review: a rating (1-5) + optional comment, tied to a specific seller.
 window.submitSellerRating = async function (sellerId, stars, comment = "") {
   if (!currentUserData) {
     showToast("Please sign in to leave a rating.");
@@ -7829,9 +6457,7 @@ function ratingStarsHtml(average) {
   return out;
 }
 
-// Re-fetches and re-renders just the rating block inside an already-open
-// public profile sheet — used right after submitting a rating so the
-// person sees their own rating reflected without a full profile reload.
+// Re-fetches and re-renders just the rating block inside an already-open public profile sheet.
 window._refreshPublicProfileRatingBlock = async function (sellerId) {
   const summary = await fetchSellerRatingSummary(sellerId);
   const el = document.getElementById("public-profile-rating-block");
@@ -7857,9 +6483,7 @@ function renderRatingBlockInner(sellerId, summary) {
     `;
 }
 
-// Lightweight inline prompt using the existing options-menu pattern
-// (openOptionsMenu is already used for post/comment/report menus) rather
-// than building a whole new modal component for a 1-5 star picker.
+// Lightweight inline prompt using the existing options-menu pattern (openOptionsMenu is already used for post/comment/report menus) rather than building a whole new modal component for a 1-5 star picker.
 window.openRatingPrompt = function (sellerId) {
   openOptionsMenu([
     {
@@ -7891,19 +6515,7 @@ window.openRatingPrompt = function (sellerId) {
 };
 
 // ─── REPORTING ────────────────────────────────────────────────────────────────
-// Previously "Report" just showed a toast and did nothing at all — no
-// record was kept anywhere, so it was a dead end dressed up as a real
-// feature. This writes to a `reports` table if one exists in your
-// Supabase project (target_type/target_id/reporter_id/reason/created_at).
-// If that table doesn't exist yet, reports are queued in localStorage
-// instead of silently vanishing, and the person is told plainly that
-// their report was saved locally pending a moderation table — rather
-// than pretending it was received by a backend that isn't there.
-// Same UX-safeguard-only cooldown as postComment's COMMENT_COOLDOWN_MS
-// above — prevents someone from rapid-fire reporting many different
-// posts in quick succession (e.g. to harass a seller), not a real
-// security boundary. Real abuse prevention belongs at the database/RLS
-// or Supabase project level.
+// Previously "Report" just showed a toast and did nothing at all.
 let lastReportSubmittedAt = 0;
 const REPORT_COOLDOWN_MS = 2500;
 
@@ -7932,27 +6544,16 @@ async function submitReport(targetType, targetId, reason = "unspecified") {
     const { error } = await supabase.from("reports").insert(payload);
     if (error) throw error;
     showToast("Report submitted — thank you for flagging this.");
-    // Fire-and-forget: don't make the reporter wait on a second
-    // round-trip just to find out if this pushed something over the
-    // auto-hide threshold.
+    // Fire-and-forget: don't make the reporter wait on a second round-trip just to find out if this pushed something over the auto-hide threshold.
     checkAutoModerationThreshold(targetType, targetId);
   } catch (err) {
-    // Fix: once reports_one_per_reporter (a unique index on
-    // target_type/target_id/reporter_id — see create_reports_table.sql)
-    // exists, reporting the same thing twice throws a unique-violation
-    // (Postgres code 23505) instead of silently inserting a second row.
-    // That's a genuinely different situation from "the table doesn't
-    // exist" or "RLS blocked it" below — the report already succeeded
-    // the first time, so queuing another copy locally and telling the
-    // person it's merely "saved on this device" would be misleading.
+    // Fix: once reports_one_per_reporter (a unique index on target_type/target_id/reporter_id.
     if (err?.code === "23505") {
       showToast("You've already reported this — thanks, it's been recorded.");
       return;
     }
 
-    // Table likely doesn't exist yet (or an RLS policy blocks it) —
-    // queue locally so the report isn't just lost, and be upfront
-    // that it hasn't reached a real moderation backend yet.
+    // Table likely doesn't exist yet (or an RLS policy blocks it).
     console.warn("Report insert failed, queuing locally:", err);
     const queued = safeStorageJsonParse("campus_market_pending_reports", []);
     queued.push(payload);
@@ -7967,31 +6568,12 @@ async function submitReport(targetType, targetId, reason = "unspecified") {
 }
 
 // ─── AUTO-MODERATION (report-threshold auto-hide) ───────────────────────────
-// The blueprint calls for listings that "breach predefined thresholds"
-// to auto-hide pending moderator review. This is the honest, minimal
-// version: once a post or comment collects AUTO_HIDE_REPORT_THRESHOLD
-// distinct reports, it's automatically archived (posts, via the existing
-// is_archived column) or removed from view (comments, via a `status`
-// column) — reversible by a moderator later, not a hard delete.
-//
-// This deliberately does NOT try to build a moderator review dashboard —
-// that's a real admin surface (who counts as a moderator? a role check?
-// a separate admin app?) that depends on decisions about your project
-// this file can't make for you. What's here is the trigger-side half:
-// detecting the threshold and softly hiding the content. Reviewing/
-// restoring what gets auto-hidden would need that admin surface built
-// separately.
+// The blueprint calls for listings that "breach predefined thresholds" to auto-hide pending moderator review.
 const AUTO_HIDE_REPORT_THRESHOLD = 3;
 
 async function checkAutoModerationThreshold(targetType, targetId) {
   try {
-    // The reports table's existing SELECT policy (reports_select_own)
-    // only lets a user see/count THEIR OWN submitted reports — a
-    // direct client-side count here would only ever return 0 or 1,
-    // never the true total across every reporter. get_report_count
-    // is a SECURITY DEFINER function that bypasses that restriction
-    // to return the real aggregate, without opening up the table to
-    // broader client reads.
+    // The reports table's existing SELECT policy (reports_select_own) only lets a user see/count THEIR OWN submitted reports.
     const { data: count, error } = await supabase.rpc("get_report_count", {
       p_target_type: targetType,
       p_target_id: targetId,
@@ -8000,10 +6582,7 @@ async function checkAutoModerationThreshold(targetType, targetId) {
     if ((count || 0) < AUTO_HIDE_REPORT_THRESHOLD) return;
 
     if (targetType === "post") {
-      // Reuses the same soft-archive path as attemptSoftArchivePost,
-      // just triggered by report volume instead of the owner
-      // deleting it — keeps a single source of truth for "hidden
-      // but recoverable" rather than a second hidden-flag concept.
+      // Reuses the same soft-archive path as attemptSoftArchivePost, just triggered by report volume instead of the owner deleting it.
       await supabase
         .from("posts")
         .update({
@@ -8025,9 +6604,7 @@ async function checkAutoModerationThreshold(targetType, targetId) {
         .forEach((el) => el.remove());
     }
   } catch (err) {
-    // Non-fatal by design — auto-moderation failing silently is far
-    // better than it throwing and breaking the reporter's own report
-    // flow, which already succeeded by the time this runs.
+    // Non-fatal by design — auto-moderation failing silently is far better than it throwing and breaking the reporter's own report flow, which already succeeded by the time this runs.
     console.warn(
       "Auto-moderation check failed (likely missing status column):",
       err,
@@ -8035,9 +6612,7 @@ async function checkAutoModerationThreshold(targetType, targetId) {
   }
 }
 
-// Post options: only the owner gets a real "Delete listing"; everyone
-// else gets "Report" (persists — see submitReport above) and "Block
-// user" (hides this person's posts and DMs — see blockUser above).
+// Post options: only the owner gets a real "Delete listing".
 function openReportReasonMenu(
   targetType,
   targetId,
@@ -8191,13 +6766,7 @@ function renderFeedCard(id, d, options = {}) {
     }
   }
 
-  // Feed card media now uses a taller 4:5 ratio (Instagram-style) instead
-  // of a hard square crop, since most phone-shot photos/videos are
-  // portrait and a 1:1 crop was cutting off large parts of the frame.
-  // Videos also drop eager autoplay/preload here — they're lazy-played
-  // only when scrolled into view (see setupFeedVideoObserver), which
-  // meaningfully cuts data usage since off-screen cards no longer
-  // silently download their full video.
+  // Feed card media now uses a taller 4:5 ratio (Instagram-style) instead of a hard square crop, since most phone-shot photos/videos are portrait and a 1:1 crop was cutting off large parts of the frame.
   let mediaBlock = "";
   if (mediaUrls.length > 1) {
     const slides = mediaUrls
@@ -8253,8 +6822,7 @@ function renderFeedCard(id, d, options = {}) {
     : "far fa-heart text-slate-300";
   const likedData = isLiked ? "true" : "false";
 
-  // likes_count now comes straight from the DB and is kept accurate via
-  // the RPC counters, so this reflects the true persisted count on load.
+  // likes_count now comes straight from the DB and is kept accurate via the RPC counters, so this reflects the true persisted count on load.
   const displayLikes = parseInt(d.likes_count || 0);
   const displayComments =
     commentCountCache[id] ?? parseInt(d.comments_count || 0);
@@ -8268,11 +6836,7 @@ function renderFeedCard(id, d, options = {}) {
 
   registerPostContext(id, d, mediaUrls[0] || "");
 
-  // Verification status isn't known synchronously (it's a DB lookup),
-  // so the card renders without the badge first, then this fills it in
-  // once resolved — same pattern as lazy avatar/video loading elsewhere
-  // in this file. Cached after the first check, so scrolling past the
-  // same seller's other posts doesn't re-query per card.
+  // Verification status isn't known synchronously (it's a DB lookup), so the card renders without the badge first, then this fills it in once resolved.
   if (d.user_id) {
     applyVerifiedBadgeWhenReady(d.user_id, `.feed-username-${CSS.escape(id)}`);
   }
@@ -8281,9 +6845,7 @@ function renderFeedCard(id, d, options = {}) {
   const _isFlashPost = _saleActiveForCard;
   const _originalPriceNum =
     d.original_price != null ? Number(d.original_price) : null;
-  // Strikethrough shows the regular price crossed out, only while a
-  // valid flash sale (sale price genuinely lower than regular price) is
-  // still running.
+  // Strikethrough shows the regular price crossed out, only while a valid flash sale (sale price genuinely lower than regular price) is still running.
   const _strikePrice = _isFlashPost;
 
   return `
@@ -8387,14 +6949,7 @@ function renderFeedCard(id, d, options = {}) {
     </div>`;
 }
 
-// All-tab Pinterest-style masonry card. Distinct from renderFeedCard (the
-// single-column feed, still used by Following) and from
-// renderProductGridCard/renderServiceGridCard (plain image+price, no
-// social context) — this keeps the poster's identity and engagement
-// counts visible on the card itself, matching the decision that the All
-// tab should read as a social feed rather than a second product grid.
-// Image uses its natural aspect ratio (no forced height) so masonry
-// columns genuinely vary, the way real Pinterest cards do.
+// All-tab Pinterest-style masonry card.
 function renderFeedMasonryCard(id, d, options = {}) {
   const isSuggested = !!options.suggested;
 
@@ -8423,9 +6978,7 @@ function renderFeedMasonryCard(id, d, options = {}) {
   const isSold = !!d.sold_at;
   const saleActive = isSaleActiveForPost(d);
   const hasDiscount = saleActive;
-  // Big price shows what a buyer pays right now (the sale price while
-  // live); the regular price only appears crossed out next to it, and
-  // disappears the instant the countdown ends.
+  // Big price shows what a buyer pays right now (the sale price while live).
   const displayPrice = saleActive ? d.original_price : d.price;
 
   registerPostContext(id, d, isVideo ? "" : primaryUrl);
@@ -8490,9 +7043,7 @@ function renderProductGridCard(id, d) {
   const isSolid = !!d.sold_at;
   const saleActive = isSaleActiveForPost(d);
   const hasDiscount = saleActive;
-  // Big price shows what a buyer pays right now (the sale price while
-  // live); the regular price only appears crossed out next to it, and
-  // disappears the instant the countdown ends.
+  // Big price shows what a buyer pays right now (the sale price while live).
   const displayPrice = saleActive ? d.original_price : d.price;
 
   const viewer = currentUserData;
@@ -8605,9 +7156,7 @@ function renderServiceGridCard(id, d) {
   const isSolid = !!d.sold_at;
   const saleActive = isSaleActiveForPost(d);
   const hasDiscount = saleActive;
-  // Big price shows what a buyer pays right now (the sale price while
-  // live); the regular price only appears crossed out next to it, and
-  // disappears the instant the countdown ends.
+  // Big price shows what a buyer pays right now (the sale price while live).
   const displayPrice = saleActive ? d.original_price : d.price;
 
   const viewer = currentUserData;
@@ -8697,17 +7246,7 @@ function renderServiceGrid() {
   setupFeedLoadMoreObserver();
 }
 
-// Deals tab renderer: only shows posts with an active flash sale (a
-// non-null original_price different from price AND sale_ends_at still in
-// the future). When no qualifying posts exist, OR every active sale has
-// expired, the tab is hidden entirely (handled by the setInterval below
-// that toggles the button's .hidden class). Reuses renderProductGridCard
-// for consistent visuals with the Products tab.
-// Shared "is this post a live flash sale right now" filter — was
-// duplicated verbatim in renderDealsGrid and the tick interval below;
-// factored out here so the new horizontal Deals strip (post detail
-// page) uses the exact same definition of "live deal" instead of a
-// third copy that could drift out of sync.
+// Deals tab renderer: only shows posts with an active flash sale (a non-null original_price different from price AND sale_ends_at still in the future).
 function getLiveDeals() {
   return allCachedPosts.filter(({ data: d }) => isSaleActiveForPost(d));
 }
@@ -8745,17 +7284,7 @@ function renderDealsGrid() {
   setupFeedLoadMoreObserver();
 }
 
-// Tick the Deals-tab button visibility: hide when no active sale is in
-// the in-memory cache; show again when a new qualifying post arrives.
-// Lightweight — runs every two seconds rather than every second since
-// the visible state only needs to change when a deadline passes.
-//
-// Fix: this only ever updated the tab BUTTON's opacity. If someone was
-// actually sitting on the Deals grid when a sale's sale_ends_at passed,
-// the expired card just stayed on screen — nothing re-ran
-// renderDealsGrid() until they navigated away and back. Now tracks the
-// live-deal count and, if it changed AND the Deals tab is the one
-// currently open, re-renders the grid so expired cards drop out live.
+// Tick the Deals-tab button visibility: hide when no active sale is in the in-memory cache.
 let _lastLiveDealCount = null;
 setInterval(() => {
   const btn = document.querySelector('.feed-tab-btn[data-tab="deals"]');
@@ -8777,11 +7306,7 @@ setInterval(() => {
     : "No live deals right now";
 }, 5000);
 
-// Tapping a service card opens a Reels-style continuous vertical scroller
-// through every currently-loaded service post, landing on the tapped one
-// first — reuses the same overlay/card renderer as the profile post
-// viewer (openProfilePostViewer), just scoped to "all cached service
-// posts" instead of "one user's posts".
+// Tapping a service card opens a Reels-style continuous vertical scroller through every currently-loaded service post, landing on the tapped one first.
 window.openServiceReelViewer = async function (startPostId) {
   const overlay = document.getElementById("profile-post-viewer");
   const feed = document.getElementById("profile-post-viewer-feed");
@@ -8816,17 +7341,11 @@ window.openServiceReelViewer = async function (startPostId) {
 };
 
 // ─── 12d. REELS FEED (TikTok-style full-bleed vertical video) ────────────────
-// Only the reel currently in view should play with sound / play at all;
-// every other reel is paused and muted so scrolling past a video never
-// leaves its audio running in the background.
+// Only the reel currently in view should play with sound / play at all.
 let reelsIntersectionObserver = null;
 let feedVideoIntersectionObserver = null;
 
-// Fully tears down every video currently playing anywhere in the app
-// (Reels tab AND regular feed cards). This is what stops a video's audio
-// from continuing in the background — including showing up as a phantom
-// media session in the phone's notification bar — the moment the person
-// navigates away, switches tabs, or backgrounds the app.
+// Fully tears down every video currently playing anywhere in the app (Reels tab AND regular feed cards).
 function pauseAllReelVideos() {
   document
     .querySelectorAll(".reel-video, .feed-lazy-video")
@@ -8835,9 +7354,7 @@ function pauseAllReelVideos() {
       try {
         video.pause();
         video.muted = true;
-        // Fully release the source rather than just pausing, so the
-        // browser drops any active media session / background decode
-        // buffer instead of keeping it warm for a quick resume.
+        // Fully release the source rather than just pausing, so the browser drops any active media session / background decode buffer instead of keeping it warm for a quick resume.
         if (
           (video.classList.contains("feed-lazy-video") || video.dataset.src) &&
           video.src
@@ -8856,22 +7373,7 @@ function pauseAllReelVideos() {
     feedVideoIntersectionObserver.disconnect();
     feedVideoIntersectionObserver = null;
   }
-  // Close and remove any reel comment sheets that were relocated to
-  // document.body (see toggleComments) — leaving them around after
-  // navigating away from Reels would keep a dangling, invisible
-  // full-width fixed element sitting in the DOM.
-  // Fix: this used to unconditionally remove EVERY relocated reel
-  // comment sheet from body, including whichever one the person
-  // currently has open. pauseAllReelVideos() runs on every single
-  // non-Reels feed render — not just when genuinely navigating away
-  // from Reels, but also on every realtime refresh, including the
-  // one triggered by the very comment someone just posted from a
-  // post's detail view. That silently deleted their open comment
-  // sheet via a direct .remove() call, completely bypassing
-  // toggleComments/_closeCommentSheet — which is why it never showed
-  // up in either function's debug trace. The currently-open sheet is
-  // now left alone; only already-closed/stale relocated sheets get
-  // cleaned up here.
+  // Close and remove any reel comment sheets that were relocated to document.body (see toggleComments).
   const openSheet = document.querySelector(
     "body > .reel-comments.comments-open",
   );
@@ -8890,12 +7392,7 @@ function pauseAllReelVideos() {
   }
 }
 
-// Lazy-loads and lazy-plays videos inside regular feed cards (All /
-// Services / Following / search results — anywhere renderFeedCard is
-// used). A video's real `src` is only attached, and playback only
-// started, once the card is actually visible — this is the main data
-// saving: previously every video in the feed downloaded in full the
-// instant the card was inserted into the DOM, whether seen or not.
+// Lazy-loads and lazy-plays videos inside regular feed cards (All / Services / Following / search results.
 function setupFeedVideoObserver() {
   if (feedVideoIntersectionObserver) {
     feedVideoIntersectionObserver.disconnect();
@@ -8922,19 +7419,7 @@ function setupFeedVideoObserver() {
           }
         } else {
           video.pause();
-          // Fix: this used to only pause on scroll-out, never actually
-          // releasing anything — src stayed loaded on every video
-          // scrolled past for the rest of the session. Each one holds
-          // real decoder/memory resources the browser never got back,
-          // so a long scrolling session through a lot of video posts
-          // gradually piled up until the whole page froze (scrolling
-          // included). Not intersecting at all (fully off-screen, not
-          // just under the 0.5 autoplay threshold) now actually
-          // releases it — same removeAttribute+load() pattern
-          // pauseAllReelVideos() already uses correctly for Reels —
-          // and resets dataset.loaded so scrolling back re-triggers the
-          // lazy-load branch above exactly like a video that was never
-          // opened yet.
+          // Fix: this used to only pause on scroll-out, never actually releasing anything.
           if (!entry.isIntersecting && video.dataset.loaded === "true") {
             video.removeAttribute("src");
             video.load();
@@ -8953,30 +7438,14 @@ function setupFeedVideoObserver() {
 
 let feedCommentAutoCloseObserver = null;
 
-// Auto-closes an open inline comment panel (All / Services / Following /
-// search feed cards — NOT the Reels bottom sheet, which has its own
-// dismiss behavior) once its parent card has scrolled mostly out of
-// view. Without this, an open comment panel stayed expanded underneath
-// whatever the person scrolled to next, which read as broken/stuck UI.
+// Auto-closes an open inline comment panel (All / Services / Following / search feed cards.
 function setupFeedCommentAutoClose() {
   if (feedCommentAutoCloseObserver) {
     feedCommentAutoCloseObserver.disconnect();
     feedCommentAutoCloseObserver = null;
   }
 
-  // Fix: root: null observes intersection against the whole BROWSER
-  // viewport — but #posts-feed (in its normal, non-reels mode) scrolls
-  // internally via its own overflow-y: scroll, not by moving the actual
-  // window. A card scrolling within that inner container can stay
-  // "intersecting the viewport" the entire time even as it visually
-  // scrolls out of sight inside #posts-feed, since the container
-  // element itself never moves relative to the window. That meant this
-  // observer could silently never fire for normal-feed scrolling, and
-  // an open comment panel would stay open (and visible, since it's
-  // just an inline block in the card's own DOM) as the person scrolled
-  // straight past it — reading exactly like a stuck dark panel
-  // covering part of the screen. Using #posts-feed itself as the
-  // intersection root fixes this at the source.
+  // Fix: root: null observes intersection against the whole BROWSER viewport.
   const feed = document.getElementById("posts-feed");
 
   feedCommentAutoCloseObserver = new IntersectionObserver(
@@ -9021,19 +7490,12 @@ function setupReelsIntersectionObserver(container = null) {
         const reelId = entry.target.id.replace("reel-card-", "");
 
         if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-          // Lazy-load: only assign the real src once this card is
-          // actually the one in view. mediaEl.dataset.src is only
-          // ever set when renderReelCard was called with lazy=true
-          // (the profile post viewer) — the normal Reels tab's
-          // cards have a real src from the start, so this is a
-          // no-op there.
+          // Lazy-load: only assign the real src once this card is actually the one in view.
           if (mediaEl && mediaEl.dataset.src && !mediaEl.src) {
             mediaEl.src = mediaEl.dataset.src;
           }
 
-          // This reel is the one in view: play it, unmuted only if the
-          // user hasn't explicitly muted it before (default unmuted
-          // like TikTok, matching tap-to-mute behavior already wired).
+          // This reel is the one in view: play it, unmuted only if the user hasn't explicitly muted it before (default unmuted like TikTok, matching tap-to-mute behavior already wired).
           if (video) {
             document.querySelectorAll(".reel-video").forEach((v) => {
               if (v !== video && v.tagName === "VIDEO") {
@@ -9051,16 +7513,7 @@ function setupReelsIntersectionObserver(container = null) {
             video.muted = true;
           }
 
-          // Fix: scrolling to the next/previous reel previously left
-          // the last-opened reel's comment sheet (moved to
-          // document.body, fixed to viewport — see toggleComments)
-          // sitting open on screen, floating over whatever the person
-          // scrolled to next. It looked exactly like a stuck dark
-          // panel covering the bottom half of the screen, and the
-          // only way out was tapping its close button or re-tapping
-          // the comment icon to toggle it shut. Closing it here the
-          // moment its reel leaves view means it can never outlive
-          // the reel it belongs to.
+          // Fix: scrolling to the next/previous reel previously left the last-opened reel's comment sheet (moved to document.body, fixed to viewport.
           const commentSheet = document.getElementById(`comments-${reelId}`);
           if (commentSheet?.classList.contains("comments-open")) {
             window._closeCommentSheet(idKey(reelId));
@@ -9202,8 +7655,7 @@ function renderReelCard(id, d, lazy = false) {
     </div>`;
 }
 
-// Tap-to-mute toggle, remembers the user's explicit choice on the element
-// so the intersection observer doesn't fight with a manual unmute/mute.
+// Tap-to-mute toggle, remembers the user's explicit choice on the element so the intersection observer doesn't fight with a manual unmute/mute.
 window._toggleReelMute = function (video) {
   video.muted = !video.muted;
   video.dataset.userMuted = video.muted ? "true" : "false";
@@ -9216,17 +7668,7 @@ function renderReelsFeed() {
   feed.classList.remove("grid-mode");
   feed.classList.add("reels-mode");
 
-  // Fix: this used to always tear down every relocated comment sheet
-  // — including whichever one the person currently has open — and
-  // rebuild it from scratch via toggleComments() afterward. That
-  // correctly restored it, but visibly flashed closed-then-open on
-  // every realtime refresh, including the refresh triggered by the
-  // very comment someone just posted (via the comments_count trigger
-  // on posts). The currently-open sheet's content and realtime
-  // subscription are still perfectly valid at this point — it never
-  // actually needed to be destroyed at all. It's now left completely
-  // untouched (not removed, not re-subscribed, not toggled), and only
-  // OTHER, already-closed/stale relocated sheets get cleaned up.
+  // Fix: this used to always tear down every relocated comment sheet.
   const openSheetEl = document.querySelector(
     "body > .reel-comments.comments-open",
   );
@@ -9241,20 +7683,12 @@ function renderReelsFeed() {
   if (openKey) {
     openCommentIds.add(openKey);
   } else if (currentCommentsChan) {
-    // Nothing is open anymore, so the realtime channel (which was
-    // bound to whatever was previously open) is genuinely stale now.
+    // Nothing is open anymore, so the realtime channel (which was bound to whatever was previously open) is genuinely stale now.
     supabase.removeChannel(currentCommentsChan);
     currentCommentsChan = null;
   }
 
-  // Fix: caching the post-filter into this module-scope list (set on
-  // each applyFeedRankingToCache() pass) is a measurable win — every
-  // tab/render that falls through to renderReelsFeed() previously
-  // re-walked allCachedPosts filtering video posts; with deep scrolled
-  // feeds this is several hundred element ops per realtime refresh.
-  // The cache is invalidated automatically whenever allCachedPosts is
-  // replaced (subscribeFeed, followingFeed, refresh paths) so it's
-  // always consistent.
+  // Fix: caching the post-filter into this module-scope list (set on each applyFeedRankingToCache() pass) is a measurable win.
   const reels =
     allReelsCache &&
     allReelsCache.length &&
@@ -9279,10 +7713,7 @@ function renderReelsFeed() {
     .join("");
   setupReelsIntersectionObserver();
 
-  // No reopening pass needed anymore — the one sheet that could have
-  // still been open was deliberately left alone above (still in body,
-  // still subscribed), and feed.innerHTML only replaces children of
-  // #posts-feed, never touching body-level nodes.
+  // No reopening pass needed anymore — the one sheet that could have still been open was deliberately left alone above (still in body, still subscribed), and feed.innerHTML only replaces children of #posts-feed, never touching body-level nodes.
 }
 
 // ─── 12b. CHART / CART LIST LOGIC (NOW BACKEND POWERED!) ──────────────────────
@@ -9293,25 +7724,13 @@ window.toggleCartItem = async function (postId) {
   }
 
   let postRecord = null;
-  // Fix: this used to compare p.id === postId directly — p.id is the raw
-  // bigint from the DB while postId is always a string (read out of an
-  // HTML onclick attribute), so this comparison almost never matched and
-  // the code fell through to a fragile DOM-scraping fallback below every
-  // single time. That's exactly why "Add to Cart"/bookmarking looked
-  // broken or inconsistent — it was silently guessing at the title/price
-  // from whatever text happened to be in the card's DOM instead of using
-  // the real post data.
+  // Fix: this used to compare p.id === postId directly.
   const found = allCachedPosts.find(
     (p) => idKey(p.id) === idKey(postId) || idKey(p.data?.id) === idKey(postId),
   );
   if (found) postRecord = found.data ? found.data : found;
 
-  // Fix (Item 1): if the post isn't in the in-memory cache (realtime
-  // INSERT just fired, or the bookmark card was built outside the feed),
-  // look the row up directly from Supabase before falling back to DOM
-  // scraping — saving into localStorage still works either way, but
-  // without this path Add to Chart threw "Cannot link listing instance
-  // data." on any card whose post wasn't yet in allCachedPosts.
+  // Fix (Item 1): if the post isn't in the in-memory cache (realtime INSERT just fired, or the bookmark card was built outside the feed), look the row up directly from Supabase before falling back to DOM scraping — saving into localStorage still works either way, but without this path Add to Chart threw "Cannot link listing instance data." on any card whose post wasn't yet in allCachedPosts.
   if (!postRecord && typeof supabase !== "undefined") {
     try {
       const { data: row } = await supabase
@@ -9353,8 +7772,7 @@ window.toggleCartItem = async function (postId) {
   }
 
   if (!postRecord) {
-    // Final guard so any unexpected shape cannot throw past here and
-    // leave the UI in the "Something went wrong" state the user saw.
+    // Final guard so any unexpected shape cannot throw past here and leave the UI in the "Something went wrong" state the user saw.
     try {
       showToast("Couldn't save that — please try again.");
     } catch (_) {
@@ -9411,11 +7829,7 @@ window.toggleCartItem = async function (postId) {
       : "far fa-bookmark text-white/80 text-xs";
   }
 
-  // Fix: the reel card's bookmark button had no id at all, so tapping
-  // it on the Reels tab correctly saved the item (toast showed, data
-  // persisted) but the icon on screen never visually flipped between
-  // outline/filled — it silently "worked" with zero visible feedback,
-  // which read as the feature not doing anything.
+  // Fix: the reel card's bookmark button had no id at all, so tapping it on the Reels tab correctly saved the item (toast showed, data persisted) but the icon on screen never visually flipped between outline/filled — it silently "worked" with zero visible feedback, which read as the feature not doing anything.
   const reelIcon = document
     .getElementById(`reel-cart-icon-${postId}`)
     ?.querySelector("i");
@@ -9441,16 +7855,7 @@ window.toggleCartItem = async function (postId) {
     renderCartListView();
   }
 
-  // 2. Background Sync with Supabase saves table
-  //
-  // Fix: a failure here used to only log a console warning — the bookmark
-  // icon, the toast, and userCartList had already all been updated
-  // optimistically above with no way to know the write never actually
-  // reached the database. The item would then look "added" until the
-  // next reload silently re-synced against the real `saves` table and
-  // made it vanish again — exactly the "Add to Cart isn't working"
-  // symptom. Now a real failure rolls back every part of the optimistic
-  // update and tells the person plainly, instead of drifting silently.
+  // 2. Background Sync with Supabase saves table Fix.
   try {
     if (isRemoving) {
       const { error } = await supabase
@@ -9463,8 +7868,7 @@ window.toggleCartItem = async function (postId) {
       const { error } = await supabase
         .from("saves")
         .insert({ user_id: currentUserData.id, post_id: postId });
-      // A duplicate save (e.g. a fast double-tap) isn't a real
-      // failure — the row already exists, which is what we wanted.
+      // A duplicate save (e.g. a fast double-tap) isn't a real failure.
       const isDuplicate = error && error.code === "23505";
       if (error && !isDuplicate) throw error;
     }
@@ -9541,10 +7945,7 @@ async function hydrateCartItemsFromSource() {
         ...item,
         title: item.title || source.title || "Campus Item",
         price: item.price || source.price || 0,
-        // Always take these two fresh from source rather than keeping
-        // a stale cached value — a flash sale can start or end after
-        // an item was first saved, and the card needs to reflect
-        // whatever's true right now, not whatever it was when saved.
+        // Always take these two fresh from source rather than keeping a stale cached value.
         original_price: source.original_price ?? null,
         sale_ends_at: source.sale_ends_at ?? null,
         media_url: item.media_url || source.media_url || "",
@@ -9668,9 +8069,7 @@ function buildCartListMarkup() {
                             </button>
                             ${(() => {
                               const cartSaleActive = isSaleActiveForPost(item);
-                              const cartDisplayPrice = cartSaleActive
-                                ? item.original_price
-                                : item.price;
+                              const cartDisplayPrice = cartSaleActive ? item.original_price : item.price;
                               return `<div class="flex items-baseline gap-1.5 mt-1">
                                 <span class="text-amber-400 font-extrabold text-sm${cartSaleActive ? " sale-live-price" : ""}" ${cartSaleActive ? `data-sale-ends="${escAttr(item.sale_ends_at)}" data-regular-price="${escAttr(String(item.price ?? 0))}"` : ""}>GH₵${formatGHS(cartDisplayPrice ?? 0)}</span>
                                 ${cartSaleActive ? `<span class="sale-strike-price text-slate-500 text-[11px] line-through" data-sale-ends="${escAttr(item.sale_ends_at)}">GH₵${formatGHS(item.price ?? 0)}</span>` : ""}
@@ -9708,12 +8107,7 @@ function buildCartListMarkup() {
 async function renderCartListView() {
   await hydrateCartItemsFromSource();
   const markup = buildCartListMarkup();
-  // Fix: clear both wrappers so any previous "Couldn't load saved items"
-  // error banner from renderSavedItemsLoadError() — which only writes into
-  // one specific wrapper — doesn't leave a stale "Something went wrong"
-  // card sitting on the OTHER wrapper (cart vs profile) after recovery.
-  // Loading markup on top of the error markup also produced the stacked
-  // "error + 7 saved items" layout captured in screenshots.
+  // Fix: clear both wrappers so any previous "Couldn't load saved items" error banner from renderSavedItemsLoadError().
   ["cart-items-wrapper", "profile-saved-items-wrapper"].forEach((id) => {
     const container = document.getElementById(id);
     if (container) container.innerHTML = markup;
@@ -9752,10 +8146,7 @@ window.toggleFollow = async function (targetUserId, targetName, targetAvatar) {
   }
   if (targetUserId === currentUserData.id) return;
 
-  // Fix: rapid double-tapping Follow/Unfollow could fire two overlapping
-  // requests before the first one's "am I already following?" check
-  // resolved, causing a duplicate follow row (or a delete racing an
-  // insert) — same in-flight guard pattern as likePost's likeInFlight.
+  // Fix: rapid double-tapping Follow/Unfollow could fire two overlapping requests before the first one's "am I already following?" check resolved, causing a duplicate follow row (or a delete racing an insert) — same in-flight guard pattern as likePost's likeInFlight.
   const key = idKey(targetUserId);
   if (followInFlight.has(key)) return;
   followInFlight.add(key);
@@ -9860,12 +8251,7 @@ async function refreshFollowButtonStates() {
   }
 }
 
-// Shared delete implementation: removes the post's media from storage,
-// deletes the DB row (scoped to the current user so someone can't delete
-// another person's post even by guessing an id), and cleans up any local
-// caches that reference it. Used by both the single-post delete (options
-// menu) and the "My Gigs & Posts" bulk delete, so there's exactly one
-// place that knows how to fully remove a post.
+// Shared delete implementation: removes the post's media from storage, deletes the DB row (scoped to the current user so someone can't delete another person's post even by guessing an id), and cleans up any local caches that reference it.
 async function attemptSoftArchivePost(postId) {
   const archiveAttempts = [
     { is_archived: true, archived_at: new Date().toISOString() },
@@ -9887,20 +8273,11 @@ async function attemptSoftArchivePost(postId) {
 }
 
 // ─── ARCHIVED POSTS: view + restore ─────────────────────────────────────────
-// The archive column has existed since the delete/auto-moderation flows
-// were built, but until now there was no way to see or undo it — a
-// deleted-by-mistake post, or one auto-hidden by a bad-faith report
-// pile-on, was recoverable in the database but invisible in the app.
-// This closes that loop: a dedicated view lists a person's own archived
-// posts, with a one-tap restore.
+// The archive column has existed since the delete/auto-moderation flows were built, but until now there was no way to see or undo it.
 window.restorePost = async function (postId) {
   if (!currentUserData) return;
   try {
-    // Read the current status BEFORE overwriting it — this is the
-    // only way to tell "this was auto-hidden by reports" apart from
-    // "the owner deleted it themselves", since both end up as
-    // is_archived = true and the distinguishing status value would
-    // otherwise be gone the instant the restore update runs.
+    // Read the current status BEFORE overwriting it.
     const { data: current } = await supabase
       .from("posts")
       .select("status")
@@ -9915,14 +8292,7 @@ window.restorePost = async function (postId) {
       .eq("user_id", currentUserData.id);
     if (error) throw error;
 
-    // Quiet audit trail, logging only — never blocks the restore
-    // itself. Only report-triggered restores are logged; a person
-    // restoring their own plain delete needs no scrutiny. This
-    // exists so a moderation process, if one gets built later, has
-    // real history to look back on instead of starting from zero.
-    // Fire-and-forget: a logging failure should never surface as if
-    // the restore itself failed, since the restore already succeeded
-    // by this point.
+    // Quiet audit trail, logging only — never blocks the restore itself.
     if (wasReportTriggered) {
       supabase
         .from("restore_audit_log")
@@ -9939,9 +8309,7 @@ window.restorePost = async function (postId) {
     }
 
     showToast("Post restored — back in your feed.");
-    // Refresh whichever view is currently showing archived posts so
-    // the restored item disappears from this list immediately,
-    // and refresh the main profile grid so it reappears there too.
+    // Refresh whichever view is currently showing archived posts so the restored item disappears from this list immediately, and refresh the main profile grid so it reappears there too.
     if (
       document
         .getElementById("info-sheet-overlay")
@@ -10003,9 +8371,7 @@ async function _deletePostById(postId) {
     const targets = currentPost.media_url.startsWith("[")
       ? JSON.parse(currentPost.media_url)
       : [currentPost.media_url];
-    // Batched into one call instead of one remove() per file — Supabase
-    // Storage's remove() already accepts an array, so a 5-photo post
-    // used to cost 5 separate round-trips to delete for no reason.
+    // Batched into one call instead of one remove() per file.
     const storagePaths = targets
       .map((url) => url.split("/storage/v1/object/public/posts/")[1])
       .filter(Boolean);
@@ -10013,15 +8379,7 @@ async function _deletePostById(postId) {
       await supabase.storage.from("posts").remove(storagePaths);
   }
 
-  // Fix: deleting a post used to leave every like, comment, and save
-  // pointing at it behind as an orphaned row — nothing here ever
-  // cleaned those up. A like row surviving its post's deletion is
-  // exactly what caused a confusing false "this is already liked"
-  // duplicate-key conflict later, on an entirely unrelated test,
-  // since the row was still sitting in the likes table with no post
-  // left to belong to. Comments on the deleted post need their own
-  // comment_likes cleared first (comment_likes references comments,
-  // not posts, so it isn't reachable by post_id directly).
+  // Fix: deleting a post used to leave every like, comment, and save pointing at it behind as an orphaned row.
   const { data: doomedComments } = await supabase
     .from("comments")
     .select("id")
@@ -10089,14 +8447,7 @@ async function loadFollowingFeed() {
   const feed = document.getElementById("posts-feed");
   if (!feed) return;
 
-  // Fix: this returned before ever touching the feed grid when signed
-  // out, leaving whatever the PREVIOUS tab had rendered still sitting
-  // there — so switching to Following while signed out (or mid
-  // sign-in) silently showed stale content from All/Products/etc.,
-  // looking like Following was somehow pulling in posts from people
-  // you don't even follow. Following inherently needs an account to
-  // mean anything, so this now clears the grid and prompts sign-in
-  // instead of leaving it untouched.
+  // Fix: this returned before ever touching the feed grid when signed out, leaving whatever the PREVIOUS tab had rendered still sitting there.
   if (!currentUserData) {
     feed.classList.remove("grid-mode", "reels-mode");
     pauseAllReelVideos();
@@ -10182,15 +8533,7 @@ async function loadFollowingFeed() {
   }
 }
 
-// Trending/Popular tab (doc: "a feed component that shows the most
-// liked/commented posts from the last 24-48 hours, independent of a
-// user's For You feed"). Deliberately a single fetch, not paginated like
-// the main feed — a fixed top-N snapshot is exactly what "trending right
-// now" means, and re-paginating deeper would just be scrolling into
-// steadily-less-trending territory. Reuses getFeedScore (the same
-// recency+engagement weighting the main feed's ranking already uses)
-// rather than inventing a second scoring formula, just over a tighter
-// 48h window instead of the whole feed's age range.
+// Trending/Popular tab (doc: "a feed component that shows the most liked/commented posts from the last 24-48 hours, independent of a user's For You feed").
 const TRENDING_WINDOW_HOURS = 48;
 const TRENDING_POST_LIMIT = 30;
 
@@ -10255,8 +8598,7 @@ async function loadTrendingFeed() {
   }
 }
 
-// Following tab's own "load more", since it filters by followingFeedIds
-// rather than the type-based baseFilter used everywhere else.
+// Following tab's own "load more", since it filters by followingFeedIds rather than the type-based baseFilter used everywhere else.
 async function loadNextFollowingPage() {
   if (isFeedLoadingMore || !feedHasMore || followingFeedIds.length === 0)
     return;
@@ -10310,33 +8652,12 @@ async function loadNextFollowingPage() {
   }
 }
 
-// Skeleton screens (doc: "the current loading state is a spinner...a gray
-// outline of the content that's about to load is a much better UX").
-// Mimics the actual card/grid-tile shapes so there's no layout jump when
-// real content replaces these — count defaults to a typical first-screen
-// page size. grid=true renders square tiles (Explore/profile grids);
-// grid=false renders full feed-card-shaped rows (main feed).
-// Skeleton screens (doc: "the current loading state is a spinner...a gray
-// outline of the content that's about to load is a much better UX").
-// Fix: this originally rendered a plain uniform 3-column square grid for
-// every "grid" mode — but Products/Services/the All-tab actually use
-// Pinterest-style CSS-column masonry with varied card heights
-// (.masonry-columns / .masonry-columns-feed), so the skeleton didn't
-// match the real layout at all and visibly "popped"/reflowed the instant
-// real content replaced it. Now takes a `mode` so each tab's skeleton
-// uses the exact same container/card classes the real content will,
-// with a few varied heights standing in for masonry's natural variance.
+// Skeleton screens (doc: "the current loading state is a spinner...a gray outline of the content that's about to load is a much better UX").
 const SKELETON_TILE_HEIGHTS = [140, 190, 160, 220, 150, 200, 170, 130];
 
 function renderSkeletonCards(count = 6, mode = "feed") {
   if (mode === "reels") {
-    // Matches .reel-card exactly (height/width: 100%, black background)
-    // inside the same position:fixed, full-viewport .reels-mode
-    // container the real reel feed uses — a masonry/list skeleton
-    // rendered a small divided card here because #posts-feed didn't
-    // have .reels-mode applied yet at skeleton time (see filterFeed).
-    // Only the first card is ever visible (scroll-snap + 100% height),
-    // so a single one is enough.
+    // Matches .reel-card exactly (height/width.
     return `
         <div class="reel-card">
             <div class="absolute inset-0 bg-slate-900 skeleton-pulse"></div>
@@ -10415,29 +8736,11 @@ function renderFeedFromCache() {
   const feed = document.getElementById("posts-feed");
   if (!feed) return;
 
-  // Fix: this rebuilt the entire visible-card-count worth of markup
-  // (up to FEED_SESSION_CAP=300 posts) and wrote it via innerHTML even
-  // when the Feed screen wasn't the one on screen at all — e.g. saving
-  // a flash sale from Manage Listing opened off Profile's "My Gigs &
-  // Posts" grid patches allCachedPosts and unconditionally called this,
-  // paying the full render cost for a screen nobody could see. That
-  // main-thread work is exactly what made touch/scroll (including
-  // pull-to-refresh) feel briefly unresponsive right after saving.
-  // Skipping it here is safe: the data itself is already updated in
-  // allCachedPosts by whoever called this, and the next real switch
-  // back to Feed calls this again and paints correctly from that
-  // already-current cache — nothing is lost by not painting invisible
-  // pixels.
+  // Fix: this rebuilt the entire visible-card-count worth of markup (up to FEED_SESSION_CAP=300 posts) and wrote it via innerHTML even when the Feed screen wasn't the one on screen at all — e.g.
   const feedContainer = document.getElementById("feed-container");
   if (feedContainer && feedContainer.classList.contains("hidden")) return;
 
-  // Blocking a user should hide their posts everywhere in the app —
-  // rather than patching every fetch site that populates
-  // allCachedPosts (subscribeFeed, loadNextFeedPage, loadFollowingFeed,
-  // loadNextFollowingPage, search, etc.) individually and risking one
-  // being missed later, this single filter runs right before anything
-  // paints to the screen, so it's a guarantee regardless of which path
-  // put a post in the cache.
+  // Blocking a user should hide their posts everywhere in the app.
   if (blockedUserIds.size > 0) {
     allCachedPosts = allCachedPosts.filter(
       ({ data: d }) => !blockedUserIds.has(idKey(d.user_id)),
@@ -10447,9 +8750,7 @@ function renderFeedFromCache() {
   // Reels tab: full-bleed vertical video feed, TikTok-style
   if (currentFeedType === "reels") {
     renderReelsFeed();
-    // Fix: same reels-cache reuse as renderReelsFeed() above; if a
-    // fresh reels list was already built, iterate it directly instead
-    // of re-filtering.
+    // Fix: same reels-cache reuse as renderReelsFeed() above.
     const videos =
       allReelsCache && allReelsCache.length
         ? allReelsCache
@@ -10458,8 +8759,7 @@ function renderFeedFromCache() {
     return;
   }
 
-  // Any time we're NOT rendering reels, make sure no reel video is still
-  // playing audio in the background (e.g. switching All -> Products).
+  // Any time we're NOT rendering reels, make sure no reel video is still playing audio in the background (e.g.
   pauseAllReelVideos();
 
   // Products tab renders as a masonry grid instead of the snap-scroll feed
@@ -10468,9 +8768,7 @@ function renderFeedFromCache() {
     return;
   }
 
-  // Services tab: same masonry idea as Products, but its own card style
-  // (slightly bigger, per request) and its own continuous-scroll viewer
-  // on tap instead of the single-post detail view.
+  // Services tab: same masonry idea as Products, but its own card style (slightly bigger, per request) and its own continuous-scroll viewer on tap instead of the single-post detail view.
   if (currentFeedType === "skill") {
     renderServiceGrid();
     return;
@@ -10478,11 +8776,7 @@ function renderFeedFromCache() {
 
   feed.classList.remove("grid-mode", "reels-mode");
 
-  // Deals tab: shows every post with an active flash sale
-  // (original_price != price and sale_ends_at still in the future),
-  // hidden the moment no qualifying post exists OR the timer expires.
-  // Renders in the same masonry style as Products/All/feed so desktop
-  // and mobile get a consistent visual treatment.
+  // Deals tab: shows every post with an active flash sale (original_price != price and sale_ends_at still in the future), hidden the moment no qualifying post exists OR the timer expires.
   if (currentFeedType === "deals") {
     renderDealsGrid();
     return;
@@ -10524,11 +8818,7 @@ function renderFeedFromCache() {
             }
         </div>`;
 
-  // Single assignment: build every card's HTML into one string first,
-  // then set innerHTML exactly once. Wiring (carousel counters, comment
-  // count fetches) happens afterward, over the now-rendered nodes —
-  // splitting render from wiring means the browser only ever parses
-  // and lays out the feed HTML one time per load, not once per card.
+  // Single assignment: build every card's HTML into one string first, then set innerHTML exactly once.
   const isAllTab = currentFeedType === "all" || currentFeedType === "following";
   feed.classList.toggle("grid-mode", isAllTab);
   const cardRenderer = isAllTab ? renderFeedMasonryCard : renderFeedCard;
@@ -10539,10 +8829,7 @@ function renderFeedFromCache() {
     ? `<div class="masonry-columns-feed py-2">${regularCardsHtml.join("")}</div>${sentinelHtml}`
     : regularCardsHtml.join("") + sentinelHtml;
 
-  // Instagram-style Suggested Reels: woven into the All tab specifically,
-  // at semi-random spacing rather than a fixed slot (see
-  // interleaveSuggestedReels). Fetched and spliced in after the regular
-  // feed has already painted, so this never delays the primary content.
+  // Instagram-style Suggested Reels: woven into the All tab specifically, at semi-random spacing rather than a fixed slot (see interleaveSuggestedReels).
   if (currentFeedType === "all" && allCachedPosts.length > 0) {
     const myGeneration = _feedLoadGeneration;
     fetchSuggestedReelsPool().then((pool) => {
@@ -10588,14 +8875,7 @@ function renderFeedFromCache() {
   refreshFollowButtonStates();
 }
 
-// Re-shows and re-populates any comment sheet the person still has open
-// (tracked in openCommentIds) after a full feed rebuild has just replaced
-// its DOM node. Needed anywhere the feed HTML gets rebuilt wholesale —
-// currently: the end of renderFeedFromCache's synchronous render, AND the
-// separate delayed "suggested reels" merge on the All tab (see below),
-// which overwrites the feed a second time a moment later and used to
-// leave an open comment sheet stranded/closed with no way to reopen it
-// short of a refresh or tab switch.
+// Re-shows and re-populates any comment sheet the person still has open (tracked in openCommentIds) after a full feed rebuild has just replaced its DOM node.
 function reopenActiveCommentSheets() {
   openCommentIds.forEach((postId) => {
     const section = getPreferredCommentSection(postId);
@@ -10615,16 +8895,7 @@ function reopenActiveCommentSheets() {
             const replies = comments.filter((c) => c.parent_comment_id);
             topLevel.forEach((c) => {
               list.innerHTML += renderCommentItem(c, postId);
-              // Fix: this compared r.parent_comment_id === c.id
-              // directly — r.parent_comment_id can come back from
-              // the DB as a bigint, numeric string, normal string,
-              // or null for top-level comments, while c.id is
-              // usually a stringified bigint. === silently skipped
-              // every reply whose id types didn't match exactly,
-              // detaching reply chains on reload. Normalize both
-              // sides through idKey() so the comparison is
-              // type-independent (and also drop null entries here
-              // since they're not replies).
+              // Fix: this compared r.parent_comment_id === c.id directly.
               replies
                 .filter(
                   (r) =>
@@ -10642,21 +8913,7 @@ function reopenActiveCommentSheets() {
   });
 }
 
-// Incremental counterpart to renderFeedFromCache, used by loadNextFeedPage
-// once a new page of posts has been fetched and appended to
-// allCachedPosts. Building and re-parsing the ENTIRE feed's HTML on every
-// "load more" gets slower the longer a scroll session runs (500 existing
-// cards re-rendered just to add 15 more) — this instead builds HTML for
-// only the newly-fetched items and appends them to the existing DOM.
-//
-// Only handles the All / Products / Services tabs (the three that share
-// loadNextFeedPage — Following has its own loadNextFollowingPage). Falls
-// back to the full renderFeedFromCache() rebuild — same result as before
-// this function existed, just slower for that one page — whenever
-// something makes a safe incremental append not guaranteed correct:
-// a blocked user's post in the new batch, a missing container, or (most
-// importantly) applyFeedRankingToCache() having actually reordered
-// previously-shown posts rather than just adding new ones at the end.
+// Incremental counterpart to renderFeedFromCache, used by loadNextFeedPage once a new page of posts has been fetched and appended to allCachedPosts.
 function appendFeedCards(newItems) {
   if (!newItems || newItems.length === 0) return;
 
@@ -10677,14 +8934,7 @@ function appendFeedCards(newItems) {
     return;
   }
 
-  // Safety net: applyFeedRankingToCache() preserves prior order via
-  // ordinal-tiebreaking whenever scores are equal, so new items land at
-  // the end in the overwhelmingly common case — but a genuine score
-  // change (e.g. an old post getting liked while a new page loads) can
-  // still reorder existing entries. Detect that by checking whether the
-  // already-displayed ids are still in the same relative order at the
-  // front of allCachedPosts; if not, the DOM would silently drift out
-  // of sync with the data, so fall back to a full rebuild instead.
+  // Safety net: applyFeedRankingToCache() preserves prior order via ordinal-tiebreaking whenever scores are equal, so new items land at the end in the overwhelmingly common case.
   const displayedIds = Array.from(
     document.querySelectorAll(
       '#posts-feed [id^="feed-card-"], #posts-feed [id^="grid-card-"]',
@@ -10721,10 +8971,7 @@ function appendFeedCards(newItems) {
     const plainCardsHtml = newItems.map(({ id, data: d }) =>
       renderFeedMasonryCard(id, d),
     );
-    // Cheap/cached after the initial load (see fetchSuggestedReelsPool's
-    // 5-minute cache) — safe to call synchronously here without
-    // triggering a second network round-trip or a follow-up reflow of
-    // the whole feed the way the full-render path's async pool fetch does.
+    // Cheap/cached after the initial load (see fetchSuggestedReelsPool's 5-minute cache).
     const pool = suggestedReelsPool;
     const alreadyShownIds = new Set(allCachedPosts.map(({ id }) => idKey(id)));
     newCardsHtml = interleaveSuggestedReelsIncremental(
@@ -10758,29 +9005,16 @@ function appendFeedCards(newItems) {
         .join("");
   }
 
-  // Fix: this used to early-return here when a batch had zero matching
-  // items for the current tab (e.g. a page of mostly-Services posts
-  // while on the Products tab), which skipped the sentinel refresh
-  // below entirely and left it stuck on its "Loading more..." spinner
-  // forever. Only skip the actual card insertion, not the state sync
-  // that has to happen regardless of whether this batch had anything
-  // to show.
+  // Fix: this used to early-return here when a batch had zero matching items for the current tab (e.g.
   if (newCardsHtml) {
     container.insertAdjacentHTML("beforeend", newCardsHtml);
   }
 
-  // The sentinel must stay the last element in #posts-feed for the
-  // IntersectionObserver driving the next page load to keep triggering
-  // correctly — re-append it after the newly-inserted cards rather than
-  // leaving it wherever it ended up relative to the new container content.
+  // The sentinel must stay the last element in #posts-feed for the IntersectionObserver driving the next page load to keep triggering correctly.
   const sentinel = document.getElementById("feed-load-more-sentinel");
   if (sentinel) {
     feed.appendChild(sentinel);
-    // Fix: the sentinel was left showing its "Loading more..." spinner
-    // (set at the top of loadNextFeedPage) — refresh its content to
-    // match the current feedHasMore state, same logic renderFeedFromCache
-    // uses, so reaching the actual end of the feed on THIS load-more
-    // shows "you're all caught up" instead of a stuck spinner.
+    // Fix: the sentinel was left showing its "Loading more..." spinner (set at the top of loadNextFeedPage).
     const canWiden =
       currentCampusScope !== "everywhere" &&
       currentUserData?.institution &&
@@ -10797,12 +9031,7 @@ function appendFeedCards(newItems) {
                   : "posts",
           })
         : `<p class="text-center text-slate-600 text-[10px] uppercase tracking-widest">You're all caught up ✓</p>`;
-    // Re-attach the observer to the (repositioned) sentinel rather than
-    // assuming an already-observed element keeps being watched after
-    // appendChild moves it within the document — same call the
-    // full-render path already makes after every render, so this stays
-    // consistent instead of relying on an unverified DOM/Observer
-    // interaction.
+    // Re-attach the observer to the (repositioned) sentinel rather than assuming an already-observed element keeps being watched after appendChild moves it within the document.
     setupFeedLoadMoreObserver();
   }
 
@@ -10815,17 +9044,7 @@ function appendFeedCards(newItems) {
   }
 }
 
-// Fix: this used to only ever apply for the All tab ('feed-tab-all'),
-// even though Products and Services also render the same multi-column
-// masonry grid (see .masonry-columns / .masonry-columns-services) and
-// need identical desktop widening — without this, switching to
-// Products or Services left the grid stuck at the narrow ~520px
-// reading-column width with a large unused gap on wider screens,
-// since the CSS widening rules were only ever keyed to this one class.
-// Pulled out into its own function (see navigateTo()) because these
-// classes also need to be cleared when leaving the feed entirely —
-// otherwise they stuck around on <body> and widened/hid things on
-// Profile, DMs, Explore, etc. that were never meant to be affected.
+// Fix: this used to only ever apply for the All tab ('feed-tab-all'), even though Products and Services also render the same multi-column masonry grid (see .masonry-columns / .masonry-columns-services) and need identical desktop widening — without this, switching to Products or Services left the grid stuck at the narrow ~520px reading-column width with a large unused gap on wider screens, since the CSS widening rules were only ever keyed to this one class.
 function syncFeedTabBodyClasses(type) {
   const isGridTab =
     type === "all" ||
@@ -10839,20 +9058,7 @@ function syncFeedTabBodyClasses(type) {
   document.body.classList.toggle("feed-tab-deals", type === "deals");
 }
 
-// Fix: the CSS rule that tightens the header-to-content gap on Feed
-// (see body.feed-tab-* in main.css) depends on these same classes —
-// but until now they were only ever set from inside navigateTo()/
-// filterFeed(), i.e. only once the person actually switched tabs. On a
-// fresh page load, Feed is visible by default without either of those
-// ever having run yet (the raw HTML has no `hidden` class on
-// feed-container to begin with), so body had none of these classes on
-// first paint and the gap only closed itself retroactively after the
-// first tap. This module-scope function isn't reachable from the
-// separate classic <script> in index-18.html (module top-level
-// declarations aren't exposed on window the way classic-script ones
-// are), so it's called once here instead, right after boot, using
-// whatever tab currentFeedType already resolved to (including a
-// restored saved tab) — matching exactly what will actually render.
+// Fix: the CSS rule that tightens the header-to-content gap on Feed (see body.feed-tab-* in main.css) depends on these same classes.
 document.addEventListener("DOMContentLoaded", () => {
   syncFeedTabBodyClasses(currentFeedType);
 });
@@ -10888,9 +9094,7 @@ window.filterFeed = function (type, clickedBtn = null) {
     window.closeHeaderSearch();
   }
 
-  // Remember the active tab so a refresh lands back where the person
-  // actually was (Reels, Products, Services, Following...) instead of
-  // always resetting to "All".
+  // Remember the active tab so a refresh lands back where the person actually was (Reels, Products, Services, Following...) instead of always resetting to "All".
   sessionStorage.setItem("campus_market_feed_tab", type);
 
   // Leaving Reels: stop any playing video audio immediately.
@@ -10907,9 +9111,7 @@ window.filterFeed = function (type, clickedBtn = null) {
     clickedBtn.classList.replace("border-transparent", "border-amber-400");
   }
 
-  // Reels tab: TikTok-style overlay header, and the feed shows video
-  // posts only (media_type = 'video'), not a "type" column filter —
-  // reels are a view of existing video posts, not a new post type.
+  // Reels tab: TikTok-style overlay header, and the feed shows video posts only (media_type = 'video'), not a "type" column filter.
   const header = document.getElementById("site-header");
   if (type === "reels") {
     header?.classList.add("header-reels-mode");
@@ -10929,50 +9131,18 @@ window.filterFeed = function (type, clickedBtn = null) {
     return;
   }
 
-  // If the tab we're switching TO queries the exact same underlying
-  // data (same campus scope + same shared/skill/reels bucket) as
-  // something already fetched recently — whether that's the tab we're
-  // LEAVING or one visited earlier this session — skip the skeleton
-  // and re-fetch entirely and just restore + re-render that snapshot.
-  // This is what makes quick tab-hopping (in any order, any speed)
-  // feel instant instead of reloading every time.
-  //
-  // Product tab still fetches ALL posts (so grid + other tabs share cache)
-  // but renderFeedFromCache() switches to grid layout based on currentFeedType.
-  //
-  // This is now just the TYPE condition — no .limit()/.range() baked in
-  // here, since subscribeFeed applies pagination on top of whatever
-  // this returns. Products/Reels/Skills tabs still page normally; the
-  // grid view just renders everything currently loaded as a grid
-  // instead of a snap-scroll list.
-  //
-  // Campus scope layers on top of the type condition: when scoped to
-  // "mine" and the person has a saved institution, results are
-  // restricted to posts from that same institution. Reels is
-  // deliberately left unscoped (the banner is hidden there too) since
-  // reels tend to be browsed more broadly, not as a literal pickup-item
-  // search.
+  // If the tab we're switching TO queries the exact same underlying data (same campus scope + same shared/skill/reels bucket) as something already fetched recently.
   const baseFilter = (q) => {
     if (type === "reels") {
       return q.eq("media_type", "video");
     }
 
-    // "deals" isn't a real `type` column value — it's a flash-sale
-    // attribute that can sit on ANY post type (product or skill).
-    // Adding a `.eq("type", "deals")` filter here made the Deals tab's
-    // query match zero rows every single time, so it always rendered
-    // "No live deals right now" even when active flash sales existed.
-    // renderDealsGrid() already does the actual flash-sale filtering
-    // client-side once the (unfiltered-by-type) posts are cached.
+    // "deals" isn't a real `type` column value.
     if (type !== "all" && type !== "product" && type !== "deals") {
       q = q.eq("type", type);
     }
 
-    // Three-tier scoping: institution first (tightest), then region
-    // (wider), then no filter at all for 'everywhere'. Falls through
-    // gracefully to a looser tier if the person's profile is somehow
-    // missing the field a tighter tier needs (e.g. no region saved),
-    // rather than silently returning nothing.
+    // Three-tier scoping: institution first (tightest), then region (wider), then no filter at all for 'everywhere'.
     if (currentCampusScope === "institution" && currentUserData?.institution) {
       q = q.eq("institution", currentUserData.institution);
     } else if (currentCampusScope === "region" && currentUserData?.region) {
@@ -10993,9 +9163,7 @@ window.filterFeed = function (type, clickedBtn = null) {
     feedLoadedCount = _cachedBucket.feedLoadedCount;
     feedHasMore = _cachedBucket.feedHasMore;
     feedCursor = _cachedBucket.feedCursor;
-    // Kept up to date exactly like a real subscribeFeed() call would,
-    // so "load more" (infinite scroll) still fetches the right next
-    // page for whichever tab this cache hit just restored.
+    // Kept up to date exactly like a real subscribeFeed() call would, so "load more" (infinite scroll) still fetches the right next page for whichever tab this cache hit just restored.
     currentFeedBaseFilter = baseFilter;
     if (type === "reels") {
       document.getElementById("posts-feed")?.classList.add("reels-mode");
@@ -11009,21 +9177,13 @@ window.filterFeed = function (type, clickedBtn = null) {
 
   const feed = document.getElementById("posts-feed");
   if (feed) {
-    // Reels renders as a fixed, full-viewport overlay (see .reels-mode
-    // in main.css) — that class normally only gets added once real
-    // reel content renders, so the skeleton needs it applied here too,
-    // or it lays out as a small in-flow card instead of full-screen.
+    // Reels renders as a fixed, full-viewport overlay (see .reels-mode in main.css).
     if (type === "reels") {
       feed.classList.add("reels-mode");
     } else {
       feed.classList.remove("reels-mode");
     }
-    // Matches renderSkeletonCards' mode to whatever container class this
-    // tab actually renders into (see the masonry-columns* class each
-    // branch uses further down in renderFeedFromCache) — Products/Deals
-    // and Services use slightly different column classes from each
-    // other and from the All-tab feed, so a single generic "grid" mode
-    // doesn't fit all three.
+    // Matches renderSkeletonCards' mode to whatever container class this tab actually renders into (see the masonry-columns* class each branch uses further down in renderFeedFromCache) — Products/Deals and Services use slightly different column classes from each other and from the All-tab feed, so a single generic "grid" mode doesn't fit all three.
     const skeletonMode =
       type === "product" || type === "deals"
         ? "masonry"
@@ -11039,15 +9199,7 @@ window.filterFeed = function (type, clickedBtn = null) {
   subscribeFeed(baseFilter, _thisSignature);
 };
 
-// Shows/hides and updates the text of the campus-scope banner above the
-// feed. Hidden entirely on Reels/Following (scope doesn't apply there)
-// and for anyone without a saved institution yet (nothing to scope by —
-// they'd just see an empty toggle that does nothing).
-// Builds the right "want to see more?" prompt HTML for whichever scope
-// tier is currently active, so the same institution -> region ->
-// everywhere logic doesn't need to be duplicated across every place a
-// feed can run dry (empty-from-zero states AND the scroll-exhaustion
-// prompt at the bottom of a populated feed both call this).
+// Shows/hides and updates the text of the campus-scope banner above the feed.
 function buildScopeWidenPrompt({ contextLabel = "posts" } = {}) {
   if (currentCampusScope === "institution") {
     const hasRegion = !!currentUserData?.region;
@@ -11103,12 +9255,7 @@ function updateCampusScopeBanner() {
   }
 }
 
-// Cycles institution -> region -> everywhere -> back to institution,
-// persists the choice, and re-runs the current tab's query with the new
-// scope applied. Skips the region step entirely for anyone without a
-// saved region (goes straight institution -> everywhere for them, same
-// as the old two-tier behavior), so this never traps someone in a tier
-// their profile can't actually support.
+// Cycles institution -> region -> everywhere -> back to institution, persists the choice, and re-runs the current tab's query with the new scope applied.
 window.toggleCampusScope = function () {
   if (!currentUserData?.institution) return;
 
@@ -11130,20 +9277,14 @@ window.toggleCampusScope = function () {
         : "everywhere";
   showToast(`Showing posts from ${scopeLabel}`);
 
-  // Re-apply the current tab with the new scope. Reels/Following
-  // aren't affected by scope, so nothing to re-run there — but this
-  // button is hidden on those tabs anyway.
+  // Re-apply the current tab with the new scope.
   if (["all", "product", "skill"].includes(currentFeedType)) {
     const clickedBtn = document.querySelector(".feed-tab-btn.text-amber-400");
     window.filterFeed(currentFeedType, clickedBtn);
   }
 };
 
-// Jumps directly to a specific scope tier (used by the end-of-feed
-// "want to see more?" prompt, which offers a specific next tier rather
-// than cycling blindly) — same persistence/re-run behavior as the
-// regular toggle, just targeting an explicit tier instead of advancing
-// by one step.
+// Jumps directly to a specific scope tier (used by the end-of-feed "want to see more?" prompt, which offers a specific next tier rather than cycling blindly).
 window.setCampusScope = function (scope) {
   if (!_validCampusScopes.includes(scope)) return;
   if (!currentUserData?.institution) return;
@@ -11166,12 +9307,7 @@ window.setCampusScope = function (scope) {
 };
 
 // ─── 16. SEARCH ──────────────────────────────────────────────────────────────
-// Debounced entry point: the actual search/filter/render work only runs
-// after typing pauses briefly, instead of on every keystroke. Previously
-// each keystroke triggered a full array filter plus a full re-render of
-// every matching card (including re-wiring video observers), which is
-// wasted work mid-typing and made the UI feel less responsive than it
-// should on a phone.
+// Debounced entry point: the actual search/filter/render work only runs after typing pauses briefly, instead of on every keystroke.
 let _searchDebounceTimer = null;
 window.runSearch = function (term) {
   clearTimeout(_searchDebounceTimer);
@@ -11190,8 +9326,7 @@ window.runSearch = function (term) {
 };
 
 // ─── 16a. SEARCH FILTERS (price, date posted, location) ───────────────────
-// One state object, read at query time, so the filter panel UI and the
-// query builder below never drift out of sync with each other.
+// One state object, read at query time, so the filter panel UI and the query builder below never drift out of sync with each other.
 const searchFilters = {
   minPrice: null,
   maxPrice: null,
@@ -11208,8 +9343,7 @@ function _hasActiveSearchFilters() {
   );
 }
 
-// Converts a datePosted choice into an ISO cutoff timestamp for a
-// .gte('created_at', ...) filter. Returns null for 'any' (no cutoff).
+// Converts a datePosted choice into an ISO cutoff timestamp for a .gte('created_at', ...) filter.
 function _datePostedCutoffISO(datePosted) {
   const now = new Date();
   if (datePosted === "today") {
@@ -11224,9 +9358,7 @@ function _datePostedCutoffISO(datePosted) {
   return now.toISOString();
 }
 
-// Populates the location filter <select> once with every known
-// institution — reuses ALL_INSTITUTIONS (already built from GHANA_DATA for
-// onboarding) instead of maintaining a second list.
+// Populates the location filter <select> once with every known institution.
 function populateSearchLocationFilter() {
   const locEl = document.getElementById("search-filter-location");
   if (!locEl || locEl.dataset.populated === "true") return;
@@ -11291,11 +9423,7 @@ window.clearSearchFilters = function () {
 };
 
 // ─── 16b. SEARCH AUTOCOMPLETE ──────────────────────────────────────────────
-// Lightweight, local-only suggestions (no extra DB round trip per
-// keystroke): matches against saved search alerts and titles already
-// sitting in allCachedPosts. Genuinely new/rare terms just won't suggest
-// anything, which is fine — the debounced real search below still covers
-// them.
+// Lightweight, local-only suggestions (no extra DB round trip per keystroke).
 function _updateSearchAutocomplete(term) {
   const box = document.getElementById("search-autocomplete");
   if (!box) return;
@@ -11351,15 +9479,10 @@ window._pickAutocompleteSuggestion = function (term) {
   window.runSearch(term);
 };
 
-// Location filter <select> just needs its options built once, whenever
-// the DOM is ready — ALL_INSTITUTIONS is already available at module load
-// time (built from the static GHANA_DATA object), no auth/network wait
-// needed.
+// Location filter <select> just needs its options built once, whenever the DOM is ready.
 document.addEventListener("DOMContentLoaded", populateSearchLocationFilter);
 
-// Toggles the filter panel open/closed under the search bar. Kept as a
-// simple show/hide (not built fresh each time) so typed-but-not-yet-
-// applied filter values survive opening/closing the panel.
+// Toggles the filter panel open/closed under the search bar.
 window.toggleSearchFilterPanel = function () {
   const panel = document.getElementById("search-filter-panel");
   if (!panel) return;
@@ -11371,10 +9494,7 @@ async function _runSearchImmediate(term) {
   if (!resultsEl) return;
 
   const trimmedTerm = term.trim();
-  // A blank search box used to always bounce back to the main feed. Now it
-  // only does that when no filters are active either — with a price/date/
-  // location filter set, an empty box means "browse everything matching
-  // these filters" rather than "there's nothing to search for".
+  // A blank search box used to always bounce back to the main feed.
   if (!trimmedTerm && !_hasActiveSearchFilters()) {
     window._searchNavInProgress = true;
     window.navigateTo("feed");
@@ -11388,28 +9508,12 @@ async function _runSearchImmediate(term) {
   resultsEl.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Searching Campus...</div>`;
   const lower = trimmedTerm.toLowerCase();
 
-  // Fix: this used to only search allCachedPosts — whatever happened to
-  // already be loaded client-side (capped at SEARCH_LIMIT, populated
-  // from the most recent posts). Once the app has more posts than that
-  // cap, searching for anything older/outside that window silently
-  // returned "no results" even though the post genuinely existed. Now
-  // queries the database directly for this specific term instead, so
-  // search coverage no longer depends on what's already been scrolled
-  // past or cached.
-  //
-  // PostgREST's .or() filter string is itself a small parsed grammar —
-  // comma separates conditions and parentheses group them — so a term
-  // containing either would corrupt the filter (or, worse, let someone
-  // craft an unintended additional condition) if passed through as-is.
-  // Strip them before building the query; every other character is
-  // safe inside an ilike %...% wildcard.
+  // Fix: this used to only search allCachedPosts.
   const safeTerm = trimmedTerm.replace(/[,()]/g, "").trim();
   let searchResults = [];
   let usedFuzzyFallback = false;
 
-  // Applies the price/date/location filter state client-side — used for
-  // the error fallback path (allCachedPosts) so a transient DB error
-  // doesn't silently ignore filters the person explicitly set.
+  // Applies the price/date/location filter state client-side.
   function _applyClientSideFilters(items) {
     const cutoff = _datePostedCutoffISO(searchFilters.datePosted);
     return items.filter((item) => {
@@ -11437,8 +9541,7 @@ async function _runSearchImmediate(term) {
           `scheduled_for.is.null,scheduled_for.lte.${new Date().toISOString()}`,
         );
 
-      // Keyword condition is optional now — filters alone (price/date/
-      // location) can carry a query with no typed term at all.
+      // Keyword condition is optional now — filters alone (price/date/ location) can carry a query with no typed term at all.
       if (safeTerm) {
         const orFilter = [
           "title",
@@ -11469,15 +9572,7 @@ async function _runSearchImmediate(term) {
       if (error) throw error;
       searchResults = (data || []).map((item) => ({ id: item.id, data: item }));
 
-      // Typo-tolerance fallback: only kicks in when there's an actual typed
-      // term, the exact/substring (ilike) search above came back empty, and
-      // no filters are narrowing things further (a fuzzy match combined
-      // with unrelated filters would be confusing). Calls the
-      // search_posts_fuzzy Postgres function (pg_trgm-backed — see
-      // supabase_migration_fuzzy_search.sql). If that migration hasn't been
-      // run yet, the RPC call fails harmlessly and search just stays
-      // "no results" like before, so this is safe to ship ahead of running
-      // the migration.
+      // Typo-tolerance fallback: only kicks in when there's an actual typed term, the exact/substring (ilike) search above came back empty, and no filters are narrowing things further (a fuzzy match combined with unrelated filters would be confusing).
       if (
         safeTerm &&
         searchResults.length === 0 &&
@@ -11497,13 +9592,7 @@ async function _runSearchImmediate(term) {
       }
     } catch (e) {
       console.error("Search query error:", e);
-      // Fix: previously any DB error here was silently swallowed and
-      // allCachedPosts (whatever was already loaded) was searched
-      // instead, with no indication anything had gone wrong — a
-      // failed search looked identical to a search with no matches.
-      // Fall back to searching the local cache so a transient error
-      // doesn't leave the person with a dead search box, but tell
-      // them results may be incomplete rather than staying silent.
+      // Fix: previously any DB error here was silently swallowed and allCachedPosts (whatever was already loaded) was searched instead, with no indication anything had gone wrong.
       searchResults = _applyClientSideFilters(allCachedPosts || []);
       showToast(
         "Couldn't reach the server — showing recently loaded posts only.",
@@ -11511,33 +9600,14 @@ async function _runSearchImmediate(term) {
     }
   }
 
-  // Same blocked-user filter the main feed applies (see
-  // renderFeedFromCache) — a blocked user's posts shouldn't surface via
-  // search either. This was a pre-existing gap (search never filtered
-  // for this even before this function's DB-query rewrite above), fixed
-  // here alongside it.
+  // Same blocked-user filter the main feed applies (see renderFeedFromCache).
   if (blockedUserIds.size > 0) {
     searchResults = searchResults.filter(
       ({ data: d }) => !blockedUserIds.has(idKey(d.user_id)),
     );
   }
 
-  // Smarter-search pass: instead of just filtering (arbitrary order —
-  // effectively whatever order allCachedPosts happened to be in), each
-  // match gets a relevance score and results are sorted by it. This is
-  // still substring matching under the hood (no fuzzy/typo-tolerant
-  // matching or semantic search — that needs either a Postgres full-text
-  // search index via to_tsvector/tsquery, or an external search service,
-  // neither of which this file can safely assume exists), but a title
-  // match now correctly outranks a match buried in a long description,
-  // and recency acts as a tiebreaker so identical-relevance results
-  // don't feel randomly ordered.
-  // Fuzzy-fallback results are already ranked by trigram similarity
-  // server-side (search_posts_fuzzy's ORDER BY) — none of them contain the
-  // typed term as an exact substring (that's precisely why the plain
-  // ilike search above found nothing), so re-scoring them by substring
-  // match here would score every single one at 0 and wipe out the very
-  // results we just fetched. Keep the DB's similarity order instead.
+  // Smarter-search pass: instead of just filtering (arbitrary order.
   let matches;
   if (usedFuzzyFallback) {
     matches = searchResults;
@@ -11570,10 +9640,7 @@ async function _runSearchImmediate(term) {
         scored.push({ item, score, createdAt: d.created_at || "" });
     }
 
-    // Ties broken by recency (newest first) so fresh listings surface
-    // ahead of stale ones with identical text relevance — same intent as
-    // the blueprint's "feed decay" idea, applied to search instead of the
-    // main feed, which already has its own decay ranking.
+    // Ties broken by recency (newest first) so fresh listings surface ahead of stale ones with identical text relevance.
     scored.sort(
       (a, b) => b.score - a.score || (b.createdAt > a.createdAt ? 1 : -1),
     );
@@ -11605,17 +9672,7 @@ async function _runSearchImmediate(term) {
         ${renderSavedAlertPills(trimmedTerm)}
         <div class="masonry-columns-feed" id="search-results-grid"></div>`;
 
-  // Fix: search results used to render one full-width renderFeedCard
-  // per result (same card as the main feed) inside a plain space-y-4
-  // stack — always one tall column, regardless of screen size. Every
-  // other browse surface (Deals, Services, "You might also like") uses
-  // the compact masonry card in a 2-column grid instead. Switched
-  // search to the same renderFeedMasonryCard + masonry-columns-feed
-  // pairing those already use, so it matches instead of standing out
-  // as its own thing. Dropped wireCarouselCounters/
-  // fetchAndCacheCommentCount — those exist for renderFeedCard's
-  // carousel/comment-count UI, which the masonry card doesn't have
-  // (same reason "You might also like" never called them either).
+  // Fix: search results used to render one full-width renderFeedCard per result (same card as the main feed) inside a plain space-y-4 stack.
   const gridEl = document.getElementById("search-results-grid");
   matches.slice(0, SEARCH_RESULTS_CAP).forEach((item) => {
     const id = item.id;
@@ -11627,11 +9684,7 @@ async function _runSearchImmediate(term) {
 }
 
 // ─── 16d. POST DRAFTS ───────────────────────────────────────────────────────
-// Text fields only (title/description/price/type/flash-sale/schedule
-// settings) — attached photos/videos are File objects that can't be
-// serialized into localStorage, so a resumed draft always needs media
-// re-attached. That's flagged in the UI copy rather than hidden, so it
-// doesn't look like a bug when photos don't come back.
+// Text fields only (title/description/price/type/flash-sale/schedule settings).
 const POST_DRAFT_KEY = "campus_market_post_draft";
 
 function _readPostDraftFields() {
@@ -11719,8 +9772,7 @@ window._resumePostDraft = function () {
 };
 
 // ─── 17. POST SUBMISSION ─────────────────────────────────────────────────────
-// Guard flag + visible button state so a double-tap (or slow network retry)
-// can never fire two uploads of the same files.
+// Guard flag + visible button state so a double-tap (or slow network retry) can never fire two uploads of the same files.
 let isSubmittingPost = false;
 
 window.handlePostSubmission = async function () {
@@ -11737,21 +9789,13 @@ window.handlePostSubmission = async function () {
   const title = document.getElementById("postTitle")?.value.trim();
   const description = document.getElementById("postDescription")?.value.trim();
   const type = document.getElementById("postType")?.value;
-  // Price field displays thousands separators as you type (see
-  // _formatPriceInput) — stripped back to a plain numeric string here,
-  // right at the point of reading it, so every parseFloat/validation
-  // check below this line works exactly as it did before that display
-  // formatting existed.
+  // Price field displays thousands separators as you type (see _formatPriceInput).
   const price = (document.getElementById("postPrice")?.value || "").replace(
     /,/g,
     "",
   );
 
-  // Flash sale is an optional attribute on any listing (not a separate
-  // post type) — reuses the same original_price/sale_ends_at columns
-  // and countdown-badge rendering already built for Manage Listing, so
-  // a listing created with a flash sale looks and behaves identically
-  // to one that had a sale added afterwards.
+  // Flash sale is an optional attribute on any listing (not a separate post type).
   const flashSaleEnabled = !!document.getElementById("postFlashSaleToggle")
     ?.checked;
   const originalPriceRaw = flashSaleEnabled
@@ -11782,12 +9826,7 @@ window.handlePostSubmission = async function () {
     showToast("Please set an end time for your flash sale, or turn it off.");
     return;
   }
-  // A flash sale with no real discount is exactly what produced a post
-  // that shows a running countdown timer but never appears in the Deals
-  // tab and never shows a struck-through price — nothing else in the
-  // app treats a sale as "live" unless the flash sale price is
-  // genuinely lower than the listing price, so this must be required at
-  // the same point, not just silently accepted.
+  // A flash sale with no real discount is exactly what produced a post that shows a running countdown timer but never appears in the Deals tab and never shows a struck-through price.
   if (
     flashSaleEnabled &&
     saleEndsRaw &&
@@ -11805,11 +9844,6 @@ window.handlePostSubmission = async function () {
   }
 
   // Post scheduling: publishing at a future time instead of immediately.
-  // No server-side cron needed — a scheduled post is inserted right away
-  // with scheduled_for set, and the main feed query simply excludes
-  // anything whose scheduled_for is still in the future. It becomes
-  // visible to everyone else the instant that time passes, without any
-  // extra publish step.
   const scheduleEnabled =
     !!document.getElementById("postScheduleToggle")?.checked;
   const scheduledForRaw = scheduleEnabled
@@ -11827,10 +9861,7 @@ window.handlePostSubmission = async function () {
     return;
   }
 
-  // Prefer the reviewed/edited (already-compressed) files from the
-  // WhatsApp-style edit modal; fall back to the raw file input if the
-  // user somehow skipped it — but still compress raw images here too,
-  // so compression is guaranteed regardless of which path was taken.
+  // Prefer the reviewed/edited (already-compressed) files from the WhatsApp-style edit modal.
   const rawInputFiles = document.getElementById("mediaInput")?.files;
   let mediaFiles =
     finalMediaFiles && finalMediaFiles.length > 0
@@ -11868,14 +9899,7 @@ window.handlePostSubmission = async function () {
   const submitBtnLabel = document.getElementById("publishPostBtnLabel");
   const attachBtn = document.getElementById("attachMediaBtn");
 
-  // Fix: this used to check title first and return immediately if it
-  // was missing — meaning someone who'd left BOTH the title empty AND
-  // never attached any media only ever saw "add a title," with the
-  // missing-media problem hidden until they fixed the title and hit
-  // Publish a second time. Checking presence of everything required
-  // together first, before any of the "is what you typed valid" checks
-  // below, means one combined message covers everything actually
-  // missing in a single pass.
+  // Fix: this used to check title first and return immediately if it was missing.
   const missingRequired = [];
   if (!title) missingRequired.push("a title");
   if (!mediaFiles || mediaFiles.length === 0)
@@ -11885,9 +9909,7 @@ window.handlePostSubmission = async function () {
     return;
   }
 
-  // From here on title and media are both confirmed present — these
-  // remaining checks are about the VALIDITY of what was entered, which
-  // is still meaningful to report one at a time.
+  // From here on title and media are both confirmed present.
   if (title.length > 100) {
     showToast("Title must be 100 characters or fewer.");
     return;
@@ -11907,9 +9929,7 @@ window.handlePostSubmission = async function () {
     return;
   }
 
-  // Final safety-net validation — normally already enforced when files
-  // were first attached (see openEditMediaModal), but this covers the
-  // raw fallback path too in case the edit modal was somehow bypassed.
+  // Final safety-net validation — normally already enforced when files were first attached (see openEditMediaModal), but this covers the raw fallback path too in case the edit modal was somehow bypassed.
   if (mediaFiles.length > MAX_MEDIA_FILES) {
     showToast(`Please attach no more than ${MAX_MEDIA_FILES} files.`);
     return;
@@ -11937,9 +9957,7 @@ window.handlePostSubmission = async function () {
     return;
   }
 
-  // Lock the UI immediately: disable Publish AND the attach button, add a
-  // spinner, so there is a clear, visible sign the upload is in progress
-  // and it's impossible to trigger a second submission of the same files.
+  // Lock the UI immediately: disable Publish AND the attach button, add a spinner, so there is a clear, visible sign the upload is in progress and it's impossible to trigger a second submission of the same files.
   isSubmittingPost = true;
   if (submitBtn) submitBtn.disabled = true;
   if (attachBtn) attachBtn.disabled = true;
@@ -11952,27 +9970,14 @@ window.handlePostSubmission = async function () {
     let thumbnailUrl = "";
     let primaryMediaType = "image";
 
-    // Multi-file upload: every file the user attached is uploaded and
-    // stored as a JSON array in media_url, which both the feed carousel
-    // and detail-view carousel already render as a swipeable gallery.
+    // Multi-file upload: every file the user attached is uploaded and stored as a JSON array in media_url, which both the feed carousel and detail-view carousel already render as a swipeable gallery.
     for (let i = 0; i < mediaFiles.length; i++) {
       let file = mediaFiles[i];
 
       if (submitBtnLabel)
         submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Uploading ${i + 1}/${mediaFiles.length}...`;
 
-      // Egress fix: listing photos were uploaded at their original
-      // camera resolution (up to 15MB, up to 10 per post) and then
-      // that same full-size file gets served on every view — feed,
-      // grid, saved items, detail carousel. Avatars already went
-      // through compressImageFile before upload; photos never did,
-      // making them by far the largest driver of Supabase egress.
-      // 1600px/0.8 keeps them sharp in the full-screen detail
-      // carousel while cutting typical phone-camera file size by
-      // roughly 80-90%. Videos now go through compressVideoFile the
-      // same way — see that function for why it's a native
-      // canvas/MediaRecorder re-encode rather than a WASM transcoder.
-      // Matters most while on free-tier Supabase storage/egress.
+      // Egress fix: listing photos were uploaded at their original camera resolution (up to 15MB, up to 10 per post) and then that same full-size file gets served on every view.
       const isImage = file.type && file.type.startsWith("image/");
       const isVideoFile = file.type && file.type.startsWith("video/");
       if (isImage) {
@@ -11988,10 +9993,7 @@ window.handlePostSubmission = async function () {
           );
         }
       } else if (isVideoFile) {
-        // Re-encoding plays the clip through once in the background, so
-        // this can take a few seconds — say so explicitly rather than
-        // leaving the same generic "Uploading..." label sitting there
-        // with no visible progress the whole time.
+        // Re-encoding plays the clip through once in the background, so this can take a few seconds.
         if (submitBtnLabel) {
           submitBtnLabel.innerHTML = `<i class="fas fa-spinner fa-spin mr-1.5"></i> Compressing video ${i + 1}/${mediaFiles.length}...`;
         }
@@ -12008,12 +10010,7 @@ window.handlePostSubmission = async function () {
         }
       }
 
-      // Computed AFTER compression, not before: compressVideoFile can
-      // change the file's extension (e.g. a .mov capture becomes
-      // .webm), so building storagePath from the ORIGINAL extension
-      // would leave the uploaded path's extension mismatched with what
-      // was actually uploaded, even though the correct contentType
-      // still gets set on the upload call below.
+      // Computed AFTER compression, not before.
       const ext = (file.name || "file").split(".").pop();
       const storagePath = `${currentUserData.id}/${Date.now()}-${i}.${ext}`;
 
@@ -12023,9 +10020,7 @@ window.handlePostSubmission = async function () {
             .from("posts")
             .upload(storagePath, file, {
               contentType: file.type,
-              // Same reasoning as the avatar upload above —
-              // storagePath includes a timestamp, so it's
-              // never reused for different content.
+              // Same reasoning as the avatar upload above.
               cacheControl: "31536000",
             });
           if (uploadError) throw uploadError;
@@ -12045,19 +10040,7 @@ window.handlePostSubmission = async function () {
       } = supabase.storage.from("posts").getPublicUrl(storagePath);
       publicUrls.push(publicUrl);
 
-      // Cached Egress fix: every grid/list view (Saved Items,
-      // Profile grid, Archived Posts, public profile grid — all
-      // roughly 48-150px on screen) was loading this SAME
-      // full-1600px file just to shrink it down visually in CSS —
-      // the bytes still had to be downloaded at full size first.
-      // Only the FIRST image needs a thumbnail at all, since that's
-      // the only one any grid view ever shows. Derived from the
-      // already-compressed 1600px `file` above rather than the raw
-      // original — faster to downsample further, and it's already
-      // had EXIF/orientation handled by that first pass. Best-effort:
-      // if this fails, thumbnailUrl just stays empty and
-      // pickThumbnailUrl() falls back to the full-size image, same
-      // as it does for any older post that predates this feature.
+      // Cached Egress fix: every grid/list view (Saved Items, Profile grid, Archived Posts, public profile grid.
       if (i === 0 && isImage) {
         try {
           const thumbFile = await compressImageFile(file, {
@@ -12131,9 +10114,7 @@ window.handlePostSubmission = async function () {
     if (insertError) throw insertError;
     trackEvent("post_created", { type });
 
-    // A saved draft's job is done once its content actually gets
-    // published — clearing it here avoids a stale "Resume draft" banner
-    // reappearing next time the compose sheet opens.
+    // A saved draft's job is done once its content actually gets published.
     try {
       localStorage.removeItem(POST_DRAFT_KEY);
     } catch (_) {}
@@ -12156,8 +10137,7 @@ window.handlePostSubmission = async function () {
     const scheduledForEl = document.getElementById("postScheduledFor");
     if (scheduledForEl) scheduledForEl.value = "";
 
-    // Clear staged/final media state so re-opening the modal never
-    // silently reuses a previous upload's files.
+    // Clear staged/final media state so re-opening the modal never silently reuses a previous upload's files.
     stagedMediaFiles.forEach((f) => {
       try {
         URL.revokeObjectURL(f.url);
@@ -12205,25 +10185,7 @@ async function loadProfileStats() {
         .from("follows")
         .select("", { count: "exact", head: true })
         .eq("follower_id", currentUserData.id),
-      // Archived posts now live in their own view (Settings →
-      // Archived Posts) rather than being mixed into this grid —
-      // this filter is what makes that separation real instead of
-      // cosmetic.
-      //
-      // Fix: this used to select only id/title/media/price/
-      // scheduled_for/is_featured — enough for the grid thumbnails
-      // themselves, but this same result also gets cached into
-      // _ownProfilePostsById and reused by openProfilePostViewer for
-      // the full-screen swipe view of your OWN posts (see below).
-      // That viewer needs the same shape as FEED_SELECT_COLUMNS
-      // (name, avatar, description, counts, etc.) — without them it
-      // rendered your own posts with the generic "Student" fallback
-      // and blank description/counts, while everyone else's profile
-      // viewer worked fine because that branch does its own full
-      // fetch instead of reusing this lean cache. Union of both
-      // column sets rather than switching to FEED_SELECT_COLUMNS
-      // outright, since scheduled_for/is_featured are grid-only
-      // fields FEED_SELECT_COLUMNS doesn't carry.
+      // Archived posts now live in their own view (Settings → Archived Posts) rather than being mixed into this grid.
       supabase
         .from("posts")
         .select(
@@ -12293,16 +10255,11 @@ async function loadProfileStats() {
     setEl("profile-following-count", followingRes.count || 0);
     setEl("profile-posts-count", postsCount);
 
-    // The grid is about to be rebuilt from scratch, so any select-mode
-    // state (checkmarks, the toolbar) referring to the old tiles would
-    // otherwise be left dangling.
+    // The grid is about to be rebuilt from scratch, so any select-mode state (checkmarks, the toolbar) referring to the old tiles would otherwise be left dangling.
     if (typeof window.exitGridSelectMode === "function")
       window.exitGridSelectMode();
 
-    // Cached so shareSelectedGridItems (multi-select Share) can build
-    // a real summary of title/price for whatever's selected without
-    // a redundant fetch — this data only otherwise existed inside
-    // this function's own closure and was gone the moment it returned.
+    // Cached so shareSelectedGridItems (multi-select Share) can build a real summary of title/price for whatever's selected without a redundant fetch.
     _ownProfilePostsById.clear();
     postsRes.data?.forEach((d) => _ownProfilePostsById.set(idKey(d.id), d));
 
@@ -12340,12 +10297,7 @@ window.initProfileSelects = function () {
 };
 
 // ─── ACCOUNT SETTINGS ─────────────────────────────────────────────────────────
-// Theme switching: cycles through dark -> light -> system -> dark; saves
-// the choice to localStorage and re-applies it to the html element so the
-// CSS custom properties defined in main.css pick it up instantly. System
-// mode follows the OS prefers-color-scheme live and is wired up to do so
-// both on initial load (see the inline theme bootstrap in index.html)
-// and here on every change.
+// Theme switching: cycles through dark -> light -> system -> dark.
 window.setTheme = function (mode) {
   const valid = ["dark", "light", "system"];
   if (!valid.includes(mode)) mode = "dark";
@@ -12468,10 +10420,7 @@ document
       );
       if (error) throw error;
 
-      // Same staleness problem as avatars: posts store a denormalized
-      // snapshot of the poster's name, so backfill it across existing
-      // posts too, otherwise a name change would only apply going
-      // forward.
+      // Same staleness problem as avatars: posts store a denormalized snapshot of the poster's name, so backfill it across existing posts too, otherwise a name change would only apply going forward.
       await supabase
         .from("posts")
         .update({ user_name: newName })
@@ -12567,16 +10516,11 @@ function saveAppSettings(partial) {
   return merged;
 }
 
-// Exposed so other parts of the app (media pipeline, video observers) can
-// check the current preference without re-reading localStorage directly.
+// Exposed so other parts of the app (media pipeline, video observers) can check the current preference without re-reading localStorage directly.
 window.getAppSettings = getAppSettings;
 
 // ─── INFO SHEET: Privacy Policy / Help & Support / Blocked Users ────────────
-// Replaces the old "Coming soon" toast placeholders with real, readable
-// content. Blocked Users is honest about the fact that there's no
-// block-a-person feature wired up yet (it would need its own table + RLS
-// + feed filtering — a separate feature, not a settings-page fix) rather
-// than faking a list or silently doing nothing.
+// Replaces the old "Coming soon" toast placeholders with real, readable content.
 const INFO_SHEET_CONTENT = {
   privacy: {
     title: "Privacy Policy",
@@ -12643,13 +10587,7 @@ const INFO_SHEET_CONTENT = {
   },
   verification: {
     title: "Get Verified",
-    // NOTE ON UI WIRING: this sheet renders correctly once opened, but
-    // nothing in this JS file currently calls
-    // window.openInfoSheet('verification') from a button — the other
-    // entries here (privacy/help/blocked) are triggered by buttons
-    // living in index.html, which wasn't part of what I could read
-    // or edit. Add a settings row there calling
-    // onclick="window.openInfoSheet('verification')" to surface this.
+    // NOTE ON UI WIRING: this sheet renders correctly once opened, but nothing in this JS file currently calls window.openInfoSheet('verification') from a button.
     render: () => {
       if (!currentUserData) {
         return `<div class="info-sheet-empty"><p class="text-xs">Please sign in first.</p></div>`;
@@ -12682,12 +10620,7 @@ const INFO_SHEET_CONTENT = {
   },
   archived: {
     title: "Archived Posts",
-    // Unlike the other sheets here, this one needs an async fetch —
-    // render() itself must stay synchronous (openInfoSheet assigns
-    // its return value straight to innerHTML), so this renders a
-    // loading state immediately and loadArchivedPostsIntoSheet()
-    // fills in the real content right after, same pattern
-    // openPublicProfile uses for its own async data.
+    // Unlike the other sheets here, this one needs an async fetch.
     render: () => {
       if (!currentUserData) {
         return `<div class="info-sheet-empty"><p class="text-xs">Please sign in first.</p></div>`;
@@ -12701,10 +10634,7 @@ const INFO_SHEET_CONTENT = {
   },
   reports: {
     title: "Your Reports",
-    // Same async-loading pattern as "archived" above. Relies entirely
-    // on the reports table's existing reports_select_own RLS policy
-    // (a reporter can already read their own rows) — no new policy or
-    // function needed, just a UI that was never built for it.
+    // Same async-loading pattern as "archived" above.
     render: () => {
       if (!currentUserData) {
         return `<div class="info-sheet-empty"><p class="text-xs">Please sign in first.</p></div>`;
@@ -12757,10 +10687,7 @@ async function loadMyReportsIntoSheet() {
     return;
   }
 
-  // Best-effort title lookup for post reports only — a report on a
-  // comment, or on a post that's since been deleted entirely, just
-  // falls back to a generic label rather than blocking the whole list
-  // on a lookup that can't always succeed.
+  // Best-effort title lookup for post reports only.
   const postIds = reports
     .filter((r) => r.target_type === "post")
     .map((r) => r.target_id);
@@ -12814,8 +10741,7 @@ async function loadMyReportsIntoSheet() {
 
 async function loadArchivedPostsIntoSheet() {
   const bodyEl = document.getElementById("info-sheet-body");
-  // Sheet may have been closed before the fetch resolved (fast tap
-  // away) — don't paint content into a body no one's looking at.
+  // Sheet may have been closed before the fetch resolved (fast tap away).
   if (
     !bodyEl ||
     !document
@@ -12912,11 +10838,7 @@ window.closeInfoSheet = function (fromPop = false) {
 };
 
 // ─── PUBLIC PROFILE (someone else's page, opened from a post) ──────────────
-// A read-only view of another student: avatar, name, institution, follower/
-// following/post counts, their public posts grid, and Follow + Message
-// actions. Deliberately separate from #profile-container (the signed-in
-// person's OWN profile, with editable settings/account deletion/etc.) —
-// this only ever fetches and displays someone else's public data.
+// A read-only view of another student: avatar, name, institution, follower/ following/post counts, their public posts grid, and Follow + Message actions.
 window.openPublicProfile = async function (userId) {
   if (!userId) return;
   const overlay = document.getElementById("public-profile-overlay");
@@ -12970,13 +10892,7 @@ window.openPublicProfile = async function (userId) {
         .select("name, avatar, bio, major, interests, created_at")
         .eq("id", userId)
         .maybeSingle(),
-      // Seller trust metric (doc: "a count of successful sales... is a
-      // stronger trust metric" than ratings alone). Reuses the existing
-      // sold_at column (already set when an owner marks a listing sold
-      // via Manage Listing) rather than a new transactions table — this
-      // app has no formal buyer-side purchase confirmation step, so
-      // this is honestly a SELLER-side completed-sales count, not a
-      // two-sided transaction ledger.
+      // Seller trust metric (doc: "a count of successful sales...
       supabase
         .from("posts")
         .select("", { count: "exact", head: true })
@@ -12984,12 +10900,7 @@ window.openPublicProfile = async function (userId) {
         .not("sold_at", "is", null),
     ]);
 
-    // Bug fix: this select never included user_name/user_avatar/
-    // institution at all, so every public profile view fell straight to
-    // the "Student" placeholder + generic avatar regardless of who was
-    // actually being viewed. Now sourced for real from the person's most
-    // recent post, falling back to their profiles-table name/avatar for
-    // the (rarer) case of someone with zero posts.
+    // Bug fix: this select never included user_name/user_avatar/ institution at all, so every public profile view fell straight to the "Student" placeholder + generic avatar regardless of who was actually being viewed.
     const latestPost = postsRes.data?.[0];
     const displayName =
       latestPost?.user_name ||
@@ -13010,12 +10921,7 @@ window.openPublicProfile = async function (userId) {
 
     titleEl.textContent = displayName;
 
-    // Fix: blocking someone hid their POSTS from your feed, but visiting
-    // their profile directly (an old link, a search result, a shared
-    // conversation) still showed everything — full bio, grid, Follow/
-    // Message buttons. Now a blocked profile collapses to the same kind
-    // of placeholder used for blocked comments, with only Unblock
-    // available.
+    // Fix: blocking someone hid their POSTS from your feed, but visiting their profile directly (an old link, a search result, a shared conversation) still showed everything.
     if (isBlocked) {
       bodyEl.innerHTML = `
             <div class="public-profile-header">
@@ -13128,9 +11034,7 @@ window.openPublicProfile = async function (userId) {
   }
 };
 
-// Re-renders just the Follow button's label/style after toggling, without
-// re-fetching the whole profile — toggleFollow already updated the DB by
-// the time this runs immediately after it in the onclick above.
+// Re-renders just the Follow button's label/style after toggling, without re-fetching the whole profile.
 window._refreshPublicProfileFollowState = async function (
   userId,
   displayName,
@@ -13160,17 +11064,7 @@ window.closePublicProfile = function (fromPop = false) {
   if (!fromPop) popUiState("public-profile");
 };
 
-// Shows either the Followers or Following list for any user (your own
-// profile or someone else's public profile — both call this with their
-// own userId). The `follows` table already stores follower/following
-// name+avatar denormalized on each row (see toggleFollow's insert), so
-// this needs a single query with no extra profile lookups.
-// Thin wrapper for the logged-in person's own Followers/Following stat
-// boxes: those live in plain HTML with an inline onclick, which runs in
-// global scope — but currentUserData is a module-scoped variable (this
-// script loads as type="module"), not something on window. Resolving it
-// here, inside the module, avoids a ReferenceError that a direct
-// `currentUserData?.id` reference in the HTML onclick would otherwise hit.
+// Shows either the Followers or Following list for any user (your own profile or someone else's public profile.
 window.openMyFollowList = function (mode) {
   if (!currentUserData) {
     showToast("Please sign in first.");
@@ -13234,8 +11128,7 @@ window.openFollowListModal = async function (userId, mode) {
           (mode === "followers" ? row.follower_avatar : row.following_avatar) ||
           `https://ui-avatars.com/api/?background=1e293b&color=fbbf24&bold=true&name=${encodeURIComponent(name)}`;
 
-        // Only "following" is unfollow-able from here — a followers
-        // list has no equivalent action for the person viewing it.
+        // Only "following" is unfollow-able from here.
         const unfollowBtn =
           mode === "following" && isOwnList
             ? `
@@ -13264,9 +11157,7 @@ window.openFollowListModal = async function (userId, mode) {
   }
 };
 
-// Unfollow button inside the Following list — removes the row, then
-// re-renders the list in place so it disappears immediately instead of
-// requiring the person to close and reopen the modal to see it gone.
+// Unfollow button inside the Following list.
 window.unfollowFromList = async function (targetUserId) {
   if (!currentUserData || !targetUserId) return;
   try {
@@ -13297,14 +11188,7 @@ window.closeFollowListModal = function (fromPop = false) {
   if (!fromPop) popUiState("follow-list");
 };
 
-// Tapping any post tile on a profile grid (own or someone else's) opens
-// this instead of the single-post detail view — a full-bleed, Reels-style
-// vertical scroller through that user's whole post history, landing
-// exactly on the tapped post first (Instagram-style "view and scroll
-// continuously"). Own-profile posts reuse the already-cached
-// _ownProfilePostsById (populated by loadProfileStats) to skip a
-// redundant fetch; other users' posts are queried fresh since no
-// equivalent cache exists for them.
+// Tapping any post tile on a profile grid (own or someone else's) opens this instead of the single-post detail view.
 window.openProfilePostViewer = async function (userId, startPostId) {
   if (!userId) return;
 
@@ -13347,11 +11231,7 @@ window.openProfilePostViewer = async function (userId, startPostId) {
       .map((d) => renderReelCard(idKey(d.id), d, true))
       .join("");
 
-    // Jump straight to the tapped post — and retry once more after
-    // layout settles. On some mobile browsers a single immediate
-    // scrollIntoView can be ignored or snapped back to the first card
-    // while the newly inserted full-screen cards are still resolving
-    // their final heights.
+    // Jump straight to the tapped post — and retry once more after layout settles.
     const jumpToRequestedCard = () => {
       const targetCard = feed.querySelector(
         `#reel-card-${CSS.escape(idKey(startPostId))}`,
@@ -13418,9 +11298,7 @@ function initSettingsToggles() {
     });
   });
 
-  // Theme picker (dark / light / system). Reading, not a toggle, so
-  // wired to 'change' on a <select> — value is reflected into the
-  // data-theme attributes via window.applyTheme() and persisted.
+  // Theme picker (dark / light / system). Reading, not a toggle, so wired to 'change' on a <select>.
   const themeSel = document.getElementById("settingsThemeSelect");
   if (themeSel && !themeSel.dataset.wired) {
     themeSel.value = currentThemeMode;
@@ -13438,22 +11316,7 @@ function initSettingsToggles() {
 }
 
 // ─── WEB PUSH NOTIFICATIONS ─────────────────────────────────────────────────
-// Requires:
-//  1. supabase_migration_push_notifications.sql run (push_subscriptions
-//     table + RLS)
-//  2. VAPID_PUBLIC_KEY below filled in with a real key (generate one with
-//     `npx web-push generate-vapid-keys`, or via the Supabase/web-push
-//     docs) — until then this stays a harmless no-op with a clear toast
-//     explaining why.
-//  3. The push + notificationclick listeners from
-//     push-sw-snippet.js merged into your existing sw.js (not done for
-//     you automatically — sw.js wasn't shared, so overwriting it here
-//     could easily clobber caching logic that's already working).
-//  4. The supabase/functions/send-push Edge Function deployed (sends the
-//     actual push using web-push + your VAPID keys) — this project
-//     currently has no server-side trigger wired to every notification
-//     type yet; the one concrete call site added in this pass is a new
-//     message arriving in a DM (see sendChatMessage below).
+// Requires: 1. supabase_migration_push_notifications.sql run (push_subscriptions table + RLS) 2.
 const VAPID_PUBLIC_KEY =
   "BLKnaqt2-U3zhS7yZYLq78S2Ori8FiueaS_BIkH_yEDLkiKvYATO9-U39NQvIDNf3TCx-GPIKkq0oWcf8Qv1TFE";
 
@@ -13491,8 +11354,7 @@ async function reflectPushToggleState() {
         ? "Enabled on this device"
         : "Get notified even when the app is closed";
   } catch (_) {
-    // Service worker not ready yet — leave the toggle at its default
-    // (unchecked) rather than guessing.
+    // Service worker not ready yet — leave the toggle at its default (unchecked) rather than guessing.
   }
 }
 
@@ -13569,13 +11431,7 @@ window.togglePushNotifications = async function (wantsEnabled) {
 };
 
 // ─── ACCOUNT DELETION ─────────────────────────────────────────────────────────
-// Full account deletion (auth user + all data) generally needs a
-// privileged server-side call (service role key), which a browser client
-// can't safely hold. What we CAN safely do client-side is scrub the
-// person's own content and sign them out, then direct them to contact
-// support to finish removing the underlying auth account — being upfront
-// about that limitation rather than silently doing nothing or pretending
-// to fully delete the account.
+// Full account deletion (auth user + all data) generally needs a privileged server-side call (service role key), which a browser client can't safely hold.
 window.confirmDeleteAccount = function () {
   if (!currentUserData) return;
 
@@ -13588,11 +11444,7 @@ window.confirmDeleteAccount = function () {
     requireText: "DELETE",
     onConfirm: async () => {
       try {
-        // Logged first, before any deletion runs — an audit trail
-        // should capture the attempt itself, not just a clean
-        // success. If something fails halfway through the sequence
-        // below, this entry still exists to show what was
-        // attempted and when.
+        // Logged first, before any deletion runs.
         logAuditEvent("account_deletion_started");
         showToast("Deleting your data…");
 
@@ -13601,11 +11453,7 @@ window.confirmDeleteAccount = function () {
           .select("id, media_url")
           .eq("user_id", currentUserData.id);
 
-        // Collected across every post first, then removed in ONE
-        // call — this used to be a nested loop making one
-        // storage.remove() call per photo per post (a user with
-        // 20 posts x 5 photos each was making 100 sequential
-        // round-trips just to delete their own photos).
+        // Collected across every post first, then removed in ONE call.
         const allStoragePaths = (myPosts || []).flatMap((post) => {
           if (!post.media_url) return [];
           const targets = post.media_url.startsWith("[")
@@ -13636,15 +11484,7 @@ window.confirmDeleteAccount = function () {
         await supabase.from("likes").delete().eq("user_id", currentUserData.id);
         await supabase.from("profiles").delete().eq("id", currentUserData.id);
 
-        // A browser client can never safely hold the service-role
-        // key needed to actually delete the underlying Supabase
-        // Auth user, so that step happens via a dedicated Edge
-        // Function (see supabase-edge-function-delete-account.ts).
-        // If that function isn't deployed yet, we fall back to
-        // just signing the person out with an honest message —
-        // their data IS gone, but the empty auth account record
-        // itself will need the Edge Function deployed to fully
-        // disappear too.
+        // A browser client can never safely hold the service-role key needed to actually delete the underlying Supabase Auth user, so that step happens via a dedicated Edge Function (see supabase-edge-function-delete-account.ts).
         showToast("Removing your account…");
         try {
           const { error: fnError } =
@@ -13700,9 +11540,7 @@ document
       if (stripInst) stripInst.textContent = `${institution} · ${region}`;
       showToast("Settings updated ✓");
 
-      // Institution may have just changed — refresh the scope banner
-      // label and, if currently viewing a campus-scoped tab, re-run it
-      // so the feed reflects the new institution right away.
+      // Institution may have just changed — refresh the scope banner label and, if currently viewing a campus-scoped tab, re-run it so the feed reflects the new institution right away.
       updateCampusScopeBanner();
       if (["all", "product", "skill"].includes(currentFeedType)) {
         const clickedBtn = document.querySelector(
@@ -13717,17 +11555,14 @@ document
   });
 
 // ─── 20. DMs — WHATSAPP-STYLE INBOX + CHAT THREAD ────────────────────────────
-// Requires migration.sql to have been run (conversations + messages tables,
-// get_or_create_conversation RPC). See that file for schema/RLS.
+// Requires migration.sql to have been run (conversations + messages tables, get_or_create_conversation RPC).
 
 function unsubscribeConversations() {
   if (currentConversationsChan) {
     supabase.removeChannel(currentConversationsChan);
     currentConversationsChan = null;
   }
-  // The channel being torn down means conversationsCache can no longer
-  // be trusted to stay in sync in the background — the next open must
-  // do a real fetch again, not skip straight to rendering stale data.
+  // The channel being torn down means conversationsCache can no longer be trusted to stay in sync in the background.
   _inboxLoadedOnce = false;
 }
 
@@ -13735,10 +11570,7 @@ let currentTypingChan = null;
 let typingStopTimer = null;
 
 function unsubscribeActiveThread() {
-  // currentMessagesChan and currentTypingChan point to the same merged
-  // channel now (see subscribeActiveThreadMessages) — one removeChannel
-  // call tears down both the message listeners and the typing presence
-  // together, since they were never actually separate connections.
+  // currentMessagesChan and currentTypingChan point to the same merged channel now (see subscribeActiveThreadMessages).
   if (currentMessagesChan) {
     supabase.removeChannel(currentMessagesChan);
     currentMessagesChan = null;
@@ -13750,8 +11582,7 @@ function unsubscribeActiveThread() {
 }
 
 function dmPeerInfo(conv) {
-  // conversations store user_a/user_b symmetrically; figure out which
-  // side is "me" and return the other person's display info.
+  // conversations store user_a/user_b symmetrically.
   const isA = conv.user_a === currentUserData.id;
   return {
     id: isA ? conv.user_b : conv.user_a,
@@ -13762,14 +11593,31 @@ function dmPeerInfo(conv) {
   };
 }
 
+// Standalone always-fetches version for pull-to-refresh - openInboxView's
+// own fast path intentionally skips re-fetching on repeat visits, which
+// isn't what a manual refresh should do.
+async function refreshInboxList() {
+  if (!currentUserData) return;
+  try {
+    const { data, error } = await supabase
+      .from("conversations")
+      .select("*")
+      .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
+      .order("last_message_at", { ascending: false });
+    if (error) throw error;
+    conversationsCache = data || [];
+    renderInboxList();
+    updateDmUnreadBadge();
+  } catch (err) {
+    console.error("Inbox refresh error:", err);
+  }
+}
+
 async function openInboxView() {
   const content = document.getElementById("dms-content");
   if (!content || !currentUserData) return;
 
-  // Repeat visit within the same still-subscribed session — the
-  // realtime channel has kept conversationsCache current the whole
-  // time, so render straight from it instead of showing a skeleton and
-  // re-fetching data that's already right there.
+  // Repeat visit within the same still-subscribed session.
   if (_inboxLoadedOnce && currentConversationsChan) {
     renderInboxList();
     updateDmUnreadBadge();
@@ -13899,18 +11747,7 @@ function subscribeConversationsList() {
     .subscribe();
 }
 
-// Bug fix: a mobile browser backgrounding the tab (screen lock, app
-// switch, long idle) can silently kill the Realtime WebSocket behind
-// currentConversationsChan without the app ever finding out — the
-// variable stays truthy, so openInboxView()'s "already subscribed,
-// just re-render the cache" fast path kept trusting a connection that
-// wasn't actually receiving anything anymore. That's what made a new
-// chat only ever show up after a full page reload instead of live —
-// the reload was the only thing that re-created the subscription.
-// Re-fetching for real every time the tab becomes visible again (on
-// top of, not instead of, the realtime channel) means a message that
-// arrived while backgrounded shows up as soon as you come back,
-// whether or not that WebSocket quietly died in the meantime.
+// Bug fix: a mobile browser backgrounding the tab (screen lock, app switch, long idle) can silently kill the Realtime WebSocket behind currentConversationsChan without the app ever finding out — the variable stays truthy, so openInboxView()'s "already subscribed, just re-render the cache" fast path kept trusting a connection that wasn't actually receiving anything anymore.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (!currentUserData) return;
@@ -13919,7 +11756,9 @@ document.addEventListener("visibilitychange", () => {
       const { data } = await supabase
         .from("conversations")
         .select("*")
-        .or(`user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`)
+        .or(
+          `user_a.eq.${currentUserData.id},user_b.eq.${currentUserData.id}`,
+        )
         .order("last_message_at", { ascending: false });
       conversationsCache = data || [];
       if (!activeConversationId) renderInboxList();
@@ -14093,40 +11932,25 @@ window.openDM = async function (
       avatar: otherUserAvatar || "https://ui-avatars.com/api/?name=Student",
     };
 
-    // Opening the thread means the person has now seen it — mark it
-    // read immediately so the unread dot/badge clears right away
-    // rather than waiting for the next inbox refresh.
+    // Opening the thread means the person has now seen it.
     markConversationRead(convId);
 
     renderChatThreadShell();
     await loadAndRenderMessages();
     subscribeActiveThreadMessages();
 
-    // If this open came from a "Contact"/"Contact Seller" tap on a
-    // specific listing, share a small preview of that post as the
-    // opening message — using a structured `post_share:` prefix in
-    // the existing text column (no schema change needed) so
-    // renderChatBubble can detect and render it as a card instead of
-    // plain text. This only fires from a fresh contact tap, never
-    // when simply reopening an existing conversation from the inbox.
+    // If this open came from a "Contact"/"Contact Seller" tap on a specific listing, share a small preview of that post as the opening message.
     if (postContext && postContext.id) {
       await sendPostSharePreview(postContext);
     }
 
-    // Register this thread as a back-nav layer: hardware/gesture back
-    // while inside a chat thread returns to the inbox list instead of
-    // leaving the DMs tab (or the app).
+    // Register this thread as a back-nav layer.
     pushUiState("dm-thread", () => {
       window.closeDMThread(true);
     });
   } catch (err) {
     console.error("Open DM error:", err);
-    // If the SQL patch from blocked_users_rls.sql is applied,
-    // get_or_create_conversation raises when either person has
-    // blocked the other — this surfaces that clearly instead of a
-    // generic failure, covering the case where THEY blocked YOU
-    // (which the local blockedUserIds check earlier in this function
-    // has no way to know about).
+    // If the SQL patch from blocked_users_rls.sql is applied, get_or_create_conversation raises when either person has blocked the other.
     const isBlockRejection =
       /block/i.test(err?.message || "") || err?.code === "42501";
     content.innerHTML = `<div class="p-12 text-center text-red-400 text-xs">${
@@ -14137,17 +11961,9 @@ window.openDM = async function (
   }
 };
 
-// Sends a lightweight "shared listing" message so the seller can see the
-// exact item being asked about right in the chat, without needing a
-// dedicated messages table column. The payload is JSON, prefixed so it's
-// unambiguous and never collides with a person typing a normal message
-// that happens to start with the same characters.
+// Sends a lightweight "shared listing" message so the seller can see the exact item being asked about right in the chat, without needing a dedicated messages table column.
 async function sendPostSharePreview(postContext) {
-  // Captures whatever price a buyer would actually pay at the moment of
-  // sharing (the flash sale price if one's genuinely live right now,
-  // otherwise the regular price) — a chat message is a snapshot of what
-  // was true when it was sent, not a live-updating storefront card, so
-  // this deliberately doesn't keep re-checking after the fact.
+  // Captures whatever price a buyer would actually pay at the moment of sharing (the flash sale price if one's genuinely live right now, otherwise the regular price).
   const shareSaleActive =
     postContext.originalPrice != null &&
     Number(postContext.originalPrice) > 0 &&
@@ -14190,9 +12006,7 @@ async function sendPostSharePreview(postContext) {
   }
 
   try {
-    // Same duplication-bug fix as sendChatMessage: capture the real
-    // inserted row id so the realtime echo of this exact message can
-    // be recognized and skipped instead of rendered a second time.
+    // Same duplication-bug fix as sendChatMessage.
     const { data: inserted, error: msgErr } = await supabase
       .from("messages")
       .insert({
@@ -14222,8 +12036,7 @@ async function sendPostSharePreview(postContext) {
       .eq("id", activeConversationId);
   } catch (err) {
     console.error("Post share send error:", err);
-    // Non-fatal: the person can still type a normal message even if
-    // the preview card failed to send.
+    // Non-fatal: the person can still type a normal message even if the preview card failed to send.
   }
 }
 
@@ -14231,27 +12044,15 @@ function renderChatThreadShell() {
   const content = document.getElementById("dms-content");
   if (!content || !activeConversationPeer) return;
 
-  // Fix: the sticky "Inbox" title in the app's top bar stays visible
-  // the whole time you're on the DMs tab, including once you've
-  // drilled into a specific thread — which already has its own
-  // back+avatar+name header row right below it. Hide the redundant
-  // title (and the space it reserves) while a thread is open;
-  // closeDMThread() below restores it when you back out to the list.
+  // Fix: the sticky "Inbox" title in the app's top bar stays visible the whole time you're on the DMs tab, including once you've drilled into a specific thread.
   document.getElementById("header-page-title")?.classList.add("hidden");
 
-  // Requested: hide the bottom nav entirely while a thread is open,
-  // like Instagram/WhatsApp do — the message input sits right at the
-  // bottom of the screen instead of stacked above a nav bar you can't
-  // use anyway while typing. .bottom-nav-hidden is the same class the
-  // Reels feed already uses for this. closeDMThread() restores it.
+  // Requested: hide the bottom nav entirely while a thread is open, like Instagram/WhatsApp do.
   document
     .querySelector(".bottom-nav-container")
     ?.classList.add("bottom-nav-hidden");
 
-  // Pairs with the CSS fix for main's unconditional 100px bottom padding
-  // (meant to clear the nav bar) — that padding was still reserved here
-  // even with the nav hidden, adding dead space below the panel and
-  // making the whole page scroll instead of just #chat-messages.
+  // Pairs with the CSS fix for main's unconditional 100px bottom padding (meant to clear the nav bar).
   document.querySelector("main")?.classList.add("chat-thread-open");
 
   content.innerHTML = `
@@ -14292,20 +12093,7 @@ function renderChatThreadShell() {
   _syncChatPanelHeight();
 }
 
-// Bug fix: the panel used to be a normal in-flow block, so its position
-// on screen depended on wherever the page (body) happened to be
-// scrolled to — if anything caused even a small page scroll while a
-// thread was open (elastic bounce, the keyboard's own focus-scroll,
-// etc.), the whole header+messages+input cluster would drift with it
-// instead of staying pinned, which is what made the composer look like
-// it was "scrolling with the page." .chat-thread-fixed (below, in CSS)
-// takes the panel out of document flow entirely with position: fixed,
-// so from here on it's anchored to the real viewport and body scroll
-// simply can't move it — same as how Instagram/WhatsApp's own chat
-// screens are never part of the page's normal scroll. This function's
-// job becomes purely: tell the now-independent panel exactly where its
-// top and height should be (which still has to be JS-measured, since
-// that space depends on the real header height and the keyboard).
+// Bug fix: the panel used to be a normal in-flow block, so its position on screen depended on wherever the page (body) happened to be scrolled to.
 function _syncChatPanelHeight() {
   const panel = document.getElementById("chat-thread-panel");
   if (!panel) return;
@@ -14314,25 +12102,13 @@ function _syncChatPanelHeight() {
   panel.style.top = `${Math.max(0, top)}px`;
 
   const bottomNav = document.querySelector(".bottom-nav-container");
-  // Defensive only — renderChatThreadShell() always hides the nav while
-  // a thread is open, and the scroll-listener fix keeps it hidden, so
-  // this should always read 0. Kept as a fallback in case something
-  // else on the page adds the nav back without going through the
-  // normal close path.
+  // Defensive only — renderChatThreadShell() always hides the nav while a thread is open, and the scroll-listener fix keeps it hidden, so this should always read 0.
   const navH =
     bottomNav && !bottomNav.classList.contains("bottom-nav-hidden")
       ? bottomNav.getBoundingClientRect().height
       : 0;
 
-  // Bug fix: this used to measure against window.innerHeight, which on
-  // most mobile browsers stays the LAYOUT viewport height and does not
-  // shrink when the on-screen keyboard opens (only the visual viewport
-  // does). That mismatch is exactly what produced the dead black gap
-  // between the message input and the keyboard in the screenshot — the
-  // panel kept sizing itself for space the keyboard was now covering.
-  // window.visualViewport.height tracks the keyboard in real time, so
-  // prefer it when the browser supports it (all modern mobile browsers
-  // do) and fall back to innerHeight otherwise.
+  // Bug fix: this used to measure against window.innerHeight, which on most mobile browsers stays the LAYOUT viewport height and does not shrink when the on-screen keyboard opens (only the visual viewport does).
   const vv = window.visualViewport;
   const viewportH = vv ? vv.height + vv.offsetTop : window.innerHeight;
   const available = viewportH - top - navH;
@@ -14341,11 +12117,7 @@ function _syncChatPanelHeight() {
 window.addEventListener("resize", () => {
   if (document.getElementById("chat-thread-panel")) _syncChatPanelHeight();
 });
-// visualViewport fires its own 'resize' (keyboard open/close) and
-// 'scroll' (keyboard nudging the visible area, common on Android) events
-// that window's 'resize' above does not reliably catch on mobile — both
-// need to be covered so the panel keeps hugging the keyboard exactly
-// instead of leaving/reintroducing the gap as it opens and closes.
+// visualViewport fires its own 'resize' (keyboard open/close) and 'scroll' (keyboard nudging the visible area, common on Android) events that window's 'resize' above does not reliably catch on mobile — both need to be covered so the panel keeps hugging the keyboard exactly instead of leaving/reintroducing the gap as it opens and closes.
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", () => {
     if (document.getElementById("chat-thread-panel")) _syncChatPanelHeight();
@@ -14355,9 +12127,7 @@ if (window.visualViewport) {
   });
 }
 
-// Enter sends the message (matching every mainstream chat app); Shift+Enter
-// inserts a normal newline instead, so a longer message can actually be
-// composed across multiple lines without accidentally sending mid-thought.
+// Enter sends the message (matching every mainstream chat app).
 window._handleChatInputKeydown = function (event) {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -14365,11 +12135,7 @@ window._handleChatInputKeydown = function (event) {
   }
 };
 
-// Grows the textarea with its content up to the max-h-32 CSS cap (beyond
-// that it scrolls internally instead of pushing the rest of the layout
-// around) — the `field-sizing: content` inline style above handles this
-// automatically in browsers that support it, but this is the fallback for
-// ones that don't.
+// Grows the textarea with its content up to the max-h-32 CSS cap (beyond that it scrolls internally instead of pushing the rest of the layout around).
 window._autoGrowChatInput = function (el) {
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
@@ -14383,24 +12149,17 @@ window._syncChatSendState = function (el) {
 function renderChatBubble(msg) {
   const isMe = msg.sender_id === currentUserData.id;
 
-  // Shared-listing messages (from "Contact"/"Contact Seller") are
-  // encoded as post_share:{...json...} in the same text column — detect
-  // and render them as a small tappable product card instead of a
-  // plain text bubble, so the seller sees exactly what's being asked
-  // about.
+  // Shared-listing messages (from "Contact"/"Contact Seller") are encoded as post_share:{...json...} in the same text column.
   if (typeof msg.text === "string" && msg.text.startsWith("post_share:")) {
     try {
       const payload = JSON.parse(msg.text.slice("post_share:".length));
       return renderPostSharePreviewBubble(payload, isMe, msg.created_at, msg);
     } catch (_) {
-      // Malformed payload — fall through to plain text rendering
-      // below rather than showing nothing.
+      // Malformed payload — fall through to plain text rendering below rather than showing nothing.
     }
   }
 
-  // "Make an Offer" messages: a small amount card with Accept/Decline
-  // buttons, shown only to the seller and only while the offer is still
-  // pending — see window.openMakeOfferModal / window._respondToOffer.
+  // "Make an Offer" messages: a small amount card with Accept/Decline buttons, shown only to the seller and only while the offer is still pending.
   if (typeof msg.text === "string" && msg.text.startsWith("offer:")) {
     try {
       const payload = JSON.parse(msg.text.slice("offer:".length));
@@ -14410,12 +12169,7 @@ function renderChatBubble(msg) {
     }
   }
 
-  // Read receipts: a single check for sent-but-not-yet-read, a double
-  // check for read — only shown on your OWN messages (seeing whether
-  // the other person read your own message), matching WhatsApp/iMessage
-  // conventions. `read` already existed as a column being written to
-  // (see loadAndRenderMessages' mark-as-read call) but was never
-  // actually displayed anywhere.
+  // Read receipts: a single check for sent-but-not-yet-read, a double check for read.
   const receiptHtml = isMe
     ? `<i class="fas ${msg.read ? "fa-check-double text-blue-400" : "fa-check text-black/40"} text-[10px] ml-1"></i>`
     : "";
@@ -14423,13 +12177,7 @@ function renderChatBubble(msg) {
   const key = idKey(msg.id);
   const isLocal = typeof msg.id === "string" && msg.id.startsWith("local-");
 
-  // A deleted-for-everyone message shows the same tombstone to both
-  // sides (matching WhatsApp) instead of disappearing — disappearing
-  // entirely would be confusing mid-conversation ("did they never
-  // reply?") and would shift every other message's read-receipt
-  // targeting. text is cleared server-side by
-  // delete_message_for_everyone, so there's nothing sensitive left in
-  // this bubble even if it's re-rendered from a stale cache.
+  // A deleted-for-everyone message shows the same tombstone to both sides (matching WhatsApp) instead of disappearing.
   if (msg.deleted) {
     return `
         <div class="flex ${isMe ? "justify-end" : "justify-start"}" data-message-id="${escAttr(key)}">
@@ -14454,9 +12202,7 @@ function renderChatBubble(msg) {
         </div>`;
 }
 
-// Small pill row under a bubble showing which emoji(s) have reactions and
-// how many — only rendered when at least one exists, so ordinary messages
-// look exactly as they did before this feature existed.
+// Small pill row under a bubble showing which emoji(s) have reactions and how many.
 function renderMessageReactionPills(msg) {
   const reactions = msg.reactions;
   if (!reactions || typeof reactions !== "object") return "";
@@ -14476,11 +12222,7 @@ function renderMessageReactionPills(msg) {
         </div>`;
 }
 
-// A short date separator ("Today", "Yesterday", or e.g. "Jul 3") shown
-// once between groups of messages from different calendar days —
-// standard in every mainstream chat app, and without it a long
-// conversation just reads as one undifferentiated wall of bubbles with
-// no sense of when anything happened.
+// A short date separator ("Today", "Yesterday", or e.g.
 function formatDateSeparator(dateStr) {
   const msgDate = new Date(dateStr);
   const today = new Date();
@@ -14505,9 +12247,7 @@ function renderDateSeparator(label) {
         </div>`;
 }
 
-// Renders a full message list with date separators inserted between
-// days — shared by the initial load and anywhere else a full list needs
-// re-rendering, so date-grouping logic lives in exactly one place.
+// Renders a full message list with date separators inserted between days.
 function renderMessageListWithDateSeparators(messages) {
   let html = "";
   let lastDateLabel = null;
@@ -14553,11 +12293,7 @@ function renderPostSharePreviewBubble(payload, isMe, createdAt, msg) {
         </div>`;
 }
 
-// "Make an Offer" bubble: shows the offered amount and, only to the
-// seller and only while still pending, Accept/Decline buttons. Status
-// lives in the `offers` table (not the message itself, which never
-// changes once sent) — see _activeThreadOffersById, populated when the
-// thread loads, and window._respondToOffer for the accept/decline flow.
+// "Make an Offer" bubble: shows the offered amount and, only to the seller and only while still pending, Accept/Decline buttons.
 function renderOfferBubble(payload, isMe, createdAt, msg) {
   const key = idKey(msg?.id);
   const isLocal = typeof msg?.id === "string" && msg.id.startsWith("local-");
@@ -14571,8 +12307,7 @@ function renderOfferBubble(payload, isMe, createdAt, msg) {
         ? `<span class="inline-flex items-center gap-1 text-rose-400 text-[10px] font-black uppercase tracking-wider mt-2"><i class="fas fa-circle-xmark"></i> Offer declined</span>`
         : "";
 
-  // Only the seller (the person who did NOT send this offer bubble) can
-  // respond, and only while it's still pending.
+  // Only the seller (the person who did NOT send this offer bubble) can respond, and only while it's still pending.
   const actionButtons =
     status === "pending" && !isMe
       ? `
@@ -14616,12 +12351,7 @@ async function loadAndRenderMessages() {
 
     if (error) throw error;
 
-    // Fetched before rendering so any offer bubble's Accept/Decline
-    // buttons (or accepted/declined chip) reflect the real current
-    // status on first paint, not just "pending" until something
-    // triggers a re-render. Failure here is non-fatal — offer bubbles
-    // just fall back to "pending" display, which is wrong only in the
-    // rare case an offer was already resolved in a previous session.
+    // Fetched before rendering so any offer bubble's Accept/Decline buttons (or accepted/declined chip) reflect the real current status on first paint, not just "pending" until something triggers a re-render.
     try {
       const { data: offers } = await supabase
         .from("offers")
@@ -14672,28 +12402,10 @@ function subscribeActiveThreadMessages() {
   }
   if (!activeConversationId || !currentUserData) return;
 
-  // Tracks message ids already rendered in this thread session, as a
-  // second safety net alongside container.dataset.lastOptimisticId — in
-  // the rare case where the realtime INSERT event arrives before
-  // sendChatMessage's own insert().select() round-trip has finished
-  // (both are separate network round-trips racing each other), relying
-  // on dataset.lastOptimisticId alone could still momentarily miss and
-  // double-render. This set makes the render idempotent regardless of
-  // which one wins the race.
+  // Tracks message ids already rendered in this thread session, as a second safety net alongside container.dataset.lastOptimisticId.
   const renderedMessageIds = new Set();
 
-  // Merged: this used to be two separate channels (messages-live-* for
-  // the postgres_changes listeners below, typing-* for presence) that
-  // always opened and closed at exactly the same moment — entering or
-  // leaving a specific conversation, never independently. Combining
-  // them into one channel with both a postgres_changes binding and a
-  // presence config cuts the Realtime channel count for anyone
-  // actively chatting from 2 down to 1. currentTypingChan and
-  // currentMessagesChan below deliberately point to the SAME channel
-  // object, so every existing .track()/.presenceState() call elsewhere
-  // in the file (_handleTypingInput, sendChatMessage) keeps working
-  // completely unchanged — they don't know or care that it used to be
-  // a separate channel.
+  // Merged: this used to be two separate channels (messages-live-* for the postgres_changes listeners below, typing-* for presence) that always opened and closed at exactly the same moment — entering or leaving a specific conversation, never independently.
   const threadChannel = supabase
     .channel(`messages-live-${activeConversationId}`, {
       config: { presence: { key: currentUserData.id } },
@@ -14723,10 +12435,7 @@ function subscribeActiveThreadMessages() {
         if (emptyState && container.children.length === 1)
           container.innerHTML = "";
 
-        // If this message falls on a different day than the last one
-        // currently rendered, insert a date separator first — keeps a
-        // long-running open thread correctly grouped by day even
-        // without a full reload.
+        // If this message falls on a different day than the last one currently rendered, insert a date separator first.
         const newLabel = formatDateSeparator(payload.new.created_at);
         const lastBubble = container.lastElementChild;
         const lastLabel = container.dataset.lastDateLabel;
@@ -14739,19 +12448,11 @@ function subscribeActiveThreadMessages() {
         container.scrollTop = container.scrollHeight;
         wireChatBubbleTouchHandlers();
 
-        // Any incoming message implicitly means the peer stopped
-        // typing — clear the indicator right away instead of waiting
-        // for their typing-stopped broadcast.
+        // Any incoming message implicitly means the peer stopped typing.
         setTypingStatusVisible(false);
       },
     )
-    // Fix/addition: `read` was already being written to (see the
-    // mark-as-read call in loadAndRenderMessages) but nothing ever
-    // reflected that back into the UI in real time — your own sent
-    // message would keep showing a single check forever unless you
-    // fully reloaded the thread. Listening for UPDATE events lets the
-    // check flip to double the instant the other person actually
-    // opens the conversation and their mark-as-read query runs.
+    // Fix/addition: `read` was already being written to (see the mark-as-read call in loadAndRenderMessages) but nothing ever reflected that back into the UI in real time.
     .on(
       "postgres_changes",
       {
@@ -14763,10 +12464,7 @@ function subscribeActiveThreadMessages() {
       (payload) => {
         _activeThreadMessagesById.set(String(payload.new.id), payload.new);
 
-        // Reactions or a delete-for-everyone change the bubble's actual
-        // content, so the safest fix is re-rendering that one bubble
-        // from the fresh row rather than trying to patch it in place —
-        // same idempotent-by-id approach the INSERT handler above uses.
+        // Reactions or a delete-for-everyone change the bubble's actual content, so the safest fix is re-rendering that one bubble from the fresh row rather than trying to patch it in place — same idempotent-by-id approach the INSERT handler above uses.
         const reactionsOrDeleteChanged =
           JSON.stringify(payload.old?.reactions || {}) !==
             JSON.stringify(payload.new?.reactions || {}) ||
@@ -14793,10 +12491,7 @@ function subscribeActiveThreadMessages() {
         }
       },
     )
-    // Typing indicator via Supabase Presence, now sharing this same
-    // channel instead of its own — deliberately still avoids any
-    // schema change (no new column/table), each side just broadcasts
-    // a boolean typing flag the other side listens for.
+    // Typing indicator via Supabase Presence, now sharing this same channel instead of its own.
     .on("presence", { event: "sync" }, () => {
       const state = threadChannel.presenceState();
       const peerIsTyping = Object.keys(state)
@@ -14818,19 +12513,7 @@ function setTypingStatusVisible(visible) {
     : "";
 }
 
-// Called on every keystroke in the chat input (debounced): broadcasts
-// "typing" presence immediately, then automatically broadcasts
-// "stopped typing" after a short pause, so the peer's indicator clears
-// on its own if the person stops without sending.
-//
-// Fix: this used to call .track({typing:true}) on every single keystroke
-// — typing a 50-character message sent 50 separate Presence messages
-// over the Realtime connection instead of 1. isCurrentlyTyping tracks
-// whether a "typing:true" has already been sent for this typing burst,
-// so a keystroke only triggers a new track() call on the transition
-// into typing, not on every key after that — the stop-timer reset still
-// happens every keystroke (that part needs to, to correctly detect a
-// pause), just without needlessly re-sending the same state.
+// Called on every keystroke in the chat input (debounced).
 let isCurrentlyTyping = false;
 window._handleTypingInput = function () {
   if (!currentTypingChan || !currentUserData) return;
@@ -14852,9 +12535,7 @@ window.sendChatMessage = async function () {
   const text = input?.value.trim();
   if (!text || !activeConversationId || !currentUserData) return;
 
-  // Backstop: normally openDM() already refuses to open a blocked
-  // person's thread at all, but this covers the edge case of blocking
-  // someone while already inside a conversation with them.
+  // Backstop: normally openDM() already refuses to open a blocked person's thread at all, but this covers the edge case of blocking someone while already inside a conversation with them.
   if (
     activeConversationPeer &&
     blockedUserIds.has(idKey(activeConversationPeer.id))
@@ -14895,14 +12576,7 @@ window.sendChatMessage = async function () {
   }
 
   try {
-    // Fix: this insert's returned row id was never captured anywhere,
-    // so the realtime handler's dedup check (comparing
-    // container.dataset.lastOptimisticId against the incoming row's
-    // id) could never actually match — every message you sent would
-    // render once optimistically here, then render AGAIN a moment
-    // later when Supabase's realtime INSERT event echoed it back,
-    // showing every outgoing message duplicated. Selecting the
-    // inserted row back and recording its real id closes that gap.
+    // Fix: this insert's returned row id was never captured anywhere, so the realtime handler's dedup check (comparing container.dataset.lastOptimisticId against the incoming row's id) could never actually match — every message you sent would render once optimistically here, then render AGAIN a moment later when Supabase's realtime INSERT event echoed it back, showing every outgoing message duplicated.
     const { data: inserted, error: msgErr } = await supabase
       .from("messages")
       .insert({
@@ -14931,11 +12605,7 @@ window.sendChatMessage = async function () {
       })
       .eq("id", activeConversationId);
 
-    // Best-effort push notification to the recipient. Deliberately NOT
-    // awaited into the outer try's error handling — if this fails (Edge
-    // Function not deployed yet, recipient has no subscription, etc.)
-    // it must never affect "did my message actually send", which already
-    // succeeded above.
+    // Best-effort push notification to the recipient.
     if (activeConversationPeer?.id) {
       supabase.functions
         .invoke("send-push", {
@@ -14950,9 +12620,7 @@ window.sendChatMessage = async function () {
     }
   } catch (err) {
     console.error("Send message error:", err);
-    // Same block-detection reasoning as postComment above — this is
-    // how we find out the OTHER person blocked you (your local
-    // blockedUserIds only knows about blocks you made yourself).
+    // Same block-detection reasoning as postComment above.
     const isBlockRejection =
       err?.code === "42501" || /row-level security/i.test(err?.message || "");
     showToast(
@@ -14965,8 +12633,7 @@ window.sendChatMessage = async function () {
 
 window.closeDMThread = function (fromPop = false) {
   unsubscribeActiveThread();
-  // Restore the top-bar "Inbox" title and the bottom nav that
-  // renderChatThreadShell() hides while a thread is open.
+  // Restore the top-bar "Inbox" title and the bottom nav that renderChatThreadShell() hides while a thread is open.
   document.getElementById("header-page-title")?.classList.remove("hidden");
   document
     .querySelector(".bottom-nav-container")
@@ -14984,20 +12651,12 @@ window.openDM_legacy = function (targetUserId, targetName) {
 };
 
 // ─── 20b. MESSAGE REACTIONS, DELETE FOR EVERYONE & FORWARD ─────────────────
-// Long-press (or mouse-hold on desktop) any bubble to open a small action
-// sheet: a quick-react emoji row, Forward, Copy, and — for your own
-// messages — Delete for everyone. Same 600ms hold-timer technique already
-// used for the avatar preview (_initAvatarLongPress) and the profile grid
-// multi-select (_startGridTileHold), just applied to chat bubbles via
-// inline handlers since bubbles are rendered dynamically.
+// Long-press (or mouse-hold on desktop) any bubble to open a small action sheet.
 const QUICK_REACT_EMOJIS = ["❤️", "😂", "👍", "😮", "😢", "🙏"];
 let _messageHoldTimer = null;
 let _messageJustHeld = false;
 
-// Wires touchstart/touchmove as real passive listeners on every bubble
-// with a data-message-id (mirrors wireGridTileTouchHandlers — inline
-// touch handlers can't be passive, which trips a console warning per
-// bubble). Call this after any innerHTML update that adds new bubbles.
+// Wires touchstart/touchmove as real passive listeners on every bubble with a data-message-id (mirrors wireGridTileTouchHandlers.
 function wireChatBubbleTouchHandlers() {
   document.querySelectorAll("[data-message-id]").forEach((wrap) => {
     if (wrap.dataset.holdWired === "true") return;
@@ -15076,13 +12735,7 @@ window._openMessageActionSheet = function (messageKey) {
   openOptionsMenu(items, reactionRowHtml);
 };
 
-// Toggles the tapped emoji for the current user on this message — tapping
-// the same emoji again removes it, tapping a different one switches to it
-// (one reaction per person, matching WhatsApp/iMessage). Runs through the
-// toggle_message_reaction SECURITY DEFINER function (see
-// supabase_migration_messaging_features.sql) so this works correctly
-// under RLS without needing to know the exact shape of the messages
-// table's existing policies.
+// Toggles the tapped emoji for the current user on this message.
 window._reactToMessage = async function (messageKey, emoji) {
   closeOptionsMenu();
   if (!currentUserData) return;
@@ -15149,11 +12802,7 @@ window._confirmDeleteMessageForEveryone = function (messageKey) {
   });
 };
 
-// Forwarding picks from the person's existing conversations (excluding the
-// one currently open) rather than a full user search, matching how
-// WhatsApp's forward picker defaults to recent chats. Inserts the same
-// text (a plain message, or the same post_share:{...} payload for a
-// shared-listing card) as a new message in the chosen conversation.
+// Forwarding picks from the person's existing conversations (excluding the one currently open) rather than a full user search, matching how WhatsApp's forward picker defaults to recent chats.
 window._openForwardPicker = function (messageKey) {
   const msg = _activeThreadMessagesById.get(String(messageKey));
   if (!msg) return;
@@ -15208,13 +12857,7 @@ window._forwardMessageTo = async function (msg, targetConversationId) {
 };
 
 // ─── 20c. MAKE AN OFFER ─────────────────────────────────────────────────────
-// Instead of a fixed take-it-or-leave-it price, a buyer can propose an
-// amount straight from the detail view. Opens/reuses the same DM thread
-// "Contact Seller" would, sends a small offer card (see renderOfferBubble
-// above), and records the offer in a new `offers` table so its status
-// (pending/accepted/declined) persists across sessions and both people
-// see the same outcome. Requires
-// supabase_migration_offers.sql to have been run.
+// Instead of a fixed take-it-or-leave-it price, a buyer can propose an amount straight from the detail view.
 window.openMakeOfferModal = function (postId) {
   if (!currentUserData) {
     window.openLoginModal();
@@ -15224,10 +12867,7 @@ window.openMakeOfferModal = function (postId) {
   if (!post) return;
   if (post.userId === currentUserData.id) return; // can't offer on your own listing
 
-  // Same "is there a genuinely live flash sale right now" rule as
-  // everywhere else — an offer should default to what a buyer would
-  // actually pay right now, not the regular price if a cheaper flash
-  // sale price is currently active.
+  // Same "is there a genuinely live flash sale right now" rule as everywhere else.
   const offerSaleActive =
     post.originalPrice != null &&
     Number(post.originalPrice) > 0 &&
@@ -15297,10 +12937,7 @@ window._submitOffer = async function (postId) {
   window.closeDetailModal?.(true);
 
   try {
-    // Opens (or reuses) the DM thread with the seller, and — because
-    // postContext is passed — also sends the usual shared-listing
-    // preview card first, so the seller sees exactly which item the
-    // offer is for above the offer card itself.
+    // Opens (or reuses) the DM thread with the seller, and.
     await window.openDM(post.userId, post.userName, post.userAvatar, {
       id: post.id,
       title: post.title,
@@ -15389,9 +13026,7 @@ window._submitOffer = async function (postId) {
   }
 };
 
-// Seller-only. Goes through the respond_to_offer SECURITY DEFINER
-// function (see supabase_migration_offers.sql) so a buyer can never
-// accept/decline their own offer, regardless of what the client sends.
+// Seller-only.
 window._respondToOffer = async function (offerId, newStatus) {
   try {
     const { error } = await supabase.rpc("respond_to_offer", {
@@ -15417,10 +13052,7 @@ window._respondToOffer = async function (offerId, newStatus) {
       }
     }
 
-    // A follow-up plain-text line makes the outcome visible in the
-    // ordinary chat scrollback too, not just as a state change on the
-    // original card (which could be scrolled out of view by the time
-    // either person looks back at the conversation later).
+    // A follow-up plain-text line makes the outcome visible in the ordinary chat scrollback too, not just as a state change on the original card (which could be scrolled out of view by the time either person looks back at the conversation later).
     const outcomeText =
       newStatus === "accepted" ? "✅ Offer accepted" : "❌ Offer declined";
     await supabase.from("messages").insert({
@@ -15445,14 +13077,9 @@ window._respondToOffer = async function (offerId, newStatus) {
 };
 
 // ─── 20d. TWO-FACTOR AUTHENTICATION (TOTP) ─────────────────────────────────
-// Built entirely on Supabase Auth's native MFA support
-// (supabase.auth.mfa.*) rather than a custom-built second factor — same
-// reasoning as skipping a hollow SAML/SSO scaffold earlier: Supabase
-// already implements real TOTP enrollment/verification/challenge
-// correctly, so there's no good reason to duplicate that by hand.
+// Built entirely on Supabase Auth's native MFA support (supabase.auth.mfa.*) rather than a custom-built second factor.
 
-// Sign-in-time challenge — shown when signInWithEmailPassword detects the
-// session hasn't reached aal2 yet (see that function).
+// Sign-in-time challenge — shown when signInWithEmailPassword detects the session hasn't reached aal2 yet (see that function).
 window._open2faChallengeModal = function () {
   let modal = document.getElementById("mfa-challenge-modal");
   if (!modal) {
@@ -15638,17 +13265,7 @@ window.close2faSettingsSheet = function (fromPop = false) {
 };
 
 // ─── 21. AUTH OBSERVER ───────────────────────────────────────────────────────
-// Bug fix: the nav Profile avatar used to only get set once the real
-// auth event resolved — which, since that's an async round trip to
-// Supabase (even just to restore an already-valid local session),
-// meant every single refresh showed the static "Sign In" icon, then a
-// generic person icon, then finally the real avatar a moment later.
-// This paints the real avatar synchronously from the same
-// campus_market_last_known_user snapshot the offline path already
-// relies on, immediately on script load — no network wait. The auth
-// observer below still runs as normal and corrects this (to signed-out,
-// or to a different/updated avatar) once it resolves for real; this is
-// just what shows in the meantime instead of the sign-in/generic flash.
+// Bug fix: the nav Profile avatar used to only get set once the real auth event resolved.
 try {
   const earlyCachedUser = JSON.parse(
     localStorage.getItem("campus_market_last_known_user") || "null",
@@ -15664,27 +13281,7 @@ try {
 
 if (activeAuthChange) {
   activeAuthChange(async (user) => {
-    // Bug fix: previously ANY auth event while offline was skipped
-    // entirely, including a real, locally-cached session being
-    // restored (which needs no network — Supabase reads it straight
-    // from localStorage). That meant if you happened to be offline
-    // the moment the app's first auth check fired, currentUserData
-    // never got set at all, and Profile/DMs/Create kept showing the
-    // sign-in gate forever afterwards, even once you were clearly
-    // still signed in elsewhere. Now we only skip the update for an
-    // actual sign-OUT event (user === null) while offline — that's
-    // the case a network drop can spuriously fake — and let a real
-    // user object through regardless of connectivity.
-    //
-    // Second bug fix, same scenario: that guard alone still wasn't
-    // enough for a genuinely COLD boot while offline — currentUserData
-    // starts as `null` (see the top of this file), so "skip the
-    // update" just left it at that same null it already had. The
-    // guard protected an already-set value from being wiped, but did
-    // nothing the very first time. Restoring from a small cached
-    // snapshot (saved below, right after every real sign-in) closes
-    // that gap — opening the app fully offline now shows the last
-    // known signed-in identity instead of the sign-in gate.
+    // Bug fix: previously ANY auth event while offline was skipped entirely, including a real, locally-cached session being restored (which needs no network.
     if (!navigator.onLine && !user) {
       try {
         const cached = JSON.parse(
@@ -15698,22 +13295,7 @@ if (activeAuthChange) {
           if (typeof window.updateAuthButton === "function") {
             window.updateAuthButton(cached);
           }
-          // Fix: restoring currentUserData alone wasn't enough — every
-          // other "you're signed in" UI state (the Profile/DMs gates,
-          // the nav button showing "Sign In" instead of "Profile", the
-          // profile name/avatar) is normally set by the full sign-in
-          // branch further below, which this offline path deliberately
-          // skips (it does real network calls — profiles table fetch,
-          // device session registration, etc. — that would just fail
-          // or hang with no connection). That's exactly why opening the
-          // app offline showed sign-in prompts everywhere even though
-          // you were still genuinely signed in: this early return left
-          // all of that UI in its default logged-out state. Applying
-          // just the network-free parts of that same UI update here
-          // closes the gap; syncBlockedUsers/syncFollowingIds/device
-          // session registration are deliberately still skipped, and
-          // will run for real the next time a real sign-in event fires
-          // once connectivity actually returns.
+          // Fix: restoring currentUserData alone wasn't enough.
           const cachedMetadata = cached.user_metadata || {};
           const cachedNavAvatar =
             cachedMetadata.avatar_url ||
@@ -15736,9 +13318,7 @@ if (activeAuthChange) {
           document.getElementById("dms-auth-gate")?.classList.add("hidden");
           document.getElementById("dms-content")?.classList.remove("hidden");
 
-          // Restore last known institution/region too so the offline
-          // cold-boot path doesn't leave the profile UI showing nothing
-          // for these — mirrors campus_market_last_known_user above.
+          // Restore last known institution/region too so the offline cold-boot path doesn't leave the profile UI showing nothing for these.
           try {
             const cachedLocation = JSON.parse(
               localStorage.getItem("campus_market_last_known_location") ||
@@ -15764,11 +13344,7 @@ if (activeAuthChange) {
       return;
     }
 
-    // Keep a lightweight snapshot of whoever's actually signed in, purely
-    // so the offline-cold-boot case above has something to restore from.
-    // Deliberately small — just enough for the UI to treat the person as
-    // signed in and show their name/avatar, not a substitute for the
-    // real object once network is back.
+    // Keep a lightweight snapshot of whoever's actually signed in, purely so the offline-cold-boot case above has something to restore from.
     if (user) {
       try {
         localStorage.setItem(
@@ -15793,25 +13369,12 @@ if (activeAuthChange) {
       window.updateAuthButton(user);
     }
 
-    // Fix (continued from navigateTo()'s side of this): actually apply
-    // the remembered tab, once, right after the first real auth
-    // resolution of this page load — early enough that it doesn't
-    // wait on the slower profile/avatar fetch below, but not before we
-    // at least know whether anyone's signed in (dms/profile need
-    // that to decide gate-vs-content). Guarded by a flag rather than
-    // an unconditional call because onAuthStateChange can legitimately
-    // re-fire later in the session (token refresh, etc.) — re-running
-    // this on one of those later firings would yank the person back to
-    // an old tab uninvited while they're actively using the app.
+    // Fix (continued from navigateTo()'s side of this).
     if (!window.__initialViewRestored) {
       window.__initialViewRestored = true;
       try {
         const savedView = localStorage.getItem("campus_market_last_view");
-        // dms/profile only restored for someone actually signed in —
-        // otherwise a visitor who's never logged in (or has since
-        // signed out) would land straight on a "sign in required"
-        // gate instead of the normal browsable feed, which is worse
-        // than the tab-reset behavior this is fixing.
+        // dms/profile only restored for someone actually signed in.
         const needsAuth = savedView === "dms" || savedView === "profile";
         if (savedView && savedView !== "feed" && (!needsAuth || user)) {
           window.navigateTo(savedView);
@@ -15821,8 +13384,7 @@ if (activeAuthChange) {
 
     if (user) {
       const metadata = user.user_metadata || {};
-      // Mark first successful auth so the auto-login-popup below can
-      // distinguish a real sign-out from a transient offline null.
+      // Mark first successful auth so the auto-login-popup below can distinguish a real sign-out from a transient offline null.
       window.__sawInitialSession = true;
       window.__lastSeenOnline = Date.now();
       document.getElementById("login-modal")?.classList.add("hidden");
@@ -15851,11 +13413,12 @@ if (activeAuthChange) {
       const nameEl = document.getElementById("profile-ui-name");
 
       try {
-        const { data: savedUserRow, error: savedUserRowError } = await supabase
-          .from("profiles")
-          .select("avatar, institution, region, is_verified")
-          .eq("id", user.id)
-          .maybeSingle();
+        const { data: savedUserRow, error: savedUserRowError } =
+          await supabase
+            .from("profiles")
+            .select("avatar, institution, region, is_verified")
+            .eq("id", user.id)
+            .maybeSingle();
         const savedAvatar =
           savedUserRow?.avatar ||
           metadata.avatar_url ||
@@ -15870,20 +13433,7 @@ if (activeAuthChange) {
 
         window.initProfileSelects();
 
-        // Automated .edu verification (doc: "Automatically verify a
-        // user by checking if their registered email is confirmed and
-        // belongs to a known .edu domain" — a more scalable approach
-        // than the fully-manual review this app previously relied on
-        // exclusively). Supabase Auth already confirms the account's
-        // primary email itself (user.email_confirmed_at); this just
-        // checks that confirmed address against the same domain
-        // pattern submitVerificationRequest uses, and flips
-        // profiles.is_verified with no manual step at all when it
-        // matches. This runs on every sign-in, not just once, so it
-        // also catches someone who was created before this check
-        // existed. Doesn't touch or replace the manual
-        // verification_requests flow above (for a .edu email that
-        // ISN'T the account's primary sign-in address).
+        // Automated .edu verification (doc: "Automatically verify a user by checking if their registered email is confirmed and belongs to a known .edu domain".
         if (
           user.email_confirmed_at &&
           !savedUserRow?.is_verified &&
@@ -15907,20 +13457,7 @@ if (activeAuthChange) {
             });
         }
 
-        // Bug fix: this used to treat ANY missing institution/region as
-        // "this person hasn't onboarded yet" and pop the welcome modal —
-        // including when the profiles fetch above simply failed (offline,
-        // flaky connection, slow network on refresh). supabase-js doesn't
-        // throw on a network failure here, it resolves with
-        // { data: null, error }, so savedUserRow was null and this fell
-        // straight into injectOnboardingModal() for an already-onboarded
-        // person. That's what caused the onboarding modal to flash on
-        // refresh / while offline, then get removed a moment later once
-        // a follow-up auth event succeeded (see the `.remove()` above).
-        // Now a failed/offline fetch falls back to the last known-good
-        // institution/region instead of assuming onboarding is needed,
-        // and the welcome modal only shows when we've actually confirmed
-        // (via a successful query) that those fields are empty.
+        // Bug fix: this used to treat ANY missing institution/region as "this person hasn't onboarded yet" and pop the welcome modal.
         if (savedUserRowError || !navigator.onLine) {
           console.warn(
             "Profile fetch for onboarding check failed (offline or network issue) — not treating as unboarded:",
@@ -15979,51 +13516,23 @@ if (activeAuthChange) {
       document.getElementById("dms-auth-gate")?.classList.add("hidden");
       document.getElementById("dms-content")?.classList.remove("hidden");
 
-      // Fix: the very first feed load after sign-in/refresh always
-      // rebuilt an "all" style filter and ignored whichever tab
-      // (Reels, Products, Services, Following) the person had open
-      // before — so a refresh silently bounced everyone back to
-      // "All". currentFeedType is now rehydrated from
-      // localStorage before this runs (see the top of the file),
-      // so this restores the same tab, re-applies campus scoping
-      // consistently via the shared filterFeed() path, and syncs
-      // the active-tab button styling and Reels header mode to
-      // match.
-      // filterFeed() guards on isAuthInitialized being true, so it
-      // must be set before we call it here (it's normally set at
-      // the end of this handler) — otherwise this restore call
-      // would silently no-op on first load.
+      // Fix: the very first feed load after sign-in/refresh always rebuilt an "all" style filter and ignored whichever tab (Reels, Products, Services, Following) the person had open before — so a refresh silently bounced everyone back to "All".
       isAuthInitialized = true;
 
-      // Everything below this point is expensive and/or has
-      // side effects that don't belong happening more than once
-      // per page load (subscribing to realtime channels, syncing
-      // the likes table, fetching profile stats) — see
-      // hasBootedFeedForSession's declaration for why this guard
-      // exists. The lightweight UI sync above (avatar/name text,
-      // onboarding check) stays unguarded since re-running it
-      // harmlessly on a repeat auth event is fine.
+      // Everything below this point is expensive and/or has side effects that don't belong happening more than once per page load (subscribing to realtime channels, syncing the likes table, fetching profile stats) — see hasBootedFeedForSession's declaration for why this guard exists.
       if (!hasBootedFeedForSession) {
         hasBootedFeedForSession = true;
 
-        // Performance tracking: time from navigation start to the
-        // signed-in boot sequence beginning. Purely additive —
-        // doesn't await anything or change what runs below.
+        // Performance tracking: time from navigation start to the signed-in boot sequence beginning.
         trackPerf("auth_boot", performance.now());
 
-        // Session management: register this device, enforce the
-        // concurrent-session limit, and start the idle/absolute
-        // expiry watch + revoke listener. Grouped with the rest of
-        // the one-time boot work for the same reason — it must run
-        // exactly once per real sign-in, not on every auth event.
+        // Session management: register this device, enforce the concurrent-session limit, and start the idle/absolute expiry watch + revoke listener.
         registerDeviceSession();
         startSessionHeartbeat();
         startSessionExpiryWatch();
         startSessionRevokeListener();
 
-        // Load the block list before the first render so a blocked
-        // person's posts never flash on screen for a moment before
-        // being filtered out.
+        // Load the block list before the first render so a blocked person's posts never flash on screen for a moment before being filtered out.
         await syncBlockedUsers();
         await syncFollowingIds();
 
@@ -16042,12 +13551,7 @@ if (activeAuthChange) {
         } catch (_) {}
         _initAvatarLongPress();
 
-        // If this page was opened via a shared post link
-        // (?post=ID, see the Copy Link menu item), open that
-        // post's detail view once the feed has finished its
-        // initial load -- otherwise a copied/shared link would
-        // just open the app fresh with no way to reach the
-        // specific post it pointed to.
+        // If this page was opened via a shared post link (?post=ID, see the Copy Link menu item), open that post's detail view once the feed has finished its initial load -- otherwise a copied/shared link would just open the app fresh with no way to reach the specific post it pointed to.
         try {
           const sharedPostId = new URLSearchParams(window.location.search).get(
             "post",
@@ -16055,10 +13559,7 @@ if (activeAuthChange) {
           if (sharedPostId) window.openDetail(sharedPostId);
         } catch (_) {}
 
-        // If this page was opened via a shared profile link (?u=ID, see
-        // shareProfile's Share icon on the Profile tab), open that
-        // person's public profile once the feed has finished its initial
-        // load — same reasoning as the ?post=ID handling just above.
+        // If this page was opened via a shared profile link (?u=ID, see shareProfile's Share icon on the Profile tab), open that person's public profile once the feed has finished its initial load — same reasoning as the ?post=ID handling just above.
         try {
           const sharedUserId = new URLSearchParams(window.location.search).get(
             "u",
@@ -16066,9 +13567,7 @@ if (activeAuthChange) {
           if (sharedUserId) window.openPublicProfile(sharedUserId);
         } catch (_) {}
 
-        // Populate the DMs unread badge immediately on sign-in,
-        // rather than only after the person happens to open the DMs
-        // tab for the first time.
+        // Populate the DMs unread badge immediately on sign-in, rather than only after the person happens to open the DMs tab for the first time.
         try {
           const { data: convData } = await supabase
             .from("conversations")
@@ -16087,11 +13586,7 @@ if (activeAuthChange) {
       unsubscribeActiveThread();
       if (currentCommentsChan) supabase.removeChannel(currentCommentsChan);
 
-      // Reset so a genuine sign-out followed by signing back in
-      // (within the same page load, not just a refresh) correctly
-      // re-runs the one-time boot sequence for the new session,
-      // instead of being permanently skipped because it already
-      // ran once for the previous person.
+      // Reset so a genuine sign-out followed by signing back in (within the same page load, not just a refresh) correctly re-runs the one-time boot sequence for the new session, instead of being permanently skipped because it already ran once for the previous person.
       hasBootedFeedForSession = false;
 
       stopSessionHeartbeat();
@@ -16135,22 +13630,10 @@ if (activeAuthChange) {
       document.getElementById("dms-content")?.classList.add("hidden");
 
       document.getElementById("campus-scope-banner")?.classList.add("hidden");
-      // This fetches with no filter at all (logged-out view) — never
-      // let a later tab switch mistake this for a reusable same-scope
-      // cache and skip a real reload.
+      // This fetches with no filter at all (logged-out view).
       _feedBucketCache.clear();
       subscribeFeed();
-      // Bug fix: the sign-in modal used to pop up automatically on ANY
-      // sign-out event, including the very common case where the
-      // network momentarily drops and Supabase reports a null session
-      // for an offline `INITIAL_SESSION` lookup. That looked like a
-      // forced re-login every time Wi-Fi blinked, on top of the
-      // earlier fix at the top of the handler that already bails on
-      // (offline && !user). Now we also require the auth runtime to
-      // have already seen a successful initial session at least once
-      // — i.e. we've truly booted — AND confirm we recently saw a
-      // healthy online window, so a network-mid-session reconnect
-      // that briefly reads null can't trigger the modal.
+      // Bug fix: the sign-in modal used to pop up automatically on ANY sign-out event, including the very common case where the network momentarily drops and Supabase reports a null session for an offline `INITIAL_SESSION` lookup.
       const hadInitialSession = !!window.__sawInitialSession;
       const recentlyOnline =
         Date.now() - (window.__lastSeenOnline || 0) < 15000;
@@ -16180,14 +13663,7 @@ let lastScrollY = window.scrollY;
 window.addEventListener(
   "scroll",
   () => {
-    // Bug fix: this listener used to run unconditionally, so any page
-    // scroll (including the reflow a mobile keyboard triggers while a
-    // DM thread is open) would unhide the bottom nav — even though
-    // renderChatThreadShell() deliberately hid it and #chat-thread-panel
-    // already reserves the exact space for a nav-less layout. That's
-    // what made the tab bar reappear over an open chat thread. Bail out
-    // entirely while a thread is open; closeDMThread() is what's
-    // responsible for restoring the nav once the thread actually closes.
+    // Bug fix: this listener used to run unconditionally, so any page scroll (including the reflow a mobile keyboard triggers while a DM thread is open) would unhide the bottom nav.
     if (document.getElementById("chat-thread-panel")) return;
 
     const bottomNav = document.querySelector(".bottom-nav-container");
@@ -16213,13 +13689,7 @@ window.addEventListener(
 );
 
 // ─── 23. DELEGATED CLICK FOR FEED PROFILE LINKS ──────────────────────────────
-// Fix: this previously called navigateTo('profile') unconditionally,
-// which always opens the SIGNED-IN person's own profile tab — tapping
-// someone else's name/avatar on a post had nowhere real to go and just
-// silently reopened your own profile every time. Now it reads which
-// person was actually tapped (data-user-id, added to every profile
-// trigger element) and opens a real, separate public-profile view for
-// them — own profile stays reachable only via the bottom nav, as before.
+// Fix: this previously called navigateTo('profile') unconditionally, which always opens the SIGNED-IN person's own profile tab.
 document.body.addEventListener("click", (event) => {
   const profileClickTarget = event.target.closest(".feed-profile-trigger");
   if (profileClickTarget) {
@@ -16228,9 +13698,7 @@ document.body.addEventListener("click", (event) => {
     const userId = profileClickTarget.dataset.userId;
     if (!userId) return;
 
-    // Tapping your OWN name/avatar on your own post should go to your
-    // real profile tab (with editable settings etc.), not the
-    // read-only public view meant for other people.
+    // Tapping your OWN name/avatar on your own post should go to your real profile tab (with editable settings etc.), not the read-only public view meant for other people.
     if (currentUserData && idKey(userId) === idKey(currentUserData.id)) {
       window.navigateTo("profile");
     } else if (typeof window.openPublicProfile === "function") {
@@ -16240,11 +13708,7 @@ document.body.addEventListener("click", (event) => {
 });
 
 // ─── 24. NATIVE INTERNET CONNECTIVITY DETECTOR ───────────────────────────────
-// Fix: previously going offline could still leave login/signup modals open
-// or let them be triggered by the auth observer. Now we explicitly close
-// any open credential modals the moment connectivity drops, and show a
-// calm, professional toast instead — matching how other production apps
-// (WhatsApp, Instagram) handle connectivity loss.
+// Fix: previously going offline could still leave login/signup modals open or let them be triggered by the auth observer.
 window.addEventListener("offline", () => {
   isOnline = false;
   document.getElementById("login-modal")?.classList.add("hidden");
@@ -16273,12 +13737,7 @@ window.addEventListener("online", () => {
       submitBtnLabel.textContent = submitBtn.dataset.originalText;
     submitBtn.disabled = false;
   }
-  // Fix: this previously called subscribeFeed() with no filter at all,
-  // which silently dropped campus scoping (and any type filter) the
-  // moment connectivity returned — someone browsing "My Campus" would
-  // get bounced to the nationwide feed after a brief signal drop with
-  // no indication why. Now it re-applies whichever filter the current
-  // tab + scope combination should actually have.
+  // Fix: this previously called subscribeFeed() with no filter at all, which silently dropped campus scoping (and any type filter) the moment connectivity returned.
   if (typeof subscribeFeed === "function") {
     if (currentFeedType === "following") {
       loadFollowingFeed();
@@ -16300,9 +13759,7 @@ window.addEventListener("online", () => {
         }
         return q;
       };
-      // Bypasses filterFeed, so it never records into the bucket cache —
-      // clear it so a later tab switch can't mistake it for describing
-      // stale pre-reconnect data.
+      // Bypasses filterFeed, so it never records into the bucket cache.
       _feedBucketCache.clear();
       subscribeFeed(baseFilter);
     }
@@ -16310,30 +13767,10 @@ window.addEventListener("online", () => {
 });
 
 // ─── GLOBAL ERROR HANDLING ────────────────────────────────────────────────────
-// Previously there was no catch-all: any error thrown outside an explicit
-// try/catch (a bug, an unexpected null, a rejected promise nobody
-// awaited) failed completely silently — nothing shown to the person,
-// nothing but a console line only a developer would ever see. This
-// doesn't fix underlying bugs, but it means the person using the app
-// always gets SOME feedback that something went wrong instead of the UI
-// just quietly not doing what they expected, with a debounce so a
-// cascade of related errors doesn't spam multiple toasts at once.
+// Previously there was no catch-all: any error thrown outside an explicit try/catch (a bug, an unexpected null, a rejected promise nobody awaited) failed completely silently.
 let _lastGlobalErrorToastAt = 0;
 
-// Fix: this always showed the same generic "Something went wrong" even
-// when the actual cause was simply no internet connection — the most
-// common real-world trigger for an unhandled fetch/Supabase rejection.
-// navigator.onLine is checked first since it's an instant, certain
-// answer when available; the message-pattern check below is the
-// fallback for the (more common) case where the connection drops mid-
-// request rather than being off outright, which onLine won't always
-// catch reliably. Patterns cover Chrome/Edge ("Failed to fetch"),
-// Firefox ("NetworkError when attempting to fetch resource"), Safari
-// ("Load failed"), and Supabase-js's own wrapped network-failure error
-// classes (AuthRetryableFetchError / FetchError), since those don't
-// always carry one of the raw browser messages above — checked by
-// err.name rather than message text, since Supabase controls that
-// wording and it isn't guaranteed to match any specific phrase.
+// Fix: this always showed the same generic "Something went wrong" even when the actual cause was simply no internet connection.
 function _isLikelyNetworkError(err) {
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
     return true;
@@ -16354,12 +13791,7 @@ function _isLikelyNetworkError(err) {
 function showGlobalErrorToast(context, err) {
   console.error(`[Global Error Handler] ${context}:`, err);
 
-  // Sentry: reported from this one place rather than adding separate
-  // window.addEventListener('error'/'unhandledrejection') listeners —
-  // every error that already reaches this function is, by definition,
-  // every error worth knowing about. If the Sentry loader script isn't
-  // set up yet (see index.html), `Sentry` is simply undefined and this
-  // is skipped — it can never itself throw or break error handling.
+  // Sentry: reported from this one place rather than adding separate window.addEventListener('error'/'unhandledrejection') listeners.
   if (typeof Sentry !== "undefined") {
     Sentry.captureException(
       err instanceof Error ? err : new Error(`${context}: ${err}`),
@@ -16407,11 +13839,7 @@ function wireCarouselCounters(postId) {
 }
 
 // ─── UTILITY FUNCTION: RENDER PROFILE GRID ITEM ─────────────────────────────
-// Simple, view-only grid tile — used for the public profile view (someone
-// ELSE's posts). Deliberately has none of renderGridItem's press-and-hold
-// multi-select wiring, since selecting-to-delete only ever makes sense on
-// your own profile; a tap just opens the post like anywhere else in the
-// app.
+// Simple, view-only grid tile — used for the public profile view (someone ELSE's posts).
 function renderPublicGridItem(id, post) {
   const d = post.data ? post.data : post;
   let mediaUrl = "";
@@ -16426,10 +13854,7 @@ function renderPublicGridItem(id, post) {
       mediaUrl = d.media_url;
     }
   }
-  // Thumbnails only apply to the <img> branch below — video posts still
-  // use the full mediaUrl for playback (there's no separate small
-  // video preview generated at upload time), so this is kept distinct
-  // from mediaUrl rather than replacing it.
+  // Thumbnails only apply to the <img> branch below.
   const thumbUrl = pickThumbnailUrl(d);
   const fallbackImage =
     "https://images.unsplash.com/photo-1563013544-824ae1d704d3?w=300";
@@ -16464,8 +13889,7 @@ function renderGridItem(id, post) {
       mediaUrl = d.media_url;
     }
   }
-  // Thumbnails only apply to the <img> branch below — see the matching
-  // note in renderPublicGridItem above.
+  // Thumbnails only apply to the <img> branch below.
   const thumbUrl = pickThumbnailUrl(d);
 
   const fallbackImage =
@@ -16473,11 +13897,7 @@ function renderGridItem(id, post) {
   const isVideo = d.media_type === "video";
   const key = idKey(id);
 
-  // Press-and-hold enters multi-select mode and selects this tile; a
-  // normal tap either opens the post (outside select mode) or toggles
-  // selection (while in select mode). onmousedown/touchstart start a
-  // timer; onmouseup/touchend/mouseleave/touchmove-far all cancel it so
-  // a normal tap or a scroll gesture never gets mistaken for a hold.
+  // Press-and-hold enters multi-select mode and selects this tile.
   return `
     <div
         class="grid-tile relative aspect-square w-full bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-pointer group hover:border-amber-400/50 transition"
@@ -16508,11 +13928,7 @@ function renderGridItem(id, post) {
     </div>`;
 }
 
-// Wires touchstart/touchmove on every grid tile as real, passive listeners
-// (see renderGridItem — these can't be inline HTML attributes like the
-// mouse/touchend handlers, since inline attributes are always non-passive
-// and were the source of a "non-passive event listener" console violation
-// per tile). Call this once after the grid's innerHTML is (re)built.
+// Wires touchstart/touchmove on every grid tile as real, passive listeners (see renderGridItem.
 function wireGridTileTouchHandlers() {
   document.querySelectorAll(".grid-tile[data-post-id]").forEach((tile) => {
     const key = tile.getAttribute("data-post-id");
@@ -16530,9 +13946,7 @@ let _gridHoldTimer = null;
 let _gridSelectMode = false;
 let _gridJustLongPressed = false;
 const _gridSelectedIds = new Set();
-// id -> {title, price, ...} for the signed-in person's OWN posts, refreshed
-// every time loadProfileStats() rebuilds the grid. Lets shareSelectedGridItems
-// build a real summary of what's selected without a redundant fetch.
+// id -> {title, price, ...} for the signed-in person's OWN posts, refreshed every time loadProfileStats() rebuilds the grid.
 const _ownProfilePostsById = new Map();
 
 window._startGridTileHold = function (id) {
@@ -16550,11 +13964,7 @@ window._cancelGridTileHold = function () {
   _gridHoldTimer = null;
 };
 
-// The click handler fires after mouseup/touchend regardless of whether a
-// hold just happened. If the hold timer already fired (long press), skip
-// the tap behavior entirely — the hold handler already selected the tile,
-// and the browser-generated click right after a long-press shouldn't
-// toggle selection a second time or open the post.
+// The click handler fires after mouseup/touchend regardless of whether a hold just happened.
 window._handleGridTileTap = function (id) {
   if (_gridJustLongPressed) {
     _gridJustLongPressed = false;
@@ -16569,14 +13979,7 @@ window._handleGridTileTap = function (id) {
 
 window._enterGridSelectMode = function () {
   _gridSelectMode = true;
-  // Fix: the toolbar markup starts with class="hidden", and this app's
-  // .hidden rule is `display: none !important` — adding
-  // select-mode-active alone was never enough to show it, since a
-  // non-!important display:flex rule can't override an !important
-  // display:none. The toolbar itself was invisible the whole time even
-  // though tiles correctly flipped into select mode (checkmarks use a
-  // separate, non-!important CSS rule, so those worked fine and made it
-  // look like only "half" of select mode was broken).
+  // Fix: the toolbar markup starts with class="hidden", and this app's .hidden rule is `display.
   const toolbar = document.getElementById("grid-select-toolbar");
   toolbar?.classList.remove("hidden");
   toolbar?.classList.add("select-mode-active");
@@ -16611,9 +14014,7 @@ window._toggleGridTileSelection = function (id) {
   }
   _updateGridSelectCount();
 
-  // Selecting the last remaining tile back down to zero doesn't force
-  // an exit — the toolbar (with Cancel) stays up so the person can
-  // keep selecting more without re-triggering a long-press.
+  // Selecting the last remaining tile back down to zero doesn't force an exit.
 };
 
 function _updateGridSelectCount() {
@@ -16626,9 +14027,7 @@ function _updateGridSelectCount() {
   }
 }
 
-// Press-and-hold → select a single post → "Flash Sale" opens the same
-// Manage Listing sheet already used from the ⋮ menu, which has the
-// discount-price + sale-end-time fields — no separate UI to maintain.
+// Press-and-hold → select a single post → "Flash Sale" opens the same Manage Listing sheet already used from the ⋮ menu, which has the discount-price + sale-end-time fields.
 window.openFlashSaleForSelected = function () {
   if (_gridSelectedIds.size !== 1) {
     showToast("Select exactly one post to set a flash sale.");
@@ -16639,13 +14038,7 @@ window.openFlashSaleForSelected = function () {
   window.openManageListingSheet(postId);
 };
 
-// Shares a combined summary of whatever's currently selected in the "My
-// Gigs & Posts" multi-select grid. There's no per-post deep link anywhere
-// in this single-page app to share individually (sharePost, the existing
-// single-post share, already just links back to the app's root URL with
-// a text description) — so for multiple selected posts, this builds one
-// combined text listing (title + price per item) and shares/copies that,
-// which is the honest equivalent given what the app actually has to share.
+// Shares a combined summary of whatever's currently selected in the "My Gigs & Posts" multi-select grid.
 window.shareSelectedGridItems = function () {
   if (_gridSelectedIds.size === 0) {
     showToast("Select at least one post first.");
@@ -16660,9 +14053,7 @@ window.shareSelectedGridItems = function () {
     return;
   }
 
-  const lines = items.map(
-    (d) => `• ${d.title} — GH₵${formatGHS(d.price ?? 0)}`,
-  );
+  const lines = items.map((d) => `• ${d.title} — GH₵${formatGHS(d.price ?? 0)}`);
   const intro =
     items.length === 1
       ? `Check out "${items[0].title}" on Unix-Sync!`
@@ -16670,10 +14061,7 @@ window.shareSelectedGridItems = function () {
   const shareText = `${intro}\n${lines.join("\n")}\n${window.location.href}`;
 
   if (navigator.share) {
-    // Fix: same hardening as window.sharePost above — distinguish
-    // user-cancel (AbortError, silent) from real failure (log +
-    // clipboard fallback toast) so multi-select share never appears
-    // to do nothing on tap.
+    // Fix: same hardening as window.sharePost above.
     navigator.share({ title: "Unix-Sync", text: shareText }).then(
       () => showToast("Shared! ✓"),
       (err) => {
@@ -16737,12 +14125,7 @@ window.deleteSelectedGridItems = function () {
   });
 };
 
-// "Feature All" (doc: bulk-featuring selected posts from the multi-select
-// grid). Toggles posts.is_featured — a plain boolean flag, deliberately
-// NOT changing feed ranking or ordering here, since that's a separate,
-// more consequential decision (would need thought about how featured
-// posts interact with getFeedScore/decay) than just adding the flag and
-// a visual badge. Requires supabase_migration_featured_posts.sql.
+// "Feature All" (doc: bulk-featuring selected posts from the multi-select grid).
 window.featureSelectedGridItems = async function () {
   if (_gridSelectedIds.size === 0) {
     showToast("Select at least one post first.");
