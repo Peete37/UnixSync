@@ -1,30 +1,11 @@
-/* Tailwind v4 CSS-first config. This file is now the SOURCE your existing
-   build script compiles (see package.json: "build": "npx tailwindcss -i
-   main.css -o dist.css") — dist.css is the generated output that ships
-   to visitors, containing both Tailwind's utility classes AND every
-   custom rule below, merged into one file. Don't link main.css directly
-   in index.html anymore; link dist.css instead.
-
-   @source is critical: most of this app's classes live inside app.js's
-   JS template-string HTML, not index.html's static markup — Tailwind's
-   scanner won't find those unless told to look there explicitly. */
+/* Tailwind v4 CSS-first config — this file is the source dist.css is built from (npm run build). Don't link main.css directly in index.html; link dist.css instead. */
 @import "tailwindcss";
 @source "./index.html";
 @source "./app.js";
 
 /* ─── BASE CORE RESET ────────────────────────────────────────────────────────────────── */
-/* Tells every browser this page is intentionally dark-only. Without it,
-   Android's WebView/Chrome "Force Dark" heuristics (and Safari's native
-   light/dark theming of scrollbars, checkboxes, selects, etc.) kick in
-   whenever the device's system theme changes and start recoloring
-   elements the browser guesses are "light" — the "weird colour" flashes
-   reported when toggling device dark/light mode. This — plus the
-   matching <meta name="color-scheme"> tag in index.html — opts out of
-   that guessing entirely. */
-/* Theme tokens — chosen once per active mode (dark / light / system)
-   in :root via the [data-theme="..."] selector below. Default = dark
-   so the app looks the same on every first paint even before the
-   bootstrap script swaps the attribute based on the saved preference. */
+/* Tells every browser this page is intentionally dark-only. */
+/* Theme tokens — chosen once per active mode (dark / light / system) in :root via the [data-theme="..."] selector below. */
 :root {
   color-scheme: dark;
   --bg-base: #020617;
@@ -91,29 +72,14 @@ body {
   overscroll-behavior-y: none;
 }
 
-/* Zoom is disabled app-wide (see index.html's viewport meta:
-   maximum-scale=1.0, user-scalable=no). This used to allow zoom on post
-   media specifically via touch-action: pinch-zoom, but that CSS property
-   only controls whether the browser's own page-level zoom gesture is
-   allowed to start on an element — it doesn't confine how much of the
-   page ends up zoomed. Since images/videos cover most of the feed,
-   pinching almost anywhere zoomed the entire app rather than just the
-   photo. Pan-only, below, is now simply the base rule for everything,
-   media included (see scopeZoomToMedia() in app.js). */
+/* Zoom is disabled app-wide (see index.html's viewport meta). */
 html {
   touch-action: pan-x pan-y;
-  /* Disables the native pull-to-refresh gesture (real full-page
-     reload) without affecting normal pan scrolling. */
+  /* Disables the native pull-to-refresh gesture (real full-page reload) without affecting normal pan scrolling. */
   overscroll-behavior-y: none;
 }
 
-/* Desktop sidebar nav is hidden by default on every screen size — the
-   1024px+ desktop media query further down is the ONLY place that ever
-   makes it visible again (display: flex there). Without this explicit
-   base rule, an element with no matching CSS is rendered with plain
-   browser defaults, fully visible — which is exactly what was
-   happening on mobile: raw unstyled nav text (Home, Explore, Create,
-   DMs, Profile) stacked above the real mobile header on every phone. */
+/* Desktop sidebar nav is hidden by default on every screen size. */
 .sidebar-nav {
   display: none;
 }
@@ -167,9 +133,7 @@ html {
   transition: transform 0.1s ease;
 }
 
-/* ─── APP STYLES (moved in from index.html's inline <style> block — this is
-   now the single source of truth; index.html no longer has its own <style>
-   block, so there is nothing left to conflict with these rules) ─────────── */
+/* ─── APP STYLES (moved in from index.html's inline <style> block — now the single source of truth). ─────────── */
 
 .hidden {
   display: none !important;
@@ -177,25 +141,12 @@ html {
 
 body {
   font-family: "Inter", sans-serif;
-  /* On any screen wider than the app's own column, this fills the
-         margins with the same dark background instead of leaving the
-         browser's default white showing through — without this, desktop
-         visitors would see a jarring white gutter on either side of a
-         dark app. */
+  /* On any screen wider than the app's own column, this fills the margins with the same dark background instead of leaving the browser's default white showing through. */
   background: #020617;
   min-height: 100vh;
 }
 
-/* Centers the whole app as a fixed-width column on tablets and
-       narrow windows (481-1023px) — the same way Instagram/TikTok's
-       mobile-web experience holds up on a tablet: this width range isn't
-       generous enough for a real 3-zone desktop layout (sidebar + feed +
-       details rail) to feel deliberate rather than cramped, so it keeps
-       the phone-shaped interaction model with a bordered/shadowed edge
-       that reads as intentional rather than "just too narrow for the
-       window." True desktop (1024px+, see further below) gets its own,
-       substantially different layout instead of trying to stretch this
-       same column wider. */
+/* Centers the whole app as a fixed-width column on tablets and narrow windows (481-1023px). */
 @media (min-width: 481px) and (max-width: 1023px) {
   body {
     display: flex;
@@ -213,17 +164,7 @@ body {
   }
 }
 
-/* ── DESKTOP LAYOUT (1024px+) ──────────────────────────────────────
-       A genuine three-zone layout instead of a centered phone column:
-       a fixed left sidebar nav (replacing the bottom nav, which hides
-       entirely at this width), a comfortably-wide but still readable
-       centered feed column (a single post/reel stretched to fill a
-       27" monitor looks broken, not "desktop" — Twitter/Instagram's own
-       desktop sites cap the feed column for the same reason), and the
-       leftover space on the right reserved for a details rail (see
-       .desktop-right-rail). #app-shell itself stops being a narrow
-       fixed-width box and instead becomes the full-width flex
-       container that lays out sidebar + feed + rail side by side. */
+/* ── DESKTOP LAYOUT (1024px+) ────────────────────────────────────── A genuine three-zone layout instead of a centered phone column. */
 @media (min-width: 1024px) {
   body {
     background: #020617;
@@ -332,10 +273,7 @@ body {
     width: auto;
   }
 
-  /* The feed column: same #app-shell-shaped content, just given
-         breathing room instead of being pinned to a hard 448px edge —
-         still capped, not stretched full-bleed, so a single post/reel
-         doesn't look absurd at 3x its intended width. */
+  /* The feed column: same #app-shell-shaped content, just given breathing room instead of being pinned to a hard 448px edge. */
   #feed-container,
   #explore-container,
   #dms-container,
@@ -344,20 +282,7 @@ body {
     max-width: 520px;
   }
 
-  /* All/Products/Services/Deals/Profile all widen to fill the screen
-         (Facebook-style) since these are the views using a multi-column
-         masonry/grid layout — Following/Reels/DMs/etc. keep the
-         comfortable 520px reading width above. The column itself has to
-         widen (not just #feed-container), since a wider child can't
-         exceed a narrower ancestor's max-width.
-         Fix: Products/Deals/Profile previously used their own slightly
-         narrower 900px base cap here, while All used 1040px — so on
-         medium desktop widths (1024–1439px) Products/Profile visibly sat
-         narrower than All even though both eventually converged to
-         1320px at 1440px+. Every one of these now shares the exact same
-         1040/1320px values as All, with !important so nothing else in
-         the cascade (or specificity ordering) can leave one of them
-         narrower than the others again. */
+  /* All/Products/Services/Deals/Profile all widen to fill the screen (Facebook-style) since these are the views using a multi-column masonry/grid layout. */
   body.feed-tab-grid .desktop-center-column {
     max-width: 1040px !important;
   }
@@ -381,13 +306,7 @@ body {
     }
   }
 
-  /* Profile widens beyond the 520px reading cap so the masonry
-         grids here actually fill the screen like the Products/All
-         tabs. The old cap kept Profile stuck at phone-column width on
-         a 27" monitor — the visible "Profile tab is still small
-         compared to Product tab" complaint. Matches All's own values
-         exactly (see fix note above) rather than its own separate,
-         narrower ones. */
+  /* Profile widens beyond the 520px reading cap so the masonry grids here actually fill the screen like the Products/All tabs. */
   body.profile-tab #profile-container,
   body.profile-tab .desktop-center-column {
     max-width: 1040px !important;
@@ -413,9 +332,7 @@ body {
     }
   }
 
-  /* Deals tab: same desktop widening as Products so the live-sale
-         masonry fills the screen rather than sitting in the narrow
-         reading column. */
+  /* Deals tab: same desktop widening as Products so the live-sale masonry fills the screen rather than sitting in the narrow reading column. */
   body.feed-tab-deals .desktop-center-column {
     max-width: 1040px !important;
   }
@@ -462,20 +379,7 @@ body {
     }
   }
 
-  /* This wrapper holds literally all of the app's main content
-         (header/tabs, feed, explore, dms, profile, cart, every
-         modal/overlay) as a single flex item sitting between the
-         sidebar and the right rail. flex: 1 lets it actually claim the
-         available row space (an unstyled flex item has no explicit
-         basis and can end up auto-sized to its content in
-         unpredictable ways); min-width: 0 is the standard fix for flex
-         items with wide content (like a full-bleed video/reel column)
-         refusing to shrink below their content's intrinsic width;
-         position: relative gives its position:sticky/fixed descendants
-         (the Reels player, in particular) a real containing block to
-         size and position against instead of falling back to the
-         viewport in ways that could leave them with no resolvable
-         height at all. */
+  /* This wrapper holds literally all of the app's main content (header/tabs, feed, explore, dms, profile, cart, every modal/overlay) as a single flex item sitting between the sidebar and the right rail. */
   .desktop-center-column {
     flex: 1;
     min-width: 0;
@@ -491,16 +395,7 @@ body {
     margin: 0 auto;
   }
 
-  /* Same full-viewport-width bug as the reels header above, for
-         two more mobile-first fixed bottom sheets that lost their
-         confinement to a narrow column when #app-shell's transform
-         (which used to make it the containing block for every
-         position:fixed descendant) was removed to fix the page-scroll
-         clipping bug. Unlike the reels header, both of these are always
-         appended directly to document.body by JS when opened (see
-         toggleComments/openPostOptionsMenu) — never actually nested
-         inside .desktop-center-column — so this can't be scoped via
-         ancestry and instead centers them directly at this breakpoint. */
+  /* Same full-viewport-width bug as the reels header above, for two more mobile-first fixed bottom sheets that lost their confinement to a narrow column when #app-shell's transform (which used to make it the containing block for every position:fixed descendant) was removed to fix the page-scroll clipping bug. */
   .reel-comments,
   .options-menu-sheet {
     left: 50% !important;
@@ -522,13 +417,7 @@ body {
     padding-bottom: 40px !important;
   }
 
-  /* Reels need their own full-height treatment even on desktop —
-         #posts-feed.reels-mode already goes position: fixed, full
-         viewport by design (see its own rule), which is correct on
-         mobile but would otherwise ignore the sidebar entirely and
-         cover it on desktop. Constraining reels-mode to sit inside the
-         feed column's own width/position here keeps the sidebar visible
-         and clickable even while Reels is active. */
+  /* Reels need their own full-height treatment even on desktop. */
   #posts-feed.reels-mode {
     position: sticky !important;
     left: auto !important;
@@ -548,17 +437,7 @@ body {
     display: none;
   }
 
-  /* Profile post viewer (Reels-style scroller through one user's
-         posts, opened from the Profile tab grid): on mobile this is a
-         full-viewport overlay by design, same as Reels. On desktop that
-         reads as broken — a full-bleed post filling the entire screen
-         alongside the sidebar looks like an error state, not a video
-         player. Cap it the same way #detail-modal and
-         #posts-feed.reels-mode are already capped on desktop: a fixed
-         width, vertically centered, with the rest of the viewport
-         visibly dimmed behind it. Scrolling/snapping through posts
-         still works exactly as before — only the overlay's own
-         width/height/position changes here. */
+  /* Profile post viewer (Reels-style scroller through one user's posts, opened from the Profile tab grid). */
   #profile-post-viewer:not(.is-service-viewer) {
     width: 520px;
     max-width: 520px;
@@ -582,16 +461,7 @@ body {
     background: rgba(2, 6, 23, 0.7);
   }
 
-  /* Post detail view: side-by-side (media left, details right) on
-         desktop instead of the mobile stacked layout — this was also
-         the real fix for the info panel overlapping/hiding the media,
-         since the two are now beside each other, never one on top of
-         the other. #detail-content's own children (the media div and
-         the info-panel div, both direct children injected by
-         openDetail in app.js) become a flex row here; the info panel
-         gets its own scrollbar since long descriptions/Safe Swap
-         Zones/You Might Also Like sections shouldn't force the whole
-         modal taller than the screen. */
+  /* Post detail view: side-by-side (media left, details right) on desktop instead of the mobile stacked layout. */
   #detail-modal .modal-inner {
     max-width: 920px;
     width: 90vw;
@@ -631,13 +501,7 @@ body {
     box-shadow: none !important;
   }
 
-  /* Products keep the same modal width as the default side-by-side
-         layout above, but stacked instead — media on top, details
-         below — per direct request rather than beside each other. 55vh
-         previously left portrait-oriented product photos (a common
-         shape for a single item shot) shrinking well below the panel's
-         actual width just to stay under the height cap — bumped to 70vh
-         so photos render noticeably larger before they need to. */
+  /* Products keep the same modal width as the default side-by-side layout above, but stacked instead. */
   #detail-modal.is-product-detail #detail-content {
     flex-direction: column;
     max-height: 88vh;
@@ -663,10 +527,7 @@ body {
     overflow-y: visible;
   }
 
-  /* Services viewer stays the Reels-style continuous scroller on
-         desktop (per explicit decision), just windowed down to match
-         the main detail modal's proportions instead of covering the
-         whole screen. */
+  /* Services viewer stays the Reels-style continuous scroller on desktop (per explicit decision), just windowed down to match the main detail modal's proportions instead of covering the whole screen. */
   #profile-post-viewer.is-service-viewer {
     align-items: center;
     justify-content: center;
@@ -683,8 +544,7 @@ body {
   }
 }
 
-/* Hidden by default (mobile/tablet) — only ever shown inside the
-       1024px+ desktop layout above, which flips this to display: flex. */
+/* Hidden by default (mobile/tablet) — only ever shown inside the 1024px+ desktop layout above, which flips this to display. */
 .desktop-right-rail {
   display: none;
   position: sticky;
@@ -756,13 +616,7 @@ body {
   pointer-events: none;
   z-index: -1;
 }
-/* Requested: remove the glow specifically on the same tabs the
-   header-gap tightening above was just done for (Profile, DMs,
-   Explore, Cart, and every Feed sub-tab except Reels) — reusing those
-   exact same body classes so this always matches whatever "the tabs
-   we've just finished" ends up meaning as that set changes. Reels
-   keeps it untouched; its own header-reels-mode layout was never part
-   of this. */
+/* Requested: remove the glow specifically on the same tabs the header-gap tightening above was just done for (Profile, DMs, Explore, Cart, and every Feed sub-tab except Reels). */
 body.profile-tab .site-header::before,
 body.dms-tab .site-header::before,
 body.explore-tab .site-header::before,
@@ -879,18 +733,13 @@ body.feed-tab-deals .site-header::before {
   background: transparent;
 }
 
-/* TikTok-style: on the Reels tab the header becomes a transparent
-       overlay floating over the video instead of a solid bar. Tabs and
-       icons stay tappable but there's no background/border beneath them. */
+/* TikTok-style: on the Reels tab the header becomes a transparent overlay floating over the video instead of a solid bar. */
 .site-header.header-reels-mode {
   background: transparent;
   border-bottom-color: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  /* Fixed (not absolute/sticky) so it sits flush against the actual
-         top of the viewport regardless of <main>'s padding or scroll
-         position — this is what was leaving a visible gap above the
-         tabs on the Reels tab. */
+  /* Fixed (not absolute/sticky) so it sits flush against the actual top of the viewport regardless of <main>'s padding or scroll position. */
   position: fixed;
   top: 0;
   left: 0;
@@ -959,9 +808,7 @@ body.feed-tab-deals .site-header::before {
 }
 
 /* ── SKELETON SCREENS ── */
-/* Shimmer sweep instead of a flat pulse — reads as "content is loading"
-   rather than "something is broken/blinking". Used by
-   renderSkeletonCards() in a_js.js for feed/grid loading states. */
+/* Shimmer sweep instead of a flat pulse. */
 .skeleton-pulse {
   position: relative;
   overflow: hidden;
@@ -991,8 +838,7 @@ body.feed-tab-deals .site-header::before {
 .search-wrap {
   position: relative;
   margin-top: 10px;
-  /* Now holds the input plus the filter-toggle button side by side —
-     was a single-child wrapper before the filter panel was added. */
+  /* Now holds the input plus the filter-toggle button side by side. */
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1034,9 +880,7 @@ body.feed-tab-deals .site-header::before {
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.1);
 }
 
-/* Local suggestions dropdown (saved alerts + cached post titles) shown
-   under the search input while typing. Positioned relative to
-   .search-wrap so it tracks the input regardless of header layout. */
+/* Local suggestions dropdown (saved alerts + cached post titles) shown under the search input while typing. */
 .search-autocomplete-panel {
   position: absolute;
   top: calc(100% + 6px);
@@ -1092,8 +936,7 @@ body.feed-tab-deals .site-header::before {
   display: none;
 }
 
-/* When Products tab renders a grid, disable snap-scroll behavior so
-       the grid can scroll normally instead of snapping per-row. */
+/* When Products tab renders a grid, disable snap-scroll behavior so the grid can scroll normally instead of snapping per-row. */
 #posts-feed.grid-mode {
   scroll-snap-type: none;
   height: auto;
@@ -1101,22 +944,8 @@ body.feed-tab-deals .site-header::before {
   overflow-y: visible;
 }
 
-/* Pinterest-style true masonry: CSS multi-column instead of a grid,
-       so each card's height follows its own image's natural aspect ratio
-       rather than being forced into uniform square tiles. break-inside:
-       avoid stops a card from being split across the column break (the
-       one thing plain CSS columns get wrong by default for card-shaped
-       content). Used by both Products and Services grids — Services
-       gets its own modifier for slightly bigger cards, per "a little
-       bigger" than Products. */
-/* <main class="px-4 ..."> applies 16px of left/right padding to
-       every screen in the app — appropriate for text-heavy views, but it
-       visibly gaps the grid views away from the screen edges, unlike the
-       Pinterest/Temu-style full-bleed reference. Rather than remove that
-       padding globally (which several other screens genuinely rely on),
-       these three grids pull themselves back out to full viewport width
-       with a negative margin equal to the parent's padding, scoped only
-       to grid containers so nothing else in <main> is affected. */
+/* Pinterest-style true masonry: CSS multi-column instead of a grid, so each card's height follows its own image's natural aspect ratio rather than being forced into uniform square tiles. */
+/* <main class="px-4 ..."> applies 16px of left/right padding to every screen in the app. */
 .masonry-columns,
 .masonry-columns-services,
 .masonry-columns-feed {
@@ -1145,12 +974,7 @@ body.feed-tab-deals .site-header::before {
   display: inline-block;
   width: 100%;
 }
-/* Fix: Products/Services previously stayed at 2 columns at every
-       screen size, even though their container (body.feed-tab-grid
-       .desktop-center-column, above) already widens to 900/1160px on
-       desktop — leaving two giant tiles instead of actually using the
-       extra width. Matches the same breakpoints the All-tab masonry
-       grid below already uses. */
+/* Fix: Products/Services previously stayed at 2 columns at every screen size, even though their container (body.feed-tab-grid .desktop-center-column, above) already widens to 900/1160px on desktop — leaving two giant tiles instead of actually using the extra width. */
 @media (min-width: 1024px) {
   .masonry-columns,
   .masonry-columns-services {
@@ -1164,10 +988,7 @@ body.feed-tab-deals .site-header::before {
     column-count: 4;
   }
 }
-/* Extra column for the Product tab on really wide desktop monitors
-       (1920+) — matches the request to "have one more grid added to
-       desktop version" so 27"+ displays don't waste horizontal space
-       showing only four giant tiles. */
+/* Extra column for the Product tab on really wide desktop monitors (1920+). */
 @media (min-width: 1920px) {
   .masonry-columns,
   .masonry-columns-services,
@@ -1176,18 +997,7 @@ body.feed-tab-deals .site-header::before {
   }
 }
 
-/* All-tab feed: Pinterest-style masonry, deliberately distinct from
-       Products/Services in card content — these show only image + price
-       + title (see renderFeedMasonryCard), matching the Temu-style
-       browsing pattern rather than a social-feed card. True masonry
-       (varying card heights) via CSS columns, same technique as
-       Products/Services. Mobile stays 2 columns for consistency with the
-       rest of the app's grid interactions; desktop widens to 3-4 columns
-       (see the two nested breakpoints below) so it genuinely fills the
-       screen instead of sitting in a narrow centered column.
-       column-gap/card margin both kept minimal (near-zero) to match the
-       tight, edge-to-edge Pinterest-style reference rather than the
-       wider spacing a typical card grid would use. */
+/* All-tab feed: Pinterest-style masonry, deliberately distinct from Products/Services in card content. */
 .masonry-columns-feed {
   column-count: 2;
   column-gap: 4px;
@@ -1210,12 +1020,7 @@ body.feed-tab-deals .site-header::before {
   }
 }
 
-/* Fix: #profile-grid ("My Gigs & Posts" / "Saved Items") was fixed
-       at grid-cols-3 in the HTML regardless of screen size — so widening
-       body.profile-tab's container (above) just stretched 3 tiles into 3
-       huge ones instead of actually filling the extra width with more
-       content, the way Products' masonry grid already does. Matches the
-       same 1024/1440/1920 breakpoints Products uses. */
+/* Fix: #profile-grid ("My Gigs & Posts" / "Saved Items") was fixed at grid-cols-3 in the HTML regardless of screen size. */
 @media (min-width: 1024px) {
   #profile-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1232,32 +1037,13 @@ body.feed-tab-deals .site-header::before {
   }
 }
 
-/* Reels: true full-bleed, fixed to the viewport so it's completely
-       independent of <main>'s padding/max-width (that's what was causing
-       the top gap) and so it sits ABOVE the bottom nav bar instead of
-       flowing underneath it. Each reel card is exactly one screen tall,
-       viewport-height minus the bottom nav's real rendered height, so
-       the snap-scroll lands perfectly and nothing is ever hidden behind
-       the nav bar. */
+/* Reels: true full-bleed, fixed to the viewport so it's completely independent of <main>'s padding/max-width (that's what was causing the top gap) and so it sits ABOVE the bottom nav bar instead of flowing underneath it. */
 #posts-feed.reels-mode {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  /* Fix: this used to run all the way to the bottom of the viewport
-         (bottom: 0), with the bottom nav (z-index: 50) drawn on top of
-         it — so the actual video content underneath the nav bar was
-         genuinely covered, not just visually layered.
-         Second fix: a first attempt at this replaced bottom: 0 with a
-         GUESSED pixel height (78px) for the nav bar, but the real nav is
-         taller than that once its icon + label + gap + 20px bottom
-         padding are all added up — so the video was still peeking out
-         from under the nav by that shortfall. --real-nav-height is now
-         measured directly from the actual rendered nav element in JS
-         (see measureBottomNavHeight in app.js) and kept in sync on
-         resize/orientation change, so this can never drift out of sync
-         with reality again. The pixel fallback only matters for the
-         first frame before that JS has run once. */
+  /* Fix: video content used to end at the viewport bottom, hidden behind the bottom nav. */
   bottom: var(--real-nav-height, 88px);
   height: auto;
   margin: 0;
@@ -1267,14 +1053,7 @@ body.feed-tab-deals .site-header::before {
   overscroll-behavior-y: contain;
 }
 
-/* Profile post viewer: tapping a grid post on any profile opens this
-       — a full-bleed, Reels-style vertical scroller (see req: "make viewing
-       from profile appear similar to reels... just like Instagram") scoped
-       to that one user's posts, snapped to the tapped post's index. Unlike
-       #posts-feed.reels-mode this is its own top-level overlay (not the
-       main feed swapping modes), so it covers the entire viewport including
-       the bottom nav, and toggles visibility via the sheet-open convention
-       shared with the other info-sheet overlays in this app. */
+/* Profile post viewer: tapping a grid post on any profile opens this. */
 #profile-post-viewer {
   position: fixed;
   inset: 0;
@@ -1330,29 +1109,12 @@ body.feed-tab-deals .site-header::before {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  /* Fix: video elements are frequently promoted to their own
-         hardware-accelerated compositing layer on mobile browsers, which
-         can end up painting above absolutely-positioned siblings (like
-         .reel-info's profile trigger / .reel-actions' buttons) even
-         without an explicit z-index on the video, silently swallowing
-         taps meant for the UI on top of it. Giving it an explicit,
-         low z-index inside its own stacking context (.reel-card is
-         position: relative) makes sure .reel-info/.reel-actions always
-         win regardless of how the browser happens to composite video. */
+  /* Fix: video elements are frequently promoted to their own hardware-accelerated compositing layer on mobile browsers, which can end up painting above absolutely-positioned siblings (like .reel-info's profile trigger / .reel-actions' buttons) even without an explicit z-index on the video, silently swallowing taps meant for the UI on top of it. */
   position: relative;
   z-index: 1;
 }
 
-/* Photo posts in the profile post viewer (added when renderReelCard
-       was generalized to support photos, not just video — see req: "make
-       viewing from profile appear similar to reels"). object-fit: cover
-       is correct for actual video reels, which are typically shot
-       vertically already — but forcing an arbitrary product photo
-       (often landscape or square) to fully COVER a tall full-screen box
-       crops it hard, which is what "posts look cut off" was describing.
-       This shows the whole photo letterboxed against a neutral
-       background instead, matching how photos already look everywhere
-       else in the app (feed cards, post detail). */
+/* Photo posts in the profile post viewer — object-fit: cover crops non-video photos too hard, unlike actual video reels. */
 .reel-photo-fit {
   width: 100%;
   height: 100%;
@@ -1365,10 +1127,7 @@ body.feed-tab-deals .site-header::before {
 .reel-actions {
   position: absolute;
   right: 12px;
-  /* posts-feed.reels-mode now already stops above the bottom nav
-         (see its bottom: calc(...) above), so this only needs its own
-         small breathing room from the very edge of that shorter
-         container — not a second nav-height compensation on top of it. */
+  /* posts-feed.reels-mode already stops above the bottom nav, so this only needs its own small breathing room. */
   bottom: 40px;
   display: flex;
   flex-direction: column;
@@ -1396,9 +1155,7 @@ body.feed-tab-deals .site-header::before {
   z-index: 4;
 }
 
-/* TikTok-style bottom sheet comment panel: slides up from the bottom,
-       fixed to viewport (not clipped by the reel card), sits above
-       everything else in the reel. */
+/* TikTok-style bottom sheet comment panel. */
 .reel-comments {
   position: fixed;
   left: 0;
@@ -1592,14 +1349,7 @@ body.feed-tab-deals .site-header::before {
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-top: 1px solid rgba(255, 255, 255, 0.07);
-  /* Fix: this used to force max(20px, env(...)) — a 20px floor even on
-     devices whose real gesture-bar inset is smaller (or zero, e.g. a
-     phone with on-screen buttons instead of a gesture bar). That
-     artificial minimum is exactly the "extra reserved dark panel"
-     other apps don't have — they just trust the real inset. Using the
-     actual env() value directly now, same as everyone else; 8px is
-     just a normal minimum content padding, not a stand-in gesture-bar
-     reservation. */
+  /* Fix: this used to force max(20px, env(...)). */
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
   z-index: 50;
   transition: transform 0.3s ease;
@@ -1939,43 +1689,18 @@ main {
   padding-bottom: 100px;
 }
 
-/* Fix: this padding is meant to clear the fixed bottom-nav-container so
-   feed/profile/explore content isn't hidden behind it. It was unconditional,
-   so it also applied while a DM chat thread is open — even though the nav
-   is hidden and #chat-thread-panel already gets an exact JS-measured height
-   for the remaining space. That left 100px of extra reserved space below
-   the panel, pushing total content past the viewport and making the whole
-   page (not just the message list) scrollable, dragging the input bar along
-   with it. renderChatThreadShell()/closeDMThread() toggle this class. */
+/* Fix: this padding is meant to clear the fixed bottom-nav-container so feed/profile/explore content isn't hidden behind it. */
 main.chat-thread-open {
   padding-bottom: 0;
 }
 
-/* Bug fix: #dms-content and #profile-content sit in a `space-y-*`
-   container right after their own `-auth-gate` sibling
-   (#dms-auth-gate / #profile-auth-gate). Tailwind's space-y applies
-   margin-top to any element preceded by ANOTHER element in the DOM —
-   it has no idea that gate sibling is `display: none`, so the margin
-   still applied even though there was nothing visible above it to
-   space away from. That's what was opening up an extra, unintended
-   gap above the Inbox/Profile cards that doesn't exist on any other
-   tab. The gate and content are never shown at the same time (one
-   always replaces the other), so content genuinely never needs that
-   top margin — safe to zero it unconditionally. */
+/* Bug fix: #dms-content and #profile-content sit in a `space-y-*` container right after their own `-auth-gate` sibling (#dms-auth-gate / #profile-auth-gate). */
 #dms-content,
 #profile-content {
   margin-top: 0 !important;
 }
 
-/* Requested: tighten the space between the sticky header and the first
-   card on every tab except Reels. `main`'s own pt-4 (16px) is left as
-   the fallback default (still applies to Reels), and each tab's own
-   already-existing body class opts it into the smaller value instead —
-   feed-tab-all/feed-tab-grid/feed-tab-deals (syncFeedTabBodyClasses)
-   cover every Feed sub-tab except Reels, which manages its own
-   immersive full-bleed header separately via header-reels-mode and was
-   never part of this request. profile-tab/dms-tab/explore-tab/cart-tab
-   are toggled the same way in navigateTo(). */
+/* Requested: tighten the space between the sticky header and the first card on every tab except Reels. */
 body.profile-tab main,
 body.dms-tab main,
 body.explore-tab main,
@@ -1986,17 +1711,7 @@ body.feed-tab-deals main {
   padding-top: 0;
 }
 
-/* Bug fix: #chat-thread-panel used to be a normal in-flow block, so its
-   on-screen position depended on wherever the page (body) happened to
-   be scrolled — any page scroll while a thread was open (elastic
-   bounce, the keyboard's own focus-scroll, etc.) dragged the whole
-   header+messages+input cluster along with it, which is what made the
-   composer look like it was scrolling with the page. position: fixed
-   takes it out of document flow entirely so body scroll can no longer
-   move it — top/height are still set from JS (_syncChatPanelHeight),
-   since the space depends on the real header height and the keyboard.
-   max-width/margin match the same 448px-centered convention already
-   used by .site-header and .bottom-nav so it lines up with them. */
+/* Bug fix: #chat-thread-panel used to be a normal in-flow block, so its on-screen position depended on wherever the page (body) happened to be scrolled. */
 .chat-thread-fixed {
   position: fixed;
   left: 0;
@@ -2007,6 +1722,36 @@ body.feed-tab-deals main {
   padding: 0 16px env(safe-area-inset-bottom, 0px);
   background: #020617;
   box-sizing: border-box;
+}
+
+#chat-messages {
+  background-image: radial-gradient(
+    rgba(255, 255, 255, 0.025) 1px,
+    transparent 1px
+  );
+  background-size: 18px 18px;
+}
+
+.chat-bubble-in {
+  animation: chat-bubble-in-anim 0.22s ease-out;
+}
+@keyframes chat-bubble-in-anim {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-bubble-shadow {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.chat-thread-fixed > div:last-child {
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .bottom-nav-hidden {
@@ -2121,11 +1866,7 @@ body.feed-tab-deals main {
 }
 
 /* ── CROP OVERLAY ── */
-/* A draggable/resizable box over the image preview. Percent-based
-       positioning (not pixels) so the crop rect scales correctly if the
-       preview element itself ever changes size (e.g. rotation), and so
-       the stored crop rect is naturally resolution-independent — it maps
-       directly onto the full-resolution source image at export time. */
+/* A draggable/resizable box over the image preview. */
 #cropOverlay {
   position: absolute;
   inset: 0;
@@ -2138,9 +1879,7 @@ body.feed-tab-deals main {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
-  /* The actual "hole" is punched via a box-shadow spread on
-         .crop-box itself (see below) rather than clip-path, since that's
-         far simpler to keep in sync with a dynamically resized box. */
+  /* The actual "hole" is punched via a box-shadow spread on .crop-box itself (see below) rather than clip-path, since that's far simpler to keep in sync with a dynamically resized box. */
   pointer-events: none;
 }
 #cropOverlay .crop-box {
@@ -2225,13 +1964,7 @@ body.feed-tab-deals main {
   display: none;
 }
 
-/* ── OPTIONS MENU (3-dot action sheet) ──
-       Reusable bottom-sheet style menu used for both post options
-       (delete/report) and comment options (delete/report) — replaces
-       the old always-visible trash-bin icon with a less alarming,
-       more familiar "..." entry point, matching how Instagram/TikTok/
-       WhatsApp surface destructive actions behind a menu instead of a
-       bare delete button sitting in the open. */
+/* ── OPTIONS MENU (3-dot action sheet) ── Reusable bottom-sheet style menu used for both post options (delete/report) and comment options (delete/report). */
 .options-menu-backdrop {
   position: fixed;
   inset: 0;
@@ -2301,11 +2034,7 @@ body.feed-tab-deals main {
 
 /* ── PREMIUM CAMPUS SETTINGS ── */
 
-/* Premium hero card above the segmented category nav. Gives the
-         screen a focused entry point instead of dropping into a wall of
-         cards. The radial glow + slow drift gives a premium, app-grade
-         feel that matches modern iOS / app-store hero cards without
-         being heavy. */
+/* Premium hero card above the segmented category nav. */
 .settings-hero {
   position: relative;
   margin-bottom: 14px;
@@ -2372,9 +2101,7 @@ body.feed-tab-deals main {
   margin-top: 4px;
 }
 
-/* Instagram-style settings list: a flat set of rows, each opening
-         its own dedicated sub-screen (below) rather than anchoring to a
-         section further down a shared scrolling page. */
+/* Instagram-style settings list: a flat set of rows, each opening its own dedicated sub-screen (below) rather than anchoring to a section further down a shared scrolling page. */
 .settings-list-row {
   width: 100%;
   display: flex;
@@ -2417,11 +2144,7 @@ body.feed-tab-deals main {
   flex-shrink: 0;
 }
 
-/* Sub-screen header: solid (not translucent) so it can't bleed
-         through and overlap the content scrolling beneath it — the exact
-         issue the old sticky tab bar had. Sits at the very top of its
-         own screen rather than mid-page, so there's nothing to collide
-         with in the first place. */
+/* Sub-screen header: solid (not translucent) so it can't bleed through and overlap the content scrolling beneath it. */
 .settings-subscreen-header {
   position: sticky;
   top: 0;
@@ -2469,9 +2192,7 @@ body.feed-tab-deals main {
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 20px;
   overflow: hidden;
-  /* Subtle lift so cards read as distinct raised surfaces rather
-           than a flat stacked list — part of giving the panel real
-           depth instead of a plain form. */
+  /* Subtle lift so cards read as distinct raised surfaces rather than a flat stacked list. */
   box-shadow: 0 10px 28px -20px rgba(0, 0, 0, 0.6);
 }
 .settings-card + .settings-card {
@@ -2495,11 +2216,7 @@ body.feed-tab-deals main {
   font-size: 13px;
   flex-shrink: 0;
 }
-/* Rows were 13px vertical padding with only a 1px hairline between
-         them — on mobile that's a small, easy-to-miss tap target with
-         barely any separation from its neighbor. Taller rows + a real
-         minimum height give each control (toggle, link) more isolated
-         space to land a tap in. */
+/* Rows were 13px vertical padding with only a 1px hairline between them. */
 .settings-row {
   display: flex;
   align-items: center;
@@ -2568,12 +2285,7 @@ body.feed-tab-deals main {
   transform: translateX(18px);
 }
 
-/* Danger zone: kept visually distinct from every other settings
-         card — extra top margin so it never scrolls flush against a
-         routine card, a red-tinted wash/border instead of the neutral
-         slate used everywhere else, and an explicit "Danger Zone" label.
-         The goal is that this never gets mistaken for just another row
-         while scrolling past it. */
+/* Danger zone: kept visually distinct from every other settings card. */
 .settings-danger-zone {
   margin-top: 26px;
   padding: 16px;
@@ -2825,14 +2537,7 @@ body.feed-tab-deals main {
 }
 
 /* ─── UI-CONSISTENCY PASS — shared shell ─────────────────────────── */
-/* Standardises the small "eyebrow" line (tiny uppercase label used
-         in card headers like "Saved Items", "Campus Settings", "Discover
-         Hub") so they all read the same weight/size/colour no matter
-         which container rendered them. Also standardises the amber-CTA
-         primary button that opens every modal ("Sign In", "Save Name",
-         "Retry", etc.) so its hover/active feedback matches everywhere.
-         Plus tighter stat-tile rhythm — the 3-col Posts/Followers/
-         Following row, etc. — uses the same vertical padding everywhere. */
+/* Standardises the small "eyebrow" line (tiny uppercase label used in card headers like "Saved Items", "Campus Settings", "Discover Hub") so they all read the same weight/size/colour no matter which container rendered them. */
 .campus-eyebrow {
   color: #94a3b8;
   font-size: 10px;
@@ -2869,15 +2574,7 @@ body.feed-tab-deals main {
 }
 
 /* ─── MOBILE SPACING PASS — narrow phones & safe-area polish ────── */
-/* Bug hunting surfaced two mobile-only issues:
-         1. On phones ≤ 360px wide (Galaxy S8, iPhone SE 1st-gen) the
-            profile header's three-stat row crowded the labels and the
-            "Saved Items" count pill pushed onto its own line. Compact
-            down the hit-tiles and tighten the gap.
-         2. The bottom-nav overlay protected content from the notch on
-            landscape phones (where env(safe-area-inset-bottom) reads 0)
-            but on portrait devices with home-indicator insets, the very
-            last feed card slipped under the nav. Bump main padding. */
+/* Bug hunting surfaced two mobile-only issues. */
 @media (max-width: 360px) {
   #profile-container .grid.grid-cols-3 > div {
     padding: 10px 4px;
@@ -2899,19 +2596,12 @@ body.feed-tab-deals main {
   }
 }
 
-/* Bottom safe-area for every screen section that scrolls under the
-         mobile nav. pb-24 (96px) on main isn't enough on devices with a
-         tall home indicator; bump by the safe-area so the last card is
-         always reachable. */
+/* Bottom safe-area for every screen section that scrolls under the mobile nav. */
 main {
   padding-bottom: max(96px, calc(96px + env(safe-area-inset-bottom, 0px)));
 }
 
-/* System announcement banner — maintenance/incident notices. Severity
-   controls the accent color (info=blue, warning=amber, critical=red) via
-   a data attribute set in JS rather than separate classes, so the same
-   markup handles all three. Sits above app-shell's content, never
-   scrolls away. */
+/* System announcement banner — maintenance/incident notices. */
 #system-announcement-banner {
   position: sticky;
   top: 0;
@@ -2994,8 +2684,7 @@ main {
 }
 
 /* ─── LIKE BUTTON POP ANIMATION ───────────────────────────────────────────── */
-/* Fired by likePost() the moment a heart goes from unliked -> liked, so
-   the tap has real, visible feedback beyond just the color swap. */
+/* Fired by likePost() the moment a heart goes from unliked -> liked, so the tap has real, visible feedback beyond just the color swap. */
 @keyframes heartPop {
   0% {
     transform: scale(1);
@@ -3017,19 +2706,7 @@ main {
 }
 
 /* ─── DISABLE NATIVE LONG-PRESS MENUS APP-WIDE ─────────────────────────────── */
-/* Every image and text label in the app was falling back to the phone
-   browser's own long-press behavior — Android Chrome's "Copy image /
-   Download image / Share image / Open in Chrome browser" sheet on
-   images, and its "Copy / Share / Select all" + Google-search bubble on
-   text — since only the profile avatar's long-press had ever been
-   explicitly handled. That made ordinary card taps feel like browsing a
-   website instead of using an app. Disabled broadly here; re-enabled
-   selectively below for content people genuinely might want to select
-   and copy (comment text, post descriptions), and left untouched inside
-   the avatar preview modal, which already has its own proper Copy/
-   Download buttons and still wants its image's native behavior style
-   long-press disabled but is handled by its own dedicated JS.
-*/
+/* Every image and text label in the app was falling back to the phone browser's own long-press behavior. */
 img {
   -webkit-touch-callout: none;
   -webkit-user-drag: none;
@@ -3043,8 +2720,7 @@ body {
   -webkit-user-select: none;
 }
 
-/* Actual typed content always needs native copy/paste/select-all to work
-   normally while editing. */
+/* Actual typed content always needs native copy/paste/select-all to work normally while editing. */
 input,
 textarea,
 [contenteditable="true"] {
@@ -3053,8 +2729,7 @@ textarea,
   -webkit-touch-callout: default;
 }
 
-/* Content someone would plausibly want to long-press and copy — comment
-   bodies and post descriptions — stays genuinely selectable. */
+/* Content someone would plausibly want to long-press and copy. */
 .selectable-text {
   -webkit-user-select: text;
   user-select: text;
@@ -3062,12 +2737,7 @@ textarea,
 }
 
 /* ─── ACCESSIBILITY: RESPECT REDUCED-MOTION PREFERENCE ─────────────────────── */
-/* Purely additive override — doesn't touch the animations themselves, just
-   short-circuits them to effectively instant for anyone whose OS/browser
-   has "reduce motion" turned on. Scoped to the two @keyframes animations
-   that exist in this file (skeleton-shimmer, heartPop) rather than a blanket
-   `* { animation: none }`, so nothing outside what's actually here is
-   affected. */
+/* Purely additive override — doesn't touch the animations themselves, just short-circuits them to effectively instant for anyone whose OS/browser has "reduce motion" turned on. */
 @media (prefers-reduced-motion: reduce) {
   .skeleton-pulse::after {
     animation: none;
@@ -3078,11 +2748,7 @@ textarea,
 }
 
 /* ─── SCROLL-TO-TOP BUTTON ──────────────────────────────────────────────── */
-/* Global fixed button (see index.html) — hidden/shown via .visible, toggled
-   by app.js past a scroll threshold. bottom: 100px clears the fixed
-   bottom-nav-container (which is 50px z-index and sits at bottom:0 with its
-   own padding) rather than sitting on top of it. z-index 40 keeps it below
-   the nav bar and any modal/overlay (those all use higher z-indexes). */
+/* Global fixed button (see index.html) — hidden/shown via .visible, toggled by app.js past a scroll threshold. */
 .scroll-top-btn {
   position: fixed;
   right: 16px;

@@ -89,6 +89,9 @@
       defer
     ></script>
     <link rel="manifest" href="manifest.json" />
+    <!-- iOS ignores manifest.json's icons array for the home screen -
+         it needs its own tag. -->
+    <link rel="apple-touch-icon" href="icon/S4.png" />
     <link
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"

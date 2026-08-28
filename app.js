@@ -12093,7 +12093,23 @@ function renderChatThreadShell() {
                 </div>
             </div>
             <div id="chat-messages" class="flex-1 overflow-y-auto space-y-2 px-1 pb-2"></div>
+            <input type="file" id="chat-camera-input" accept="image/*" capture="environment" class="hidden" onchange="window._handleChatImagePick(this)">
+            <input type="file" id="chat-gallery-input" accept="image/*" class="hidden" onchange="window._handleChatImagePick(this)">
             <div class="flex items-end gap-2 pt-2 border-t border-slate-800/60">
+                <button
+                    onclick="document.getElementById('chat-camera-input').click()"
+                    class="w-9 h-9 flex items-center justify-center rounded-full bg-slate-800 text-slate-300 active:scale-90 transition shrink-0"
+                    aria-label="Take a photo"
+                >
+                    <i class="fas fa-camera text-xs"></i>
+                </button>
+                <button
+                    onclick="document.getElementById('chat-gallery-input').click()"
+                    class="w-9 h-9 flex items-center justify-center rounded-full bg-slate-800 text-slate-300 active:scale-90 transition shrink-0"
+                    aria-label="Send a photo from your gallery"
+                >
+                    <i class="fas fa-image text-xs"></i>
+                </button>
                 <textarea
                     id="chat-input"
                     rows="1"
@@ -12202,10 +12218,27 @@ function renderChatBubble(msg) {
   const key = idKey(msg.id);
   const isLocal = typeof msg.id === "string" && msg.id.startsWith("local-");
 
+  if (msg.media_url) {
+    return `
+        <div class="flex ${isMe ? "justify-end" : "justify-start"} chat-bubble-in" data-message-id="${escAttr(key)}">
+            <div
+                class="max-w-[70%] ${isMe ? "bg-amber-400" : "bg-slate-800"} rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} p-1 relative chat-bubble-shadow"
+                ${isLocal ? "" : `onmousedown="window._startMessageHold('${escAttr(key)}')" onmouseup="window._cancelMessageHold()" onmouseleave="window._cancelMessageHold()" ontouchend="window._cancelMessageHold()"`}
+            >
+                <img src="${esc(msg.media_url)}" onclick="window.openAvatarPreview('${escAttr(msg.media_url)}')" class="w-full max-h-64 object-cover rounded-xl cursor-pointer ${msg._uploading ? "opacity-60" : ""}" alt="Photo">
+                ${msg._uploading ? `<div class="absolute inset-0 flex items-center justify-center"><i class="fas fa-spinner fa-spin text-white text-lg"></i></div>` : ""}
+                <p class="text-[9px] ${isMe ? "text-black/50" : "text-slate-400"} mt-1 mr-1 text-right flex items-center justify-end gap-0.5">
+                    ${esc(formatClockTime(msg.created_at))}${receiptHtml}
+                </p>
+                ${renderMessageReactionPills(msg)}
+            </div>
+        </div>`;
+  }
+
   // A deleted-for-everyone message shows the same tombstone to both sides (matching WhatsApp) instead of disappearing.
   if (msg.deleted) {
     return `
-        <div class="flex ${isMe ? "justify-end" : "justify-start"}" data-message-id="${escAttr(key)}">
+        <div class="flex ${isMe ? "justify-end" : "justify-start"} chat-bubble-in" data-message-id="${escAttr(key)}">
             <div class="max-w-[75%] bg-slate-900 border border-slate-800 text-slate-500 rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} px-3.5 py-2 italic">
                 <p class="text-xs"><i class="fas fa-ban mr-1.5"></i>This message was deleted</p>
             </div>
@@ -12213,9 +12246,9 @@ function renderChatBubble(msg) {
   }
 
   return `
-        <div class="flex ${isMe ? "justify-end" : "justify-start"}" data-message-id="${escAttr(key)}">
+        <div class="flex ${isMe ? "justify-end" : "justify-start"} chat-bubble-in" data-message-id="${escAttr(key)}">
             <div
-                class="max-w-[75%] ${isMe ? "bg-amber-400 text-black" : "bg-slate-800 text-white"} rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} px-3.5 py-2 relative"
+                class="max-w-[75%] ${isMe ? "bg-amber-400 text-black" : "bg-slate-800 text-white"} rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} px-3.5 py-2 relative chat-bubble-shadow"
                 ${isLocal ? "" : `onmousedown="window._startMessageHold('${escAttr(key)}')" onmouseup="window._cancelMessageHold()" onmouseleave="window._cancelMessageHold()" ontouchend="window._cancelMessageHold()"`}
             >
                 <p class="text-sm break-words">${esc(msg.text)}</p>
@@ -12265,10 +12298,8 @@ function formatDateSeparator(dateStr) {
 
 function renderDateSeparator(label) {
   return `
-        <div class="flex items-center gap-3 my-3">
-            <span class="flex-1 h-px bg-slate-800"></span>
-            <span class="text-[9px] text-slate-500 font-bold uppercase tracking-widest shrink-0">${esc(label)}</span>
-            <span class="flex-1 h-px bg-slate-800"></span>
+        <div class="flex items-center justify-center my-4">
+            <span class="text-[9px] text-slate-400 font-bold uppercase tracking-widest bg-slate-800/70 px-3 py-1 rounded-full">${esc(label)}</span>
         </div>`;
 }
 
@@ -12553,6 +12584,141 @@ window._handleTypingInput = function () {
     isCurrentlyTyping = false;
     currentTypingChan?.track({ typing: false });
   }, 2000);
+};
+
+// Camera/gallery buttons both funnel through here - the file input itself
+// is what determines whether the OS opens the camera or the gallery
+// picker (via the `capture` attribute on chat-camera-input).
+window._handleChatImagePick = function (inputEl) {
+  const file = inputEl.files?.[0];
+  inputEl.value = ""; // allow picking the same file again later
+  if (file) window.sendChatImage(file);
+};
+
+window.sendChatImage = async function (file) {
+  if (!activeConversationId || !currentUserData) return;
+  if (
+    activeConversationPeer &&
+    blockedUserIds.has(idKey(activeConversationPeer.id))
+  ) {
+    showToast("You've blocked this person and can't send messages to them.");
+    return;
+  }
+
+  const localPreviewUrl = URL.createObjectURL(file);
+  const optimisticMsg = {
+    id: `local-${Date.now()}`,
+    sender_id: currentUserData.id,
+    text: "",
+    media_url: localPreviewUrl,
+    created_at: new Date().toISOString(),
+    _uploading: true,
+  };
+  _activeThreadMessagesById.set(String(optimisticMsg.id), optimisticMsg);
+
+  const container = document.getElementById("chat-messages");
+  if (container) {
+    const emptyState = container.querySelector("p");
+    if (emptyState && container.children.length === 1) container.innerHTML = "";
+    const newLabel = formatDateSeparator(optimisticMsg.created_at);
+    if (newLabel !== container.dataset.lastDateLabel) {
+      container.innerHTML += renderDateSeparator(newLabel);
+    }
+    container.dataset.lastDateLabel = newLabel;
+    container.innerHTML += renderChatBubble(optimisticMsg);
+    container.scrollTop = container.scrollHeight;
+    wireChatBubbleTouchHandlers();
+  }
+
+  try {
+    const compressed = await compressImageFile(file, {
+      maxDimension: 1600,
+      quality: 0.8,
+    });
+    const ext = (file.name || "photo").split(".").pop() || "jpg";
+    const storagePath = `${currentUserData.id}/chat-${Date.now()}.${ext}`;
+
+    await withUploadRetry(async () => {
+      const { error: uploadError } = await supabase.storage
+        .from("posts")
+        .upload(storagePath, compressed, {
+          contentType: file.type,
+          cacheControl: "31536000",
+        });
+      if (uploadError) throw uploadError;
+    });
+
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from("posts").getPublicUrl(storagePath);
+
+    const { data: inserted, error: msgErr } = await supabase
+      .from("messages")
+      .insert({
+        conversation_id: activeConversationId,
+        sender_id: currentUserData.id,
+        text: "",
+        media_url: publicUrl,
+      })
+      .select("id")
+      .single();
+    if (msgErr) throw msgErr;
+
+    _activeThreadMessagesById.delete(String(optimisticMsg.id));
+    if (inserted?.id) {
+      container.dataset.lastOptimisticId = String(inserted.id);
+      _activeThreadMessagesById.set(String(inserted.id), {
+        ...optimisticMsg,
+        id: inserted.id,
+        media_url: publicUrl,
+        _uploading: false,
+      });
+    }
+    const bubbleEl = container?.querySelector(
+      `[data-message-id="${optimisticMsg.id}"]`,
+    );
+    if (bubbleEl && inserted?.id) {
+      bubbleEl.outerHTML = renderChatBubble({
+        ...optimisticMsg,
+        id: inserted.id,
+        media_url: publicUrl,
+        _uploading: false,
+      });
+      wireChatBubbleTouchHandlers();
+    }
+    URL.revokeObjectURL(localPreviewUrl);
+
+    await supabase
+      .from("conversations")
+      .update({
+        last_message: "📷 Photo",
+        last_message_at: new Date().toISOString(),
+        last_sender: currentUserData.id,
+      })
+      .eq("id", activeConversationId);
+
+    if (activeConversationPeer?.id) {
+      supabase.functions
+        .invoke("send-push", {
+          body: {
+            user_id: activeConversationPeer.id,
+            title: currentUserData.user_metadata?.full_name || "New message",
+            body: "Sent a photo",
+            url: "/",
+          },
+        })
+        .catch(() => {});
+    }
+  } catch (err) {
+    console.error("Send image error:", err);
+    const bubbleEl = container?.querySelector(
+      `[data-message-id="${optimisticMsg.id}"]`,
+    );
+    bubbleEl?.remove();
+    _activeThreadMessagesById.delete(String(optimisticMsg.id));
+    URL.revokeObjectURL(localPreviewUrl);
+    showToast("Photo couldn't be sent. Try again.");
+  }
 };
 
 window.sendChatMessage = async function () {
@@ -12859,12 +13025,15 @@ window._forwardMessageTo = async function (msg, targetConversationId) {
       conversation_id: targetConversationId,
       sender_id: currentUserData.id,
       text: msg.text,
+      media_url: msg.media_url || null,
     });
     if (msgErr) throw msgErr;
 
-    const previewText = msg.text?.startsWith("post_share:")
-      ? "📎 Shared a listing"
-      : msg.text;
+    const previewText = msg.media_url
+      ? "📷 Photo"
+      : msg.text?.startsWith("post_share:")
+        ? "📎 Shared a listing"
+        : msg.text;
     await supabase
       .from("conversations")
       .update({
