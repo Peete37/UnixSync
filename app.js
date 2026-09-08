@@ -3104,13 +3104,16 @@ window.openDetail = async function (postId, fromBack = false) {
                 </div>
                 <div class="flex items-center justify-between gap-3 p-3 bg-slate-900 rounded-xl border border-slate-800">
                     <button type="button" onclick="event.stopPropagation(); window.openUserDashboard('${escAttr(d.user_id)}')" class="feed-profile-trigger flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer active:scale-[0.99] transition" data-user-id="${escAttr(d.user_id)}">
-                        <img src="${esc(d.user_avatar) || "https://ui-avatars.com/api/?name=User"}" data-avatar-for="${escAttr(d.user_id)}" class="w-10 h-10 rounded-full border border-amber-400 object-cover" alt="Avatar">
+                        <img src="${esc(d.user_avatar) || "https://ui-avatars.com/api/?name=User"}" data-avatar-for="${escAttr(d.user_id)}" class="w-10 h-10 rounded-full border border-amber-400 object-cover shrink-0" alt="Avatar">
                         <div class="min-w-0 flex-1">
-                            <p class="text-xs text-slate-500 uppercase">Provider</p>
+                            <!-- Fix: "Dashboard" used to sit inline with name/rating and get squeezed by the Follow/Rate-seller column, so the rating text wrapped onto stacked lines and collided with it. Moved up next to "Provider" instead. -->
+                            <div class="flex items-center justify-between gap-2">
+                                <p class="text-xs text-slate-500 uppercase">Provider</p>
+                                <span class="text-[10px] uppercase tracking-[0.18em] text-amber-400 font-black shrink-0">Dashboard</span>
+                            </div>
                             <p class="text-sm font-bold truncate">${esc(d.user_name) || "Anonymous Student"}</p>
-                            <div id="seller-rating-${escAttr(d.user_id)}" class="mt-0.5"><span class="text-[11px] text-slate-600">Loading rating...</span></div>
+                            <div id="seller-rating-${escAttr(d.user_id)}" class="mt-0.5 truncate"><span class="text-[11px] text-slate-600">Loading rating...</span></div>
                         </div>
-                        <span class="text-[10px] uppercase tracking-[0.18em] text-amber-400 font-black shrink-0">Dashboard</span>
                     </button>
                     <div class="flex flex-col items-end gap-1.5 shrink-0">
                         ${followBlock}
@@ -5157,6 +5160,18 @@ window.contactSeller = function (
   if (!sellerId || sellerId === currentUserData.id) {
     window.navigateTo("dms");
     return;
+  }
+  // Fix: openDM() never closed the detail modal / public profile overlay this
+  // could be called from, so the chat opened behind whichever was still open.
+  // Only close each if it's actually open, so this doesn't affect back-nav/
+  // scroll-lock when called from a plain feed card button.
+  const openDetail = document.getElementById("detail-modal");
+  if (openDetail && !openDetail.classList.contains("hidden")) {
+    window.closeDetailModal?.();
+  }
+  const openProfile = document.getElementById("public-profile-overlay");
+  if (openProfile && openProfile.classList.contains("sheet-open")) {
+    window.closePublicProfile?.();
   }
   const postContext = postId ? postContextRegistry[postId] : null;
   window.openDM(sellerId, userName, sellerAvatar, postContext);
@@ -8476,7 +8491,8 @@ async function loadFollowingFeed() {
 
   // Fix: this returned before ever touching the feed grid when signed out, leaving whatever the PREVIOUS tab had rendered still sitting there.
   if (!currentUserData) {
-    feed.classList.remove("grid-mode", "reels-mode");
+    feed.classList.remove("reels-mode");
+    feed.classList.add("grid-mode");
     pauseAllReelVideos();
     feed.innerHTML = `
         <div class="text-center py-16 space-y-3">
@@ -8489,7 +8505,11 @@ async function loadFollowingFeed() {
   }
   const myGeneration = _feedLoadGeneration;
 
-  feed.classList.remove("grid-mode", "reels-mode");
+  // Fix: this used to remove grid-mode instead of adding it, leaving #posts-feed
+  // on its snap-scroll reel styling — that's what clipped the masonry bleed on
+  // both edges and fought with pull-to-refresh here.
+  feed.classList.remove("reels-mode");
+  feed.classList.add("grid-mode");
   pauseAllReelVideos();
   feed.innerHTML = renderSkeletonCards(6, "masonry-feed");
 
@@ -8569,7 +8589,9 @@ async function loadTrendingFeed() {
   const feed = document.getElementById("posts-feed");
   if (!feed) return;
 
-  feed.classList.remove("grid-mode", "reels-mode");
+  // Fix: same missing grid-mode bug as loadFollowingFeed() above.
+  feed.classList.remove("reels-mode");
+  feed.classList.add("grid-mode");
   pauseAllReelVideos();
   feed.innerHTML = renderSkeletonCards(6, "masonry-feed");
 
@@ -11017,7 +11039,7 @@ window.openPublicProfile = async function (userId) {
                     ${isFollowing ? "Following" : "+ Follow"}
                 </button>
                 <button
-                    onclick="window.openDM('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}')"
+                    onclick="window.closePublicProfile(); window.openDM('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}')"
                     class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
                 >
                     Message
