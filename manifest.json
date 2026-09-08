@@ -1,6 +1,6 @@
 {
   "name": "Unix-Sync",
-  "short_name": "NikSyn",
+  "short_name": "Unix-Sync",
   "description": "Campus social marketplace for students",
   "theme_color": "#0f172a",
   "background_color": "#000000",
@@ -26,6 +26,12 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "icon/S4.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ],
   "screenshots": [
