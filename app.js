@@ -621,6 +621,24 @@ function updateDmUnreadBadge() {
       badge.classList.add("hidden");
     }
   });
+  updateAppIconBadge(unreadCount);
+}
+
+// Home-screen/taskbar app icon badge (the little number on the icon itself,
+// like WhatsApp) — this is the Badging API (navigator.setAppBadge), separate
+// from the in-app red-dot badge above. Only works on browsers/OSes that
+// support it (Chromium-based, installed as a PWA on desktop/Android — no
+// support in Safari/iOS as of this writing) and fails silently everywhere
+// else via the feature check and catch below, so it's safe to always call.
+function updateAppIconBadge(count) {
+  if (!("setAppBadge" in navigator)) return;
+  try {
+    if (count > 0) {
+      navigator.setAppBadge(count).catch(() => {});
+    } else {
+      navigator.clearAppBadge().catch(() => {});
+    }
+  } catch (_) {}
 }
 
 // Fix: post ids come back from Supabase as a JS `number` (posts.id is bigint), but the same id also flows through HTML onclick attributes (e.g.
@@ -1143,6 +1161,28 @@ function popUiState(id) {
     }
   }
 }
+
+// Fix: closing an overlay (popUiState -> history.back()) is asynchronous — the
+// popstate it triggers doesn't actually fire until a later tick. Code that
+// closed an overlay and then immediately did its own history.pushState (e.g.
+// Contact Seller / the profile Message button opening a DM right after
+// closing the modal they were tapped from) was racing that pending back()
+// with its own forward navigation, so the async back could land after the
+// new screen was already pushed, making it look like nothing happened until
+// you pressed back once yourself. Anything doing overlay-close-then-navigate
+// should run the navigate step through this instead of calling it directly.
+function afterPendingNav(fn) {
+  if (_suppressPopstateCount <= 0) {
+    fn();
+    return;
+  }
+  const check = () => {
+    if (_suppressPopstateCount <= 0) fn();
+    else requestAnimationFrame(check);
+  };
+  requestAnimationFrame(check);
+}
+window._afterPendingNav = afterPendingNav;
 
 // Seed one base history entry plus one throwaway guard entry above it so the VERY first phone back gesture on a freshly-opened home screen fires popstate inside this document (letting the app walk tabs/views or show exit confirmation) instead of immediately leaving the app with no chance to handle it.
 try {
@@ -5179,7 +5219,9 @@ window.contactSeller = function (
     window.closePublicProfile?.();
   }
   const postContext = postId ? postContextRegistry[postId] : null;
-  window.openDM(sellerId, userName, sellerAvatar, postContext);
+  window._afterPendingNav(() =>
+    window.openDM(sellerId, userName, sellerAvatar, postContext),
+  );
 };
 
 // ─── Comment count tracking (keeps counters accurate without a full re-fetch) ──
@@ -11044,7 +11086,7 @@ window.openPublicProfile = async function (userId) {
                     ${isFollowing ? "Following" : "+ Follow"}
                 </button>
                 <button
-                    onclick="window.closePublicProfile(); window.openDM('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}')"
+                    onclick="window.closePublicProfile(); window._afterPendingNav(() => window.openDM('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}'))"
                     class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
                 >
                     Message
@@ -13249,8 +13291,17 @@ window._submitOffer = async function (postId) {
     showToast("Offer sent.");
   } catch (err) {
     console.error("Submit offer error:", err);
+    // Fix: this always showed the same "run the migration" guess regardless of
+    // the real cause, which stayed wrong/confusing once the migration actually
+    // was in place (RLS, a type mismatch, etc. would show the exact same text).
+    // Surface Postgres/Supabase's real reason when there is one.
+    const reason = [err?.message, err?.details, err?.hint]
+      .filter(Boolean)
+      .join(" — ");
     showToast(
-      "Couldn't send that offer — make sure supabase_migration_offers.sql has been run.",
+      reason
+        ? `Couldn't send that offer: ${reason}`
+        : "Couldn't send that offer — make sure supabase_migration_offers.sql has been run.",
     );
   }
 };
