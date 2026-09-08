@@ -240,6 +240,11 @@ let _inboxLoadedOnce = false;
 let currentMessagesChan = null;
 let activeConversationId = null;
 let activeConversationPeer = null; // { id, name, avatar }
+// Fix: navigateTo('dms') always fires openInboxView() as a side effect, which raced with
+// openDM()'s own async work for the same #dms-content element during the gap before
+// activeConversationId gets set — whichever finished last won, so opening a chat sometimes
+// showed the inbox list instead of the thread until you backed out and back in.
+let _dmThreadOpening = false;
 // Full message objects for the currently-open thread, keyed by id (string).
 let _activeThreadMessagesById = new Map();
 // Offer state for the currently-open thread, keyed by offers.id (string).
@@ -3102,11 +3107,11 @@ window.openDetail = async function (postId, fromBack = false) {
                     <span class="bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700">${esc(d.region) || "All Regions"}</span>
                     <span class="bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700 capitalize">${esc(d.type) || "product"}</span>
                 </div>
-                <div class="flex items-center justify-between gap-3 p-3 bg-slate-900 rounded-xl border border-slate-800">
-                    <button type="button" onclick="event.stopPropagation(); window.openUserDashboard('${escAttr(d.user_id)}')" class="feed-profile-trigger flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer active:scale-[0.99] transition" data-user-id="${escAttr(d.user_id)}">
+                <div class="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-2.5">
+                    <!-- Fix: Follow/Rate-seller used to sit in their own column to the right of this whole row, squeezing the name/rating/Dashboard area until the async rating text wrapped and collided with it. Moved them to their own row below so this row has the full width to itself. -->
+                    <button type="button" onclick="event.stopPropagation(); window.openUserDashboard('${escAttr(d.user_id)}')" class="feed-profile-trigger flex items-center gap-3 w-full text-left cursor-pointer active:scale-[0.99] transition" data-user-id="${escAttr(d.user_id)}">
                         <img src="${esc(d.user_avatar) || "https://ui-avatars.com/api/?name=User"}" data-avatar-for="${escAttr(d.user_id)}" class="w-10 h-10 rounded-full border border-amber-400 object-cover shrink-0" alt="Avatar">
                         <div class="min-w-0 flex-1">
-                            <!-- Fix: "Dashboard" used to sit inline with name/rating and get squeezed by the Follow/Rate-seller column, so the rating text wrapped onto stacked lines and collided with it. Moved up next to "Provider" instead. -->
                             <div class="flex items-center justify-between gap-2">
                                 <p class="text-xs text-slate-500 uppercase">Provider</p>
                                 <span class="text-[10px] uppercase tracking-[0.18em] text-amber-400 font-black shrink-0">Dashboard</span>
@@ -3115,7 +3120,7 @@ window.openDetail = async function (postId, fromBack = false) {
                             <div id="seller-rating-${escAttr(d.user_id)}" class="mt-0.5 truncate"><span class="text-[11px] text-slate-600">Loading rating...</span></div>
                         </div>
                     </button>
-                    <div class="flex flex-col items-end gap-1.5 shrink-0">
+                    <div class="flex items-center justify-end gap-3 pt-2 border-t border-slate-800/80">
                         ${followBlock}
                         ${!isOwn && viewer ? `<button onclick="window.openRateSellerSheet('${escAttr(d.user_id)}', '${escAttr(d.user_name)}')" class="text-[10px] text-amber-400 hover:text-amber-300 transition uppercase tracking-widest font-bold">Rate seller</button>` : ""}
                     </div>
@@ -11665,6 +11670,8 @@ async function refreshInboxList() {
 async function openInboxView() {
   const content = document.getElementById("dms-content");
   if (!content || !currentUserData) return;
+  // A chat thread is opening or already open — don't clobber it with the list.
+  if (_dmThreadOpening || activeConversationId) return;
 
   // Repeat visit within the same still-subscribed session.
   if (_inboxLoadedOnce && currentConversationsChan) {
@@ -11950,9 +11957,13 @@ window.openDM = async function (
     return;
   }
 
+  _dmThreadOpening = true;
   window.navigateTo("dms");
   const content = document.getElementById("dms-content");
-  if (!content) return;
+  if (!content) {
+    _dmThreadOpening = false;
+    return;
+  }
 
   unsubscribeActiveThread();
   content.innerHTML = `<div class="p-12 text-center animate-pulse text-slate-500 text-xs uppercase tracking-widest">Opening chat...</div>`;
@@ -12005,6 +12016,8 @@ window.openDM = async function (
         ? "This chat isn't available."
         : "Couldn't open this chat. Try again."
     }</div>`;
+  } finally {
+    _dmThreadOpening = false;
   }
 };
 
