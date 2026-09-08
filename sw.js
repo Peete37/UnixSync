@@ -31,6 +31,14 @@
 //     errors if handled.
 
 const SHELL_CACHE = "campusmarket-shell-v4";
+// Tiny persisted counter (not shell content) backing the home-screen app
+// icon badge, so a push notification arriving while the app is fully
+// closed can still bump the badge count — the app itself only has a
+// chance to set the real count when a tab is actually open. Kept in its
+// own cache, separate from SHELL_CACHE, so it isn't wiped by the shell
+// cache-busting in activate() below on every deploy.
+const BADGE_CACHE = "campusmarket-badge-count-v1";
+const BADGE_KEY = new Request("https://campusmarket.local/__badge-count");
 
 // Same-origin files that make up the app shell. Add to this list if new
 // static assets are introduced (e.g. a manifest icon set). Keep this in
@@ -66,7 +74,7 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key !== SHELL_CACHE)
+            .filter((key) => key !== SHELL_CACHE && key !== BADGE_CACHE)
             .map((key) => caches.delete(key)),
         ),
       )
@@ -175,6 +183,51 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
+// ─── APP ICON BADGE ─────────────────────────────────────────────────────────
+// Additive only. Backs the home-screen/taskbar icon's unread-count number
+// (the Badging API — navigator.setAppBadge). app.js already sets this
+// directly while a tab is open; this half handles the case a tab isn't
+// open at all, so a push notification can still bump the badge. The two
+// halves stay in sync via postMessage: whenever app.js computes the real
+// unread count, it tells this service worker via SET_BADGE_COUNT below, so
+// the next push increments from the correct number instead of a stale one.
+
+async function readBadgeCount() {
+  try {
+    const cache = await caches.open(BADGE_CACHE);
+    const res = await cache.match(BADGE_KEY);
+    if (!res) return 0;
+    const n = parseInt(await res.text(), 10);
+    return Number.isFinite(n) ? n : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+async function writeBadgeCount(n) {
+  try {
+    const cache = await caches.open(BADGE_CACHE);
+    await cache.put(BADGE_KEY, new Response(String(n)));
+  } catch (_) {}
+}
+
+async function applyBadge(n) {
+  if (!("setAppBadge" in self.navigator)) return;
+  try {
+    if (n > 0) await self.navigator.setAppBadge(n);
+    else await self.navigator.clearAppBadge();
+  } catch (_) {}
+}
+
+// app.js posts this every time it recomputes the real unread count (new
+// message read, DMs tab opened, sign-in, etc.) so this service worker's
+// idea of the count never drifts from what's actually true.
+self.addEventListener("message", (event) => {
+  if (event.data?.type !== "SET_BADGE_COUNT") return;
+  const n = Math.max(0, Number(event.data.count) || 0);
+  event.waitUntil(writeBadgeCount(n).then(() => applyBadge(n)));
+});
+
 // ─── PUSH NOTIFICATIONS ─────────────────────────────────────────────────────
 // Additive only — nothing above this point is touched. Fires when the
 // send-push Edge Function delivers a payload of the shape
@@ -209,7 +262,15 @@ self.addEventListener("push", (event) => {
     data: { url: payload.url || "./" },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    self.registration
+      .showNotification(title, options)
+      .then(() => readBadgeCount())
+      .then((current) => {
+        const next = current + 1;
+        return writeBadgeCount(next).then(() => applyBadge(next));
+      }),
+  );
 });
 
 // Tapping the notification focuses an already-open tab if one exists

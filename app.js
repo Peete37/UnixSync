@@ -631,13 +631,23 @@ function updateDmUnreadBadge() {
 // support in Safari/iOS as of this writing) and fails silently everywhere
 // else via the feature check and catch below, so it's safe to always call.
 function updateAppIconBadge(count) {
-  if (!("setAppBadge" in navigator)) return;
+  if ("setAppBadge" in navigator) {
+    try {
+      if (count > 0) {
+        navigator.setAppBadge(count).catch(() => {});
+      } else {
+        navigator.clearAppBadge().catch(() => {});
+      }
+    } catch (_) {}
+  }
+  // Keep the service worker's own copy of the count in sync too, so a push
+  // notification arriving after this tab closes increments the badge from
+  // the correct number instead of whatever it last saw (see sw.js).
   try {
-    if (count > 0) {
-      navigator.setAppBadge(count).catch(() => {});
-    } else {
-      navigator.clearAppBadge().catch(() => {});
-    }
+    navigator.serviceWorker?.controller?.postMessage({
+      type: "SET_BADGE_COUNT",
+      count,
+    });
   } catch (_) {}
 }
 
