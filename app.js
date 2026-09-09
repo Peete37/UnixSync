@@ -245,6 +245,17 @@ let activeConversationPeer = null; // { id, name, avatar }
 // activeConversationId gets set — whichever finished last won, so opening a chat sometimes
 // showed the inbox list instead of the thread until you backed out and back in.
 let _dmThreadOpening = false;
+// Set right before a thread opens from Contact Seller / a profile's Message
+// button, so closeDMThread() knows to reopen that post afterward instead of
+// leaving the person on the plain inbox list. null for any ordinary chat
+// (opened from the inbox list or user search) — those just close normally.
+let _dmReturnToPostId = null;
+// Used by anything that closes the thread to go to a DIFFERENT, specific post
+// (e.g. tapping a shared-listing bubble inside the chat) so that doesn't race
+// against the automatic reopen below and briefly show the wrong post.
+window._clearDmReturnToPost = function () {
+  _dmReturnToPostId = null;
+};
 // Full message objects for the currently-open thread, keyed by id (string).
 let _activeThreadMessagesById = new Map();
 // Offer state for the currently-open thread, keyed by offers.id (string).
@@ -3662,9 +3673,17 @@ window.signInWithEmailPassword = async function (email, password) {
       /* fail open — see comment above */
     }
 
+    if (!_loginTurnstileToken) {
+      showToast(
+        "Please complete the verification check above before continuing.",
+      );
+      return;
+    }
+
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
+      options: { captchaToken: _loginTurnstileToken },
     });
     if (error) {
       // Record the failure (fire-and-forget — must not block showing the person their actual error message) before re-throwing into the catch block below.
@@ -3708,6 +3727,11 @@ window.signInWithEmailPassword = async function (email, password) {
       btn.textContent = "Sign In";
       btn.disabled = false;
     }
+    // Turnstile tokens are single-use — reset the widget so a second attempt (after a failed sign-in, e.g. wrong password) gets a fresh one.
+    _loginTurnstileToken = "";
+    try {
+      window.turnstile?.reset("login-turnstile");
+    } catch (_) {}
   }
 };
 
@@ -3715,6 +3739,12 @@ window.signInWithEmailPassword = async function (email, password) {
 let _turnstileToken = "";
 window._onTurnstileVerified = function (token) {
   _turnstileToken = token;
+};
+
+// Same idea, for the separate login-form widget (login and signup need their own tokens/widgets since Supabase's captcha check applies to both).
+let _loginTurnstileToken = "";
+window._onLoginTurnstileVerified = function (token) {
+  _loginTurnstileToken = token;
 };
 
 window.registerWithEmail = async function (name, email, password) {
@@ -3757,7 +3787,7 @@ window.registerWithEmail = async function (name, email, password) {
     // Turnstile tokens are single-use — reset the widget so a second attempt (after a failed signup, e.g.
     _turnstileToken = "";
     try {
-      window.turnstile?.reset();
+      window.turnstile?.reset("signup-turnstile");
     } catch (_) {}
   }
 };
@@ -5230,7 +5260,7 @@ window.contactSeller = function (
   }
   const postContext = postId ? postContextRegistry[postId] : null;
   window._afterPendingNav(() =>
-    window.openDM(sellerId, userName, sellerAvatar, postContext),
+    window.openDM(sellerId, userName, sellerAvatar, postContext, postId),
   );
 };
 
@@ -11096,7 +11126,7 @@ window.openPublicProfile = async function (userId) {
                     ${isFollowing ? "Following" : "+ Follow"}
                 </button>
                 <button
-                    onclick="window.closePublicProfile(); window._afterPendingNav(() => window.openDM('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}'))"
+                    onclick="window._openDMFromProfile('${escAttr(userId)}', '${escAttr(displayName)}', '${escAttr(avatarUrl)}')"
                     class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-black py-3 rounded-xl uppercase tracking-wider text-xs transition active:scale-95"
                 >
                     Message
@@ -11168,6 +11198,26 @@ window.closePublicProfile = function (fromPop = false) {
     .getElementById("public-profile-overlay")
     ?.classList.remove("sheet-open");
   if (!fromPop) popUiState("public-profile");
+};
+
+// Message button on a public profile. If that profile was opened from within
+// a post's detail view, capture which post BEFORE closing anything (closing
+// the modal clears _currentDetailPostId), so the chat can return there once
+// it's closed. If the profile was opened some other way (search, a follower
+// list, etc.), there's no post to return to and the chat just closes normally.
+window._openDMFromProfile = function (userId, displayName, avatarUrl) {
+  const detailModal = document.getElementById("detail-modal");
+  const returnPostId =
+    detailModal && !detailModal.classList.contains("hidden")
+      ? _currentDetailPostId
+      : null;
+  if (returnPostId) {
+    window.closeDetailModal();
+  }
+  window.closePublicProfile();
+  window._afterPendingNav(() =>
+    window.openDM(userId, displayName, avatarUrl, null, returnPostId),
+  );
 };
 
 // Shows either the Followers or Following list for any user (your own profile or someone else's public profile.
@@ -11991,6 +12041,7 @@ window.openDM = async function (
   otherUserName,
   otherUserAvatar,
   postContext = null,
+  returnToPostId = null,
 ) {
   if (!currentUserData) {
     window.openLoginModal();
@@ -12010,6 +12061,7 @@ window.openDM = async function (
   }
 
   _dmThreadOpening = true;
+  _dmReturnToPostId = returnToPostId;
   window.navigateTo("dms");
   const content = document.getElementById("dms-content");
   if (!content) {
@@ -12411,7 +12463,7 @@ function renderPostSharePreviewBubble(payload, isMe, createdAt, msg) {
   return `
         <div class="flex ${isMe ? "justify-end" : "justify-start"}" data-message-id="${escAttr(key)}">
             <div
-                onclick="window.closeDMThread(); setTimeout(() => openDetail('${escAttr(payload.id)}'), 50)"
+                onclick="window._clearDmReturnToPost(); window.closeDMThread(); setTimeout(() => openDetail('${escAttr(payload.id)}'), 50)"
                 ${isLocal ? "" : `onmousedown="window._startMessageHold('${escAttr(key)}')" onmouseup="window._cancelMessageHold()" onmouseleave="window._cancelMessageHold()" ontouchend="window._cancelMessageHold()"`}
                 class="max-w-[78%] ${isMe ? "bg-amber-400/10 border-amber-400/30" : "bg-slate-800 border-slate-700"} border rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} p-2 cursor-pointer active:scale-[0.98] transition">
                 <div class="flex items-center gap-2.5">
@@ -12463,7 +12515,7 @@ function renderOfferBubble(payload, isMe, createdAt, msg) {
   return `
         <div class="flex ${isMe ? "justify-end" : "justify-start"}" data-message-id="${escAttr(key)}" data-offer-id="${escAttr(payload.offerId)}">
             <div
-                onclick="window.closeDMThread(); setTimeout(() => openDetail('${escAttr(payload.postId)}'), 50)"
+                onclick="window._clearDmReturnToPost(); window.closeDMThread(); setTimeout(() => openDetail('${escAttr(payload.postId)}'), 50)"
                 ${isLocal ? "" : `onmousedown="window._startMessageHold('${escAttr(key)}')" onmouseup="window._cancelMessageHold()" onmouseleave="window._cancelMessageHold()" ontouchend="window._cancelMessageHold()"`}
                 class="max-w-[78%] ${isMe ? "bg-amber-400/10 border-amber-400/30" : "bg-slate-800 border-slate-700"} border rounded-2xl ${isMe ? "rounded-br-sm" : "rounded-bl-sm"} p-3 cursor-pointer active:scale-[0.98] transition">
                 <p class="text-[9px] uppercase tracking-widest font-bold ${isMe ? "text-amber-500" : "text-slate-500"}">
@@ -12919,6 +12971,16 @@ window.closeDMThread = function (fromPop = false) {
   document.querySelector("main")?.classList.remove("chat-thread-open");
   openInboxView();
   if (!fromPop) popUiState("dm-thread");
+
+  // If this thread was opened via Contact Seller or a profile's Message
+  // button, return to that same post instead of leaving the person on the
+  // plain inbox list — consumed once so it doesn't affect any later,
+  // unrelated chat close.
+  if (_dmReturnToPostId) {
+    const backToPostId = _dmReturnToPostId;
+    _dmReturnToPostId = null;
+    setTimeout(() => window.openDetail(backToPostId), 50);
+  }
 };
 
 // Legacy stub kept for any old call sites that don't pass full peer info.

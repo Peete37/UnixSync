@@ -2264,6 +2264,20 @@
                 Forgot password?
               </button>
             </div>
+
+            <!-- Bot protection (Cloudflare Turnstile) — mirrors the signup
+                 widget below. Supabase Auth's Captcha protection setting
+                 applies to sign-in as well as sign-up, so this form needs
+                 its own token too. Separate id/callback from the signup
+                 widget so the two can be reset independently. -->
+            <div
+              id="login-turnstile"
+              class="cf-turnstile flex justify-center"
+              data-sitekey="0x4AAAAAAEE8AhH3rSu53f0p"
+              data-callback="_onLoginTurnstileVerified"
+              data-theme="dark"
+            ></div>
+
             <button
               type="submit"
               class="w-full bg-amber-400 hover:bg-amber-300 text-black font-black py-3.5 rounded-full text-sm transition active:scale-95 shadow-lg shadow-amber-400/20 mt-2"
@@ -2529,6 +2543,7 @@
                  itself when signUp() is called with this token — nothing
                  to check or trust on the client side here. -->
             <div
+              id="signup-turnstile"
               class="cf-turnstile flex justify-center"
               data-sitekey="0x4AAAAAAEE8AhH3rSu53f0p"
               data-callback="_onTurnstileVerified"
