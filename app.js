@@ -3735,17 +3735,27 @@ window.signInWithEmailPassword = async function (email, password) {
   }
 };
 
-// Bot protection: Turnstile's widget calls this once a real visitor passes its check, handing back a single-use token.
-let _turnstileToken = "";
-window._onTurnstileVerified = function (token) {
-  _turnstileToken = token;
-};
-
-// Same idea, for the separate login-form widget (login and signup need their own tokens/widgets since Supabase's captcha check applies to both).
-let _loginTurnstileToken = "";
-window._onLoginTurnstileVerified = function (token) {
-  _loginTurnstileToken = token;
-};
+// Bot protection: Turnstile's widget calls window._onTurnstileVerified /
+// window._onLoginTurnstileVerified once a real visitor passes its check,
+// handing back a single-use token. Those callbacks are defined early and
+// synchronously in index.html itself (before Turnstile's own script tag) —
+// NOT here — because this file is a large deferred module that can still be
+// loading when a fast-resolving widget fires; defining the callback here
+// risked overwriting an already-captured token with a fresh empty one.
+// _turnstileToken / _loginTurnstileToken below are just local aliases for
+// reading/resetting those same window-scoped values.
+Object.defineProperty(globalThis, "_turnstileToken", {
+  get: () => window._turnstileToken,
+  set: (v) => {
+    window._turnstileToken = v;
+  },
+});
+Object.defineProperty(globalThis, "_loginTurnstileToken", {
+  get: () => window._loginTurnstileToken,
+  set: (v) => {
+    window._loginTurnstileToken = v;
+  },
+});
 
 window.registerWithEmail = async function (name, email, password) {
   if (!isOnline) {

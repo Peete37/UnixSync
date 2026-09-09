@@ -83,6 +83,26 @@
     ></script>
     <!-- Bot protection on signup (Cloudflare Turnstile). See
          SUPABASE_TURNSTILE_SETUP.md for the one-time setup. -->
+    <script>
+      // These must exist BEFORE the Turnstile script below loads. app.js also
+      // defines behavior around these tokens, but app.js is a large deferred
+      // module (type="module") — on a slow connection Turnstile can render
+      // and resolve its challenge before app.js finishes loading. If that
+      // happens, the widget still shows "Success!" (that's Cloudflare's own
+      // UI, unrelated to this page), but a callback that doesn't exist yet
+      // silently loses the token. Defining these here, synchronously, before
+      // Turnstile's script tag, means the callback is always ready no matter
+      // how fast the widget resolves. app.js reads window._loginTurnstileToken
+      // / window._turnstileToken directly rather than owning these itself.
+      window._loginTurnstileToken = "";
+      window._onLoginTurnstileVerified = function (token) {
+        window._loginTurnstileToken = token;
+      };
+      window._turnstileToken = "";
+      window._onTurnstileVerified = function (token) {
+        window._turnstileToken = token;
+      };
+    </script>
     <script
       src="https://challenges.cloudflare.com/turnstile/v0/api.js"
       async
