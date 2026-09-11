@@ -662,6 +662,7 @@ function updateAppIconBadge(count) {
   } catch (_) {}
 }
 
+
 // Fix: post ids come back from Supabase as a JS `number` (posts.id is bigint), but the same id also flows through HTML onclick attributes (e.g.
 const idKey = (id) => String(id);
 
@@ -3742,20 +3743,10 @@ window.signInWithEmailPassword = async function (email, password) {
 // NOT here — because this file is a large deferred module that can still be
 // loading when a fast-resolving widget fires; defining the callback here
 // risked overwriting an already-captured token with a fresh empty one.
-// _turnstileToken / _loginTurnstileToken below are just local aliases for
-// reading/resetting those same window-scoped values.
-Object.defineProperty(globalThis, "_turnstileToken", {
-  get: () => window._turnstileToken,
-  set: (v) => {
-    window._turnstileToken = v;
-  },
-});
-Object.defineProperty(globalThis, "_loginTurnstileToken", {
-  get: () => window._loginTurnstileToken,
-  set: (v) => {
-    window._loginTurnstileToken = v;
-  },
-});
+// No extra wiring needed here: window._turnstileToken / window._loginTurnstileToken
+// are plain properties set in index.html, so the bare identifiers
+// _turnstileToken / _loginTurnstileToken used below already resolve to
+// those same window-scoped values automatically.
 
 window.registerWithEmail = async function (name, email, password) {
   if (!isOnline) {

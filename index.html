@@ -2692,38 +2692,10 @@
           }
         };
 
-        window.loginWithEmail = async function () {
-          const email = document.getElementById("login-email")?.value?.trim();
-          const password = document.getElementById("login-password")?.value;
-          if (!email || !password) {
-            alert("Please enter your email and password.");
-            return;
-          }
-          if (typeof window.signInWithEmailPassword === "function") {
-            await window.signInWithEmailPassword(email, password);
-          } else {
-            alert("Email sign-in not yet wired.");
-          }
-        };
-
-        window.signUpWithEmail = async function () {
-          const name = document.getElementById("signup-name")?.value?.trim();
-          const email = document.getElementById("signup-email")?.value?.trim();
-          const password = document.getElementById("signup-password")?.value;
-          if (!name || !email || !password) {
-            alert("Please fill in all fields.");
-            return;
-          }
-          if (password.length < 8) {
-            alert("Password must be at least 8 characters.");
-            return;
-          }
-          if (typeof window.registerWithEmail === "function") {
-            await window.registerWithEmail(name, email, password);
-          } else {
-            alert("Email sign-up not yet wired.");
-          }
-        };
+        // window.loginWithEmail / window.signUpWithEmail: real implementations
+        // live in app.js (section 10b, EMAIL AUTH) and overwrite these once it
+        // loads — removed here to avoid two copies of the same logic drifting
+        // apart.
 
         window.showSignupView = function () {
           document.getElementById("login-modal")?.classList.add("hidden");
@@ -2989,27 +2961,6 @@
         });
       }
     </script>
-    <script
-      type="module"
-      src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
-      integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ=="
-      data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}'
-      crossorigin="anonymous"
-    ></script>
-    <script
-      type="module"
-      src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
-      integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ=="
-      data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}'
-      crossorigin="anonymous"
-    ></script>
-    <script
-      type="module"
-      src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
-      integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ=="
-      data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}'
-      crossorigin="anonymous"
-    ></script>
     <script
       type="module"
       src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496"
