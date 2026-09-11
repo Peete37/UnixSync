@@ -54,7 +54,14 @@ const SHELL_ASSETS = [
   "./manifest.json",
 ];
 
+// Set in install, read in activate, within the same worker instance's
+// lifetime — distinguishes a brand-new install (nothing was controlling
+// the page before, so there's nothing to "update" from and no banner
+// should show) from a real update superseding a previous version.
+let isUpdate = false;
+
 self.addEventListener("install", (event) => {
+  isUpdate = !!self.registration.active;
   event.waitUntil(
     caches
       .open(SHELL_CACHE)
@@ -79,7 +86,8 @@ self.addEventListener("activate", (event) => {
         ),
       )
       .then(() => self.clients.claim())
-      .then(() =>
+      .then(() => {
+        if (!isUpdate) return; // fresh install — no previous version to notify about
         // skipWaiting()+clients.claim() only change which service worker
         // handles requests GOING FORWARD — an already-open tab keeps
         // rendering whatever it already rendered until something tells
@@ -88,12 +96,12 @@ self.addEventListener("activate", (event) => {
         // indication anything changed. This tells every open tab a new
         // version just took over, so the page can show a "new version
         // available" prompt instead of silently doing nothing.
-        self.clients.matchAll({ type: "window" }).then((clients) => {
+        return self.clients.matchAll({ type: "window" }).then((clients) => {
           clients.forEach((client) =>
             client.postMessage({ type: "SW_UPDATED" }),
           );
-        }),
-      ),
+        });
+      }),
   );
 });
 

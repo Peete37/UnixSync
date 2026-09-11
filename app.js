@@ -2000,7 +2000,15 @@ window._submitSellerRating = async function (sellerId) {
 
   showToast("Thanks for your rating!");
   window.closeManageListingSheet();
+  delete sellerRatingCache[sellerId]; // keep the public-profile rating display in sync
   loadAndRenderSellerRating(sellerId, `seller-rating-${idKey(sellerId)}`);
+  if (
+    document
+      .getElementById("public-profile-overlay")
+      ?.classList.contains("sheet-open")
+  ) {
+    window._refreshPublicProfileRatingBlock(sellerId);
+  }
 };
 
 // ─── PASSWORD SET / RESET ──────────────────────────────────────────────────
@@ -3646,9 +3654,7 @@ window.signInWithEmailPassword = async function (email, password) {
     showToast("You're offline. Reconnect to sign in.");
     return;
   }
-  const btn = document.querySelector(
-    '#login-modal button[onclick="window.loginWithEmail()"]',
-  );
+  const btn = document.querySelector('#login-modal button[type="submit"]');
   try {
     if (btn) {
       btn.textContent = "Signing in…";
@@ -6548,6 +6554,10 @@ window.submitSellerRating = async function (sellerId, stars, comment = "") {
         ?.classList.contains("sheet-open")
     ) {
       window._refreshPublicProfileRatingBlock(sellerId);
+    }
+    // Also keep the post-detail Provider row rating in sync, if it's currently on screen.
+    if (document.getElementById(`seller-rating-${idKey(sellerId)}`)) {
+      loadAndRenderSellerRating(sellerId, `seller-rating-${idKey(sellerId)}`);
     }
   } catch (err) {
     console.warn("Rating submit failed — table may not exist yet:", err);
