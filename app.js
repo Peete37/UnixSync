@@ -179,20 +179,10 @@ let isAuthInitialized = false;
 // Fix: Supabase's onAuthStateChange can legitimately fire more than once for a single page load (INITIAL_SESSION, then SIGNED_IN, sometimes TOKEN_REFRESHED).
 let hasBootedFeedForSession = false;
 let isOnline = navigator.onLine;
-// Fix: this used to be hardcoded to 'all', so any refresh silently bounced the person back to the All tab no matter what they were viewing (Reels, Products, Services, Following).
-const _validFeedTabs = [
-  "all",
-  "reels",
-  "following",
-  "product",
-  "skill",
-  "deals",
-];
-// Fix: this was reading from localStorage, which survives even a full app close/reopen.
-const _savedFeedTab = sessionStorage.getItem("campus_market_feed_tab");
-let currentFeedType = _validFeedTabs.includes(_savedFeedTab)
-  ? _savedFeedTab
-  : "all"; // tracks active tab: all | reels | following | product | skill | deals
+// Always opens on the All tab — Reels/Products/Services/Following are not
+// restored across a fresh app open, only within the current tab session via
+// history/back-gesture navigation.
+let currentFeedType = "all"; // tracks active tab: all | reels | following | product | skill | deals
 let _feedLoadGeneration = 0;
 
 // ─── CAMPUS SCOPE STATE ────────────────────────────────────────────────────────
@@ -661,7 +651,6 @@ function updateAppIconBadge(count) {
     });
   } catch (_) {}
 }
-
 
 // Fix: post ids come back from Supabase as a JS `number` (posts.id is bigint), but the same id also flows through HTML onclick attributes (e.g.
 const idKey = (id) => String(id);
@@ -9240,9 +9229,6 @@ window.filterFeed = function (type, clickedBtn = null) {
   ) {
     window.closeHeaderSearch();
   }
-
-  // Remember the active tab so a refresh lands back where the person actually was (Reels, Products, Services, Following...) instead of always resetting to "All".
-  sessionStorage.setItem("campus_market_feed_tab", type);
 
   // Leaving Reels: stop any playing video audio immediately.
   if (previousType === "reels" && type !== "reels") {
